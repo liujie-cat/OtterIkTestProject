@@ -1,113 +1,81 @@
-using System.Collections.Generic;
 using UnityEngine;
 using OtterIK.Neo.Experiment;
 
 namespace OtterIK.Curve
 {
     /// <summary>
-    /// Drives the spine + neck as one continuous curve, writing the decoupled shadow nodes directly.
+    /// Drop-in replacement for ExpShadowSpineHarmonizer that keeps its inputs and tuning and only changes
+    /// how the back of the body follows the chest.
     ///
-    /// s runs along the body: 0 = head tip, 1 = hip. One node (the pivot) stays fixed in the body frame.
-    /// - In front of the pivot the body shows the near future: where intent is about to turn it.
-    ///   This is what makes the head and chest move before the rigidbody does.
-    /// - Behind the pivot the body shows the recent past: each node takes the heading the body had
-    ///   (s - s_pivot) * trailTime seconds ago, so the hips follow the path the chest took.
-    ///
-    /// A/B against the legacy Harmonizer by toggling this component before entering Play mode.
+    /// It evaluates the harmonizer's own provider list (Aim toward the head IK guide, FlipRoll, KickWave) and
+    /// mixes / cascades them with the harmonizer's flexibility and damping values, so the chest leads, the kick
+    /// wave travels and the flip rolls exactly as before. The neck is left to ExpShadowNeckController.
+    /// - BackMode.LegacyCascade + segmentFollowsOwnBone off reproduces the harmonizer.
+    /// - BackMode.FollowChestPath: nodes behind the chest take the heading the chest had a moment ago, so the
+    ///   hips follow the chest's path instead of inheriting its yaw and swinging out of the turn.
+    /// Pitch and roll come from the same cascade in both modes.
     /// </summary>
     [DefaultExecutionOrder(-50)]
     [DisallowMultipleComponent]
     public class OtterBodyCurve : MonoBehaviour
     {
+        public enum BackMode { LegacyCascade, FollowChestPath }
+
         [Header("References")]
         public SpineDecouplerWithShadows decoupler;
-        public MovementControllerRB movement;
-        [Tooltip("Body frame (yaw-only rigidbody root). Defaults to the MovementControllerRB transform.")]
-        public Transform body;
-        [Tooltip("Neck / head joints from the chest outward. Auto-filled from ExpShadowNeckController on Reset.")]
-        public Transform[] neckJoints;
-
-        [Header("Legacy drivers (disabled while this component is active)")]
+        [Tooltip("Providers and tuning are read from this component. It is disabled while this one is active.")]
         public ExpShadowSpineHarmonizer legacyHarmonizer;
-        public ExpShadowNeckController legacyNeck;
+        [Tooltip("Only used for speed (shorter trail when swimming).")]
+        public MovementControllerRB movement;
 
-        [Header("Pivot")]
-        [Tooltip("Spine joint index (0 = hip) that stays fixed in the body frame. -1 = middle of the spine.")]
-        public int pivotSpineIndex = -1;
-
-        [Header("Front: lead toward intent (future)")]
-        [Tooltip("How far into the future the head tip shows (seconds).")]
-        [Min(0f)] public float leadTime = 0.25f;
-        [Tooltip("Turn rate used to extrapolate where the body will be heading (deg/s).")]
-        [Min(0f)] public float leadTurnRate = 220f;
-        [Tooltip("Half-life (s) of the intent signal smoothing.")]
-        [Min(0.001f)] public float intentHalfLife = 0.06f;
-
-        [Header("Back: follow heading history (past)")]
-        [Tooltip("Delay (s) between the pivot and the hip when nearly stopped (turning in place).")]
+        [Header("Back of the body")]
+        public BackMode backMode = BackMode.FollowChestPath;
+        [Tooltip("Delay (s) between the chest and the hip when nearly stopped (turning in place).")]
         [Min(0f)] public float trailTimeIdle = 0.35f;
-        [Tooltip("Delay (s) between the pivot and the hip at swim speed. Faster swimming = tighter follow.")]
+        [Tooltip("Delay (s) between the chest and the hip at swim speed.")]
         [Min(0f)] public float trailTimeSwim = 0.2f;
 
-        [Header("Neck look")]
-        [Tooltip("Extra pull of the neck toward the intent direction, on top of the curve (0 = curve only).")]
-        [Range(0f, 1f)] public float neckLook = 0.6f;
-        [Min(0f)] public float maxHeadLookDeg = 80f;
-
-        [Header("Limits")]
-        [Tooltip("Max yaw difference between neighbouring nodes (deg).")]
-        [Min(0f)] public float maxBendPerJoint = 30f;
+        [Header("Segment placement")]
+        [Tooltip("On: each segment points along its own bone. Off: legacy placement, where each node is offset by the rotation of the node in front of it.")]
+        public bool segmentFollowsOwnBone = true;
 
         [Header("Debug")]
         public bool drawGizmos = true;
 
-        public float DebugLeadDeg => lead;
+        /// <summary>Chest yaw relative to the body (deg), i.e. how far the front leads the rigidbody.</summary>
+        public float DebugLeadDeg { get; private set; }
         public float DebugTrailTime { get; private set; }
-
-        private class Node
-        {
-            public Transform shadow;
-            public Transform joint;
-            public bool ownsShadow;
-            public Transform originalParent;
-            public Quaternion restRel;  // shadow rotation in body space at rest
-            public Vector3 restPos;     // shadow position in body space at rest
-            public Vector3 seg;         // body-space vector to the next node (toward the head) at rest
-            public float s;             // 0 = head tip, 1 = hip
-            public float sMid;          // s at the middle of this node's segment (what its rotation represents)
-            public float yaw;           // body-space yaw this frame (deg)
-        }
 
         private struct HeadingSample { public float t; public float yaw; }
 
-        private readonly List<Node> nodes = new List<Node>();
-        private Quaternion[] rot;
-        private Vector3[] pos;
-        private int pivot;
-        private int neckStart;
+        private Transform root;
+        private Transform[] shadows;
+        private Vector3[] restLocalPos;
+        private Vector3[] restOffset;   // root-local vector from node i+1 to node i at rest
+        private float[] backDist01;     // arc distance from the chest, 0 = chest, 1 = hip
+
+        private Quaternion[] ypTargets;
+        private float[] rollTargets;
+        private Quaternion[] filteredYP;
+        private float[] filteredRoll;
+        private Quaternion[] localRot;
+
         private bool built;
         private bool started;
-        private bool restCached;
-        private bool legacyHarmonizerWasEnabled;
-        private bool legacyNeckWasEnabled;
+        private bool harmonizerWasEnabled;
 
         private readonly HeadingSample[] history = new HeadingSample[512];
         private int historyHead = -1;
         private int historyCount;
-        private float unwrappedYaw;
-        private float lastRawYaw;
-        private bool hasYaw;
-        private float lead;
+        private float rootYaw;
+        private float lastRawRootYaw;
+        private bool hasRootYaw;
 
         private void Reset()
         {
             decoupler = GetComponent<SpineDecouplerWithShadows>();
-            movement = GetComponentInParent<MovementControllerRB>();
-            if (movement != null) body = movement.transform;
             legacyHarmonizer = GetComponent<ExpShadowSpineHarmonizer>();
-            legacyNeck = GetComponent<ExpShadowNeckController>();
-            if (legacyNeck != null && legacyNeck.neckJoints != null)
-                neckJoints = (Transform[])legacyNeck.neckJoints.Clone();
+            movement = GetComponentInParent<MovementControllerRB>();
         }
 
         private void Start()
@@ -131,107 +99,54 @@ namespace OtterIK.Curve
         private void Build()
         {
             if (built) return;
-            if (movement == null) movement = GetComponentInParent<MovementControllerRB>();
-            if (body == null && movement != null) body = movement.transform;
-            if (decoupler == null || body == null || decoupler.shadowNodes == null || decoupler.shadowNodes.Count < 2)
+            if (decoupler == null || decoupler.shadowNodes == null || decoupler.shadowNodes.Count < 2 || legacyHarmonizer == null)
             {
-                Debug.LogWarning("[OtterBodyCurve] Missing decoupler shadows or body; not driving.", this);
+                Debug.LogWarning("[OtterBodyCurve] Needs the decoupler shadows and the legacy harmonizer (for providers and tuning); not driving.", this);
                 return;
             }
+            if (movement == null) movement = GetComponentInParent<MovementControllerRB>();
 
-            if (legacyHarmonizer != null)
-            {
-                legacyHarmonizerWasEnabled = legacyHarmonizer.enabled;
-                legacyHarmonizer.enabled = false;
-            }
-            if (legacyNeck != null)
-            {
-                legacyNeckWasEnabled = legacyNeck.enabled;
-                // Its OnDisable hands the neck joints back to their original parent (the chest bone).
-                legacyNeck.enabled = false;
-            }
+            harmonizerWasEnabled = legacyHarmonizer.enabled;
+            legacyHarmonizer.enabled = false;
 
-            var spineShadows = decoupler.shadowNodes;
-            if (restCached) PoseSpineAtRest();
-            else nodes.Clear();
-
-            if (!restCached)
+            int n = decoupler.shadowNodes.Count;
+            if (shadows == null || shadows.Length != n)
             {
-                for (int i = 0; i < spineShadows.Count; i++)
+                shadows = decoupler.shadowNodes.ToArray();
+                root = shadows[0].parent;
+                restLocalPos = new Vector3[n];
+                restOffset = new Vector3[n];
+                backDist01 = new float[n];
+                for (int i = 0; i < n; i++) restLocalPos[i] = shadows[i].localPosition;
+
+                float total = 0f;
+                for (int i = n - 2; i >= 0; i--)
                 {
-                    nodes.Add(new Node
-                    {
-                        shadow = spineShadows[i],
-                        joint = decoupler.spineJoints != null && i < decoupler.spineJoints.Length ? decoupler.spineJoints[i] : null,
-                    });
+                    restOffset[i] = restLocalPos[i] - restLocalPos[i + 1];
+                    total += restOffset[i].magnitude;
+                    backDist01[i] = total;
                 }
+                for (int i = 0; i < n; i++) backDist01[i] = total > 1e-6f ? backDist01[i] / total : 0f;
+
+                ypTargets = new Quaternion[n];
+                rollTargets = new float[n];
+                filteredYP = new Quaternion[n];
+                filteredRoll = new float[n];
+                localRot = new Quaternion[n];
+
+                if (Vector3.Dot(root.up, Vector3.up) < 0.99f)
+                    Debug.LogWarning($"[OtterBodyCurve] Shadow root '{root.name}' up axis is not world up; yaw is measured about its local up.", this);
             }
-            else
+
+            for (int i = 0; i < n; i++)
             {
-                nodes.RemoveRange(spineShadows.Count, nodes.Count - spineShadows.Count);
+                filteredYP[i] = Quaternion.identity;
+                filteredRoll[i] = 0f;
             }
-            neckStart = spineShadows.Count;
-
-            Transform runtimeRoot = spineShadows[0].parent;
-            if (neckJoints != null)
-            {
-                foreach (var joint in neckJoints)
-                {
-                    if (joint == null) continue;
-                    var shadow = new GameObject(joint.name + "_CurveShadow").transform;
-                    shadow.SetParent(runtimeRoot, false);
-                    shadow.position = joint.position;
-                    shadow.localRotation = Quaternion.identity;
-                    shadow.localScale = Vector3.one;
-
-                    var node = new Node { shadow = shadow, joint = joint, ownsShadow = true, originalParent = joint.parent };
-                    joint.SetParent(shadow, true);
-                    joint.localPosition = Vector3.zero;
-                    nodes.Add(node);
-                }
-            }
-
-            CacheRest();
-            pivot = Mathf.Clamp(pivotSpineIndex >= 0 ? pivotSpineIndex : spineShadows.Count / 2, 0, spineShadows.Count - 1);
+            historyCount = 0;
+            historyHead = -1;
+            hasRootYaw = false;
             built = true;
-        }
-
-        private void CacheRest()
-        {
-            Quaternion bodyInv = Quaternion.Inverse(body.rotation);
-            int start = restCached ? neckStart : 0;
-            for (int i = start; i < nodes.Count; i++)
-            {
-                nodes[i].restRel = bodyInv * nodes[i].shadow.rotation;
-                nodes[i].restPos = body.InverseTransformPoint(nodes[i].shadow.position);
-            }
-
-            float total = 0f;
-            for (int i = 0; i < nodes.Count; i++)
-            {
-                Vector3 next = i + 1 < nodes.Count ? body.TransformPoint(nodes[i + 1].restPos) : body.TransformPoint(nodes[i].restPos);
-                nodes[i].seg = bodyInv * (next - body.TransformPoint(nodes[i].restPos));
-                total += nodes[i].seg.magnitude;
-            }
-
-            // Arc length from the hip, then flip so the head tip is s = 0.
-            float acc = 0f;
-            for (int i = 0; i < nodes.Count; i++)
-            {
-                float len = nodes[i].seg.magnitude;
-                nodes[i].s = total > 1e-6f ? 1f - acc / total : 0f;
-                nodes[i].sMid = total > 1e-6f ? 1f - (acc + 0.5f * len) / total : 0f;
-                acc += len;
-            }
-            restCached = true;
-        }
-
-        private void PoseSpineAtRest()
-        {
-            for (int i = 0; i < neckStart && i < nodes.Count; i++)
-            {
-                nodes[i].shadow.SetPositionAndRotation(body.TransformPoint(nodes[i].restPos), body.rotation * nodes[i].restRel);
-            }
         }
 
         private void Teardown()
@@ -239,138 +154,131 @@ namespace OtterIK.Curve
             if (!built) return;
             built = false;
 
-            if (gameObject.activeInHierarchy && body != null)
+            for (int i = 0; i < shadows.Length; i++)
             {
-                for (int i = 0; i < nodes.Count; i++)
-                    nodes[i].shadow.SetPositionAndRotation(body.TransformPoint(nodes[i].restPos), body.rotation * nodes[i].restRel);
-
-                for (int i = neckStart; i < nodes.Count; i++)
-                {
-                    var n = nodes[i];
-                    if (n.joint != null && n.originalParent != null) n.joint.SetParent(n.originalParent, true);
-                    if (n.ownsShadow && n.shadow != null) Destroy(n.shadow.gameObject);
-                }
+                if (shadows[i] == null) continue;
+                shadows[i].localRotation = Quaternion.identity;
+                shadows[i].localPosition = restLocalPos[i];
             }
-
-            if (legacyHarmonizer != null) legacyHarmonizer.enabled = legacyHarmonizerWasEnabled;
-            if (legacyNeck != null) legacyNeck.enabled = legacyNeckWasEnabled;
-            historyCount = 0;
-            historyHead = -1;
-            hasYaw = false;
+            if (legacyHarmonizer != null) legacyHarmonizer.enabled = harmonizerWasEnabled;
         }
 
         // ------------------------------------------------------------------ per frame
 
         private void LateUpdate()
         {
-            if (!built) return;
+            if (!built || root == null) return;
             float dt = Time.deltaTime;
-            if (dt <= 1e-6f) return;
+            if (dt <= 0f) return;
+            int n = shadows.Length;
+
+            MixProviders(n);
+            Cascade(n, dt);
+
+            float rawRootYaw = YawOf(root.forward);
+            rootYaw = hasRootYaw ? rootYaw + Mathf.DeltaAngle(lastRawRootYaw, rawRootYaw) : rawRootYaw;
+            lastRawRootYaw = rawRootYaw;
+            hasRootYaw = true;
+
             float now = Time.time;
-
-            float rawYaw = YawOf(body.forward);
-            unwrappedYaw = hasYaw ? unwrappedYaw + Mathf.DeltaAngle(lastRawYaw, rawYaw) : rawYaw;
-            lastRawYaw = rawYaw;
-            hasYaw = true;
-            PushHeading(now, unwrappedYaw);
-
-            UpdateLead(rawYaw, dt);
+            float chestYaw = TwistYawDeg(filteredYP[n - 1]);
+            DebugLeadDeg = chestYaw;
+            PushHeading(now, rootYaw + chestYaw);
 
             float speed01 = movement != null ? Mathf.Clamp01(movement.GetSpeed() / Mathf.Max(0.01f, movement.GetSwimSpeed())) : 0f;
             float trailTime = Mathf.Lerp(trailTimeIdle, trailTimeSwim, speed01);
             DebugTrailTime = trailTime;
 
-            float sPivot = nodes[pivot].s;
-            for (int i = 0; i < nodes.Count; i++)
+            for (int i = 0; i < n; i++)
             {
-                var n = nodes[i];
-                float s = i == nodes.Count - 1 ? n.s : n.sMid;
-                if (s < sPivot)
+                Quaternion yp = filteredYP[i];
+                if (backMode == BackMode.FollowChestPath && i < n - 1)
                 {
-                    float ahead = sPivot > 1e-4f ? leadTime * (sPivot - s) / sPivot : 0f;
-                    float reach = leadTurnRate * ahead;
-                    n.yaw = Mathf.Clamp(lead, -reach, reach);
+                    Quaternion twist = Quaternion.AngleAxis(TwistYawDeg(yp), Vector3.up);
+                    Quaternion swing = Quaternion.Inverse(twist) * yp;
+                    float yaw = SampleHeading(now - trailTime * backDist01[i]) - rootYaw;
+                    yp = Quaternion.AngleAxis(yaw, Vector3.up) * swing;
+                }
+                localRot[i] = yp * Quaternion.Euler(0f, 0f, filteredRoll[i]);
+            }
+
+            shadows[n - 1].localRotation = localRot[n - 1];
+            shadows[n - 1].localPosition = restLocalPos[n - 1];
+            for (int i = n - 2; i >= 0; i--)
+            {
+                Quaternion segRot = segmentFollowsOwnBone ? localRot[i] : localRot[i + 1];
+                shadows[i].localRotation = localRot[i];
+                shadows[i].localPosition = shadows[i + 1].localPosition + segRot * restOffset[i];
+            }
+        }
+
+        /// <summary>Same blending as ExpShadowSpineHarmonizer stage 1.</summary>
+        private void MixProviders(int n)
+        {
+            var providers = legacyHarmonizer.providers;
+            for (int i = 0; i < n; i++)
+            {
+                Vector3 ypRotVecSum = Vector3.zero;
+                float ypWeightSum = 0f;
+                float dominantRoll = 0f;
+
+                if (providers != null)
+                {
+                    foreach (var prov in providers)
+                    {
+                        if (prov == null || !prov.isActiveAndEnabled) continue;
+                        if (!prov.Evaluate(i, null, shadows[i], Quaternion.identity, out Quaternion targetRot, out float w)) continue;
+
+                        float finalW = Mathf.Clamp01(w * prov.globalWeight);
+                        if (finalW <= 1e-5f) continue;
+
+                        Vector3 euler = targetRot.eulerAngles;
+                        float r = Normalize180(euler.z);
+                        if (Mathf.Abs(r) > Mathf.Abs(dominantRoll)) dominantRoll = r;
+
+                        Quaternion ypOnly = Quaternion.Euler(euler.x, euler.y, 0f);
+                        if (Quaternion.Angle(Quaternion.identity, ypOnly) > 0.1f)
+                        {
+                            ypOnly.ToAngleAxis(out float angle, out Vector3 axis);
+                            if (angle > 180f) angle -= 360f;
+                            ypRotVecSum += axis.normalized * (angle * Mathf.Deg2Rad) * finalW;
+                            ypWeightSum += finalW;
+                        }
+                    }
+                }
+
+                rollTargets[i] = dominantRoll;
+                if (ypWeightSum > 1e-6f)
+                {
+                    Vector3 meanVec = (ypRotVecSum / ypWeightSum) * Mathf.Clamp01(ypWeightSum);
+                    ypTargets[i] = Quaternion.AngleAxis(meanVec.magnitude * Mathf.Rad2Deg, meanVec.normalized);
                 }
                 else
                 {
-                    float behind = sPivot < 1f - 1e-4f ? trailTime * (s - sPivot) / (1f - sPivot) : 0f;
-                    n.yaw = SampleHeading(now - behind) - unwrappedYaw;
+                    ypTargets[i] = Quaternion.identity;
                 }
             }
-
-            ApplyNeckLook();
-            ApplyBendLimits();
-            WritePose();
         }
 
-        private void UpdateLead(float rawYaw, float dt)
+        /// <summary>Same chest-to-hip filtering as ExpShadowSpineHarmonizer stage 2.</summary>
+        private void Cascade(int n, float dt)
         {
-            float target = 0f;
-            if (movement != null)
+            var h = legacyHarmonizer;
+            float ypAlpha = 1f - Mathf.Exp(-0.693f * dt / h.dampingHalfLife);
+            float rAlpha = 1f - Mathf.Exp(-0.693f * dt / h.rollDampingHalfLife);
+            for (int i = n - 1; i >= 0; i--)
             {
-                Vector3 intent = movement.GetWorldDir();
-                intent.y = 0f;
-                if (intent.sqrMagnitude > 1e-6f)
-                {
-                    target = Mathf.DeltaAngle(rawYaw, YawOf(intent));
+                Quaternion ypTarget = ypTargets[i];
+                if (i < n - 1) ypTarget = Quaternion.Slerp(ypTarget, filteredYP[i + 1], h.flexibility);
+                filteredYP[i] = Quaternion.Slerp(filteredYP[i], ypTarget, ypAlpha);
 
-                    // Near a full reversal, keep the head on the side the body is actually turning toward
-                    // (or the side it is already on), instead of snapping across at +-180.
-                    float steer = Mathf.DeltaAngle(rawYaw, YawOf(movement.GetSteerDir()));
-                    float side = Mathf.Abs(steer) > 1f ? Mathf.Sign(steer) : (Mathf.Abs(lead) > 1f ? Mathf.Sign(lead) : 0f);
-                    if (Mathf.Abs(target) > 120f && side != 0f && Mathf.Sign(target) != side)
-                        target += 360f * side;
-
-                    target *= movement.GetAimBlend01();
-                }
-            }
-            lead = Mathf.Lerp(lead, target, HalfLifeAlpha(intentHalfLife, dt));
-        }
-
-        private void ApplyNeckLook()
-        {
-            int count = nodes.Count - neckStart;
-            if (count <= 0 || neckLook <= 0f) return;
-            float look = Mathf.Clamp(lead, -maxHeadLookDeg, maxHeadLookDeg);
-            for (int j = 0; j < count; j++)
-            {
-                var n = nodes[neckStart + j];
-                float w = (j + 1f) / count;
-                n.yaw = Mathf.Lerp(n.yaw, look, neckLook * w);
+                float rTarget = rollTargets[i];
+                if (i < n - 1) rTarget = Mathf.LerpAngle(rTarget, filteredRoll[i + 1], h.rollFlexibility);
+                filteredRoll[i] = Mathf.LerpAngle(filteredRoll[i], rTarget, rAlpha);
             }
         }
 
-        private void ApplyBendLimits()
-        {
-            for (int i = pivot + 1; i < nodes.Count; i++)
-                nodes[i].yaw = Mathf.Clamp(nodes[i].yaw, nodes[i - 1].yaw - maxBendPerJoint, nodes[i - 1].yaw + maxBendPerJoint);
-            for (int i = pivot - 1; i >= 0; i--)
-                nodes[i].yaw = Mathf.Clamp(nodes[i].yaw, nodes[i + 1].yaw - maxBendPerJoint, nodes[i + 1].yaw + maxBendPerJoint);
-        }
-
-        private void WritePose()
-        {
-            Quaternion bodyRot = body.rotation;
-            int n = nodes.Count;
-            if (rot == null || rot.Length != n)
-            {
-                rot = new Quaternion[n];
-                pos = new Vector3[n];
-            }
-            for (int i = 0; i < n; i++)
-                rot[i] = Quaternion.AngleAxis(nodes[i].yaw, Vector3.up);
-
-            pos[pivot] = body.TransformPoint(nodes[pivot].restPos);
-            for (int i = pivot; i < n - 1; i++)
-                pos[i + 1] = pos[i] + bodyRot * (rot[i] * nodes[i].seg);
-            for (int i = pivot - 1; i >= 0; i--)
-                pos[i] = pos[i + 1] - bodyRot * (rot[i] * nodes[i].seg);
-
-            for (int i = 0; i < n; i++)
-                nodes[i].shadow.SetPositionAndRotation(pos[i], bodyRot * rot[i] * nodes[i].restRel);
-        }
-
-        // ------------------------------------------------------------------ heading history
+        // ------------------------------------------------------------------ chest heading history
 
         private void PushHeading(float t, float yaw)
         {
@@ -381,7 +289,6 @@ namespace OtterIK.Curve
 
         private float SampleHeading(float t)
         {
-            if (historyCount == 0) return unwrappedYaw;
             HeadingSample newer = history[historyHead];
             if (t >= newer.t) return newer.yaw;
             for (int k = 1; k < historyCount; k++)
@@ -402,18 +309,27 @@ namespace OtterIK.Curve
 
         private static float YawOf(Vector3 dir) => Mathf.Atan2(dir.x, dir.z) * Mathf.Rad2Deg;
 
-        private static float HalfLifeAlpha(float halfLife, float dt) => 1f - Mathf.Exp(-0.693147f * dt / Mathf.Max(1e-4f, halfLife));
+        /// <summary>Angle of the rotation about +Y contained in q (q = twist * swing).</summary>
+        private static float TwistYawDeg(Quaternion q) => Mathf.DeltaAngle(0f, 2f * Mathf.Atan2(q.y, q.w) * Mathf.Rad2Deg);
+
+        private static float Normalize180(float deg)
+        {
+            deg %= 360f;
+            if (deg > 180f) deg -= 360f;
+            if (deg < -180f) deg += 360f;
+            return deg;
+        }
 
         private void OnDrawGizmos()
         {
-            if (!drawGizmos || !built || nodes.Count < 2) return;
-            for (int i = 0; i < nodes.Count - 1; i++)
+            if (!drawGizmos || !built || shadows == null) return;
+            for (int i = 0; i < shadows.Length - 1; i++)
             {
-                Gizmos.color = Color.Lerp(new Color(1f, 0.5f, 0.1f), new Color(0.2f, 0.6f, 1f), nodes[i].s);
-                Gizmos.DrawLine(nodes[i].shadow.position, nodes[i + 1].shadow.position);
+                Gizmos.color = Color.Lerp(new Color(1f, 0.5f, 0.1f), new Color(0.2f, 0.6f, 1f), backDist01[i]);
+                Gizmos.DrawLine(shadows[i].position, shadows[i + 1].position);
             }
             Gizmos.color = Color.white;
-            Gizmos.DrawWireSphere(nodes[pivot].shadow.position, 0.03f);
+            Gizmos.DrawWireSphere(shadows[shadows.Length - 1].position, 0.03f);
         }
     }
 }

@@ -28,6 +28,10 @@ public class OtterPoseTelemetry : MonoBehaviour
     public bool logRigOnStart = true;
     [Tooltip("Frame-to-frame change in angular speed (deg/s) counted as a pop.")]
     public float popThresholdDegPerSec = 600f;
+    [Tooltip("Head yaw (deg) above which a frame counts as turning, for the hip inside/outside stats.")]
+    public float turnHeadYawDeg = 10f;
+    [Tooltip("Sideways hip displacement (m) that counts as inside / outside the turn.")]
+    public float hipSideThreshold = 0.01f;
 
     private class BoneStats
     {
@@ -50,6 +54,9 @@ public class OtterPoseTelemetry : MonoBehaviour
     private bool hasRootYaw;
     private float maxRootYawRate;
     private float maxSpeed;
+    private float restHipX;
+    private float maxHipSide;
+    private int turnFrames, hipOutsideFrames, hipInsideFrames;
     private readonly StringBuilder row = new StringBuilder(512);
 
     private void Reset()
@@ -61,10 +68,8 @@ public class OtterPoseTelemetry : MonoBehaviour
         var decoupler = GetComponent<SpineDecouplerWithShadows>();
         if (decoupler != null && decoupler.spineJoints != null) list.AddRange(decoupler.spineJoints);
 
-        var curve = GetComponent<OtterBodyCurve>();
-        var legacyNeck = GetComponent<ExpShadowNeckController>();
-        if (curve != null && curve.neckJoints != null && curve.neckJoints.Length > 0) list.AddRange(curve.neckJoints);
-        else if (legacyNeck != null && legacyNeck.neckJoints != null) list.AddRange(legacyNeck.neckJoints);
+        var neck = GetComponent<ExpShadowNeckController>();
+        if (neck != null && neck.neckJoints != null) list.AddRange(neck.neckJoints);
 
         bones = list.ToArray();
     }
@@ -81,7 +86,9 @@ public class OtterPoseTelemetry : MonoBehaviour
         }
 
         var curve = FindObjectOfType<OtterBodyCurve>();
-        mode = curve != null && curve.isActiveAndEnabled ? "curve" : "legacy";
+        mode = curve != null && curve.isActiveAndEnabled
+            ? $"curve-{curve.backMode}-{(curve.segmentFollowsOwnBone ? "ownbone" : "legacyfk")}"
+            : "legacy";
 
         Quaternion bodyInv = Quaternion.Inverse(body.rotation);
         stats.Clear();
@@ -99,6 +106,7 @@ public class OtterPoseTelemetry : MonoBehaviour
             }
             stats.Add(st);
         }
+        if (bones[0] != null) restHipX = body.InverseTransformPoint(bones[0].position).x;
 
         if (logRigOnStart) LogRig();
         if (writeCsv) OpenCsv();
@@ -129,7 +137,7 @@ public class OtterPoseTelemetry : MonoBehaviour
         csvPath = Path.Combine(dir, $"otter_telemetry_{mode}_{System.DateTime.Now:yyyyMMdd_HHmmss}.csv");
         csv = new StreamWriter(csvPath, false, new UTF8Encoding(false));
 
-        var h = new StringBuilder("t,dt,speed,rootYaw,rootYawRate,dragging,zone,lead,trail");
+        var h = new StringBuilder("t,dt,speed,rootYaw,rootYawRate,dragging,zone,lead,trail,hipX");
         for (int i = 0; i < bones.Length; i++) h.Append($",yaw{i},pitch{i},roll{i}");
         csv.WriteLine(h.ToString());
     }
@@ -148,9 +156,11 @@ public class OtterPoseTelemetry : MonoBehaviour
         float speed = movement != null ? movement.GetSpeed() : 0f;
         maxSpeed = Mathf.Max(maxSpeed, speed);
 
-        var curve = mode == "curve" ? FindCurveCached() : null;
+        var curve = mode.StartsWith("curve") ? FindCurveCached() : null;
         float lead = curve != null ? curve.DebugLeadDeg : 0f;
         float trail = curve != null ? curve.DebugTrailTime : 0f;
+        float hipX = bones[0] != null ? body.InverseTransformPoint(bones[0].position).x - restHipX : 0f;
+        maxHipSide = Mathf.Max(maxHipSide, Mathf.Abs(hipX));
 
         if (csv != null)
         {
@@ -158,8 +168,10 @@ public class OtterPoseTelemetry : MonoBehaviour
             Append(Time.time - startTime); Append(dt); Append(speed); Append(rootYaw); Append(rootYawRate);
             row.Append(movement != null && movement.IsDragging() ? ",1" : ",0");
             row.Append(',').Append(movement != null ? (int)movement.GetZone() : 0);
-            Append(lead); Append(trail);
+            Append(lead); Append(trail); Append(hipX);
         }
+
+        float headYaw = 0f;
 
         Quaternion bodyInv = Quaternion.Inverse(body.rotation);
         Quaternion prevBoneDelta = Quaternion.identity;
@@ -190,6 +202,16 @@ public class OtterPoseTelemetry : MonoBehaviour
             prevBoneDelta = delta;
 
             if (csv != null) { Append(yaw); Append(pitch); Append(roll); }
+            headYaw = yaw;
+        }
+
+        // Turning right = head yaw > 0; the hip is outside that turn when it has moved left (hipX < 0).
+        if (Mathf.Abs(headYaw) > turnHeadYawDeg)
+        {
+            turnFrames++;
+            float side = hipX * Mathf.Sign(headYaw);
+            if (side < -hipSideThreshold) hipOutsideFrames++;
+            else if (side > hipSideThreshold) hipInsideFrames++;
         }
 
         if (csv != null) csv.WriteLine(row.ToString());
@@ -236,6 +258,8 @@ public class OtterPoseTelemetry : MonoBehaviour
         var sb = new StringBuilder();
         float duration = Time.time - startTime;
         sb.Append($"[OtterTelemetry] mode={mode} frames={frames} duration={duration:F1}s maxSpeed={maxSpeed:F2} maxRootYawRate={maxRootYawRate:F0}deg/s");
+        float pct(int k) => turnFrames > 0 ? 100f * k / turnFrames : 0f;
+        sb.Append($"\n  hip: maxSide={maxHipSide:F3}m turningFrames={turnFrames} outsideTurn={pct(hipOutsideFrames):F0}% insideTurn={pct(hipInsideFrames):F0}%");
         for (int i = 0; i < bones.Length; i++)
         {
             if (bones[i] == null) continue;
