@@ -11,7 +11,7 @@ namespace OtterIK.EditorTools
     /// <summary>
     /// Moves the scene's IK rig from the cat model instance onto the generated sea otter model.
     /// The otter skeleton keeps the cat's bone names, hierarchy and bone-local axes
-    /// (Tools/Blender/build_sea_otter.py), so bones are matched by hierarchy path.
+    /// (Tools/Blender/rig_sea_otter.py), so bones are matched by hierarchy path.
     /// Everything is one Undo step; the scene is not saved.
     /// </summary>
     public class SeaOtterRigTransplant : EditorWindow
