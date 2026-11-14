@@ -38,6 +38,22 @@ namespace OtterIK.EditorTools
         [MenuItem("Tools/Sea Otter/Rig Transplant...")]
         static void Open() => GetWindow<SeaOtterRigTransplant>("Sea Otter Rig");
 
+        [MenuItem("Tools/Sea Otter/Transplant With Defaults")]
+        static void TransplantMenu()
+        {
+            var cat = FindCatInstance();
+            var otter = AssetDatabase.LoadAssetAtPath<GameObject>(OtterModelPath);
+            if (cat == null || otter == null)
+            {
+                Debug.LogWarning(cat == null ? "[SeaOtterRig] No cat model instance found in the open scene." : $"[SeaOtterRig] {OtterModelPath} not found.");
+                return;
+            }
+            WriteLog("SeaOtterRig_Transplant.txt", Transplant(cat, otter, alignSpine: true, fitTargets: true));
+        }
+
+        [MenuItem("Tools/Sea Otter/Transplant With Defaults", true)]
+        static bool TransplantMenuValid() => !EditorApplication.isPlayingOrWillChangePlaymode;
+
         [MenuItem("Tools/Sea Otter/Report Cat Rig")]
         static void ReportCatMenu()
         {
