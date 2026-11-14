@@ -67,7 +67,8 @@ namespace OtterIK.EditorTools
                 alignSpineCenter);
             fitLimbTargets = EditorGUILayout.Toggle(
                 new GUIContent("Fit limb targets",
-                    "Added objects near an IK chain keep their offset from the nearest joint, scaled by otter/cat chain length."),
+                    "Added IK targets and rest points near a chain go onto the otter's rest end joint, so the bind pose is the " +
+                    "IK neutral. Poles keep their offset from the nearest joint in the chain's bend plane, scaled by otter/cat chain length."),
                 fitLimbTargets);
 
             using (new EditorGUI.DisabledScope(catInstance == null || EditorApplication.isPlayingOrWillChangePlaymode))
@@ -346,9 +347,10 @@ namespace OtterIK.EditorTools
             log.AppendLine($"Remapped {remapped} references.");
             foreach (var u in unmapped) log.AppendLine($"  ! unmapped: {u}");
 
-            // 7. fit limb targets to otter proportions
+            // 7. fit limb targets: the otter's bind pose (a relaxed float) is the IK neutral
             if (fitTargets)
             {
+                var poles = new HashSet<Transform>(chains.Select(c => c.ik.pole).Where(p => p != null));
                 foreach (var a in addedRoots)
                 {
                     var (catPos, catRot) = addedWorld[a];
@@ -367,10 +369,21 @@ namespace OtterIK.EditorTools
                     var oj = bestChain.cat.Select(MapT).ToArray();
                     float otterLength = Vector3.Distance(oj[0].position, oj[1].position) + Vector3.Distance(oj[1].position, oj[2].position);
                     float ratio = otterLength / bestChain.catLength;
+                    Quaternion frame = TryBendFrame(oj, out var fo) && TryBendFrame(bestChain.cat, out var fc)
+                        ? fo * Quaternion.Inverse(fc)
+                        : oj[0].rotation * Quaternion.Inverse(bestChain.cat[0].rotation);
                     Undo.RecordObject(a, "Fit rig object");
-                    a.position = oj[bestJoint].position + (catPos - bestChain.cat[bestJoint].position) * ratio;
-                    a.rotation = catRot;
-                    log.AppendLine($"Fitted            {a.name,-28} to {oj[bestJoint].name} of {bestChain.ik.name} (length ratio {ratio:F3})");
+                    a.rotation = frame * catRot;
+                    if (poles.Contains(a))
+                    {
+                        a.position = oj[bestJoint].position + frame * (catPos - bestChain.cat[bestJoint].position) * ratio;
+                        log.AppendLine($"Fitted pole       {a.name,-28} to {oj[bestJoint].name} of {bestChain.ik.name} (bend plane, length ratio {ratio:F3})");
+                    }
+                    else
+                    {
+                        a.position = oj[2].position;
+                        log.AppendLine($"Placed at rest    {a.name,-28} on {oj[2].name} of {bestChain.ik.name}");
+                    }
                 }
             }
 
@@ -405,6 +418,17 @@ namespace OtterIK.EditorTools
             log.AppendLine();
             log.Append(Report(otter));
             return log.ToString();
+        }
+
+        // Frame of a two-bone chain: forward = root->end reach, up = toward the mid joint (the bend side).
+        static bool TryBendFrame(Transform[] j, out Quaternion frame)
+        {
+            Vector3 reach = j[2].position - j[0].position;
+            Vector3 bend = Vector3.ProjectOnPlane(j[1].position - j[0].position, reach);
+            frame = Quaternion.identity;
+            if (reach.sqrMagnitude < 1e-10f || bend.sqrMagnitude < 1e-4f * reach.sqrMagnitude) return false;
+            frame = Quaternion.LookRotation(reach, bend);
+            return true;
         }
 
         static string WriteLog(string file, string text)

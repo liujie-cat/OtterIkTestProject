@@ -5,11 +5,17 @@ rolls, so every IK component that works on the cat can be pointed at the same-na
 Only the face bones are dropped. Bones are moved to the otter's anatomy and re-rolled toward the cat's
 Z axes, so local frames (used by AdvancedTwoBoneIK axis settings and the hind trajectory) carry over.
 
-The source mesh (ArtSource/SeaOtter/generated, an image-to-3D export) stands on all fours like the cat's
-rest pose but is off-centre, 1 m long and has its tail curled on the ground. It is recentred on its mirror
-plane, scaled so shoulders and hips land near the cat's, and the tail is unbent along its centre line
-(nothing in the scene drives the tail bones, so the rest pose is what is seen while swimming).
-Skin weights come from Blender's bone heat; the eyes ride rigidly on the head.
+The source mesh (ArtSource/SeaOtter/generated, an image-to-3D export) stands on all fours, crouched with
+an arched back, is off-centre, 1 m long and has its tail curled on the ground. It is recentred on its
+mirror plane, scaled so shoulders and hips land near the cat's, and the tail is unbent along its centre
+line. Bones are placed on that standing anatomy and skinned with Blender's bone heat (the eyes ride
+rigidly on the head); then the skeleton is posed into a relaxed float (straight level spine, neck
+reaching forward, hind legs trailing with the feet pointed back, forelegs hanging loose, tail straight)
+and the mesh is baked into it, so that float is the bind pose.
+
+The rest pose matters at runtime: the IK leaves feet, paws and toes at their rest angle to the shin and
+forearm, the hind knee limits are centred on the rest knee, and the spine and neck controllers treat the
+rest pose as neutral.
 
 Run (Blender 5.x) from the project root:
   blender -b --factory-startup --python Tools/Blender/rig_sea_otter.py -- \
@@ -23,7 +29,7 @@ import bpy, bmesh, sys, os, math, heapq, shutil
 from mathutils import Vector, Matrix, Quaternion
 from mathutils.kdtree import KDTree
 
-argv = sys.argv[sys.argv.index("--") + 1:]
+argv = [os.path.abspath(a) for a in sys.argv[sys.argv.index("--") + 1:]]
 CAT_FBX, OTTER_FBX, UNITY_DIR, SOURCE_DIR = argv[:4]
 PREVIEW_DIR = argv[4] if len(argv) > 4 else None
 for d in (UNITY_DIR, SOURCE_DIR, PREVIEW_DIR):
@@ -43,14 +49,15 @@ FLAT_SHADING = True
 
 # ============================================================================ anatomy
 # Source model units, after recentring on the mirror plane: +Z up, -Y forward (Unity +Z),
-# +X = otter's left. Read off plane slices of the mesh; scaled by SCALE when placed.
+# +X = otter's left. Read off plane slices of the standing mesh; scaled by SCALE when placed.
 SPINE = {
-    # name: (head, tail)  - spine bones point forward like the cat's
-    "root.x":        ((0, 0.190, 0.310), (0, 0.130, 0.335)),
-    "spine_01.x":    ((0, 0.130, 0.335), (0, 0.040, 0.350)),
-    "spine_02.x":    ((0, 0.040, 0.350), (0, -0.050, 0.355)),
-    "spine_03.x":    ((0, -0.050, 0.355), (0, -0.130, 0.370)),
-    "c_subneck_1.x": ((0, -0.130, 0.370), (0, -0.200, 0.410)),
+    # name: (head, tail)  - spine bones point forward like the cat's.
+    # ExpShadowNeckController pins c_subneck_1 onto the spine_03 pivot every frame, so their heads are close.
+    "root.x":        ((0, 0.190, 0.310), (0, 0.120, 0.335)),
+    "spine_01.x":    ((0, 0.120, 0.335), (0, 0.015, 0.350)),
+    "spine_02.x":    ((0, 0.015, 0.350), (0, -0.090, 0.355)),
+    "spine_03.x":    ((0, -0.090, 0.355), (0, -0.135, 0.370)),
+    "c_subneck_1.x": ((0, -0.105, 0.365), (0, -0.200, 0.410)),
     "neck.x":        ((0, -0.200, 0.410), (0, -0.270, 0.470)),
     "head.x":        ((0, -0.270, 0.470), (0, -0.460, 0.490)),
 }
@@ -75,6 +82,38 @@ FRONT = [(0.055, -0.115, 0.370),  # scapula top (inside the chest)
 FRONT_BONES = ["c_thigh_b_dupli_001", "thigh_stretch_dupli_001", "leg_stretch_dupli_001", "foot_dupli_001", "toes_01_dupli_001"]
 TWIST = {"thigh_twist": "thigh_stretch", "leg_twist": "leg_stretch",
          "thigh_twist_dupli_001": "thigh_stretch_dupli_001", "leg_twist_dupli_001": "leg_stretch_dupli_001"}
+
+# Relaxed float = the bind pose: world direction of each bone (head -> tail), left side; .r is mirrored.
+# Applied parent-first as swings about each bone's head; bones not listed follow their parent.
+def _deg(back_from_down, out=0.0):
+    a = math.radians(back_from_down)
+    return (out, math.sin(a), -math.cos(a))
+
+RELAXED = {
+    "root.x":        (0, -1, 0),
+    "spine_01.x":    (0, -1, 0),
+    "spine_02.x":    (0, -1, 0),
+    "spine_03.x":    (0, -1, 0.03),
+    "c_subneck_1.x": (0, -1, math.tan(math.radians(15))),
+    "neck.x":        (0, -1, math.tan(math.radians(25))),
+    "head.x":        (0, -1, 0),
+    "c_tail_00.x":   (0, 1, -0.14),
+    "c_tail_01.x":   (0, 1, -0.10),
+    "c_tail_02.x":   (0, 1, -0.06),
+    "c_tail_03.x":   (0, 1, -0.03),
+    "c_tail_04.x":   (0, 1, 0),
+    # hind: thigh down and a little back, shin trailing, foot pointed back in line with the shin
+    "c_thigh_b":     _deg(13, 0.32),
+    "thigh_stretch": _deg(61, 0.10),
+    "leg_stretch":   _deg(76, 0.12),
+    "foot":          _deg(83, 0.12),
+    "toes_01":       _deg(87, 0.10),
+    # fore: hanging loose, swept back under the chest, paw curled back toward the palm
+    "thigh_stretch_dupli_001": _deg(40, 0.08),
+    "leg_stretch_dupli_001":   _deg(20, -0.03),
+    "foot_dupli_001":          _deg(55),
+    "toes_01_dupli_001":       _deg(70),
+}
 
 # Tail unbending: the tail is everything behind TAIL_START_Y; its centre line is straightened into
 # TAIL_DIRECTION, bending away from the source's droop over TAIL_BLEND so the rump stays put.
@@ -354,6 +393,63 @@ bm.free()
 if unweighted:
     raise RuntimeError(f"{len(unweighted)} vertices have no skin weights")
 
+# ============================================================================ 5. relaxed float as bind pose
+bpy.context.view_layer.objects.active = arm
+for o in bpy.context.scene.objects:
+    o.select_set(o == arm)
+bpy.ops.object.mode_set(mode='POSE')
+M = arm.matrix_world
+R = M.to_3x3().normalized()
+
+def relaxed_dir(name):
+    base, _, side = name.partition(".")
+    d = RELAXED.get(base if side in ("l", "r") else name)
+    if d is None:
+        return None
+    return Vector((-d[0], d[1], d[2]) if side == "r" else d).normalized()
+
+swings = {}
+for pb in sorted(arm.pose.bones, key=lambda pb: len(pb.parent_recursive)):
+    want = relaxed_dir(pb.name)
+    if want is None:
+        continue
+    bpy.context.view_layer.update()
+    cur = R @ (pb.tail - pb.head).normalized()
+    q = R.inverted() @ cur.rotation_difference(want).to_matrix() @ R
+    h = pb.head.copy()
+    pb.matrix = Matrix.Translation(h) @ q.to_4x4() @ Matrix.Translation(-h) @ pb.matrix
+    swings[pb.name] = math.degrees(cur.angle(want))
+bpy.context.view_layer.update()
+print("relaxed swing (deg):", ", ".join(f"{k}:{v:.0f}" for k, v in swings.items() if not k.endswith(".r")))
+
+ev = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+baked = ev.to_mesh()
+posed = [v.co.copy() for v in baked.vertices]
+ev.to_mesh_clear()
+for v, p in zip(me.vertices, posed):
+    v.co = p
+# swung bones keep their rolls, so each bone's axes stay where the cat's are relative to the bone
+# (re-aligning to the cat's world Z degenerates on bones that turned ~90deg, e.g. the paws)
+bpy.ops.pose.armature_apply(selected=False)
+
+bpy.ops.object.mode_set(mode='EDIT')
+ebs = arm.data.edit_bones
+for side in ("l", "r"):
+    for twist, parent in TWIST.items():
+        p = ebs[f"{parent}.{side}"]
+        ebs[f"{twist}.{side}"].head = p.head.copy()
+        ebs[f"{twist}.{side}"].tail = p.head.lerp(p.tail, 0.5)
+        ebs[f"{twist}.{side}"].align_roll(cat_z[f"{twist}.{side}"])
+bpy.ops.object.mode_set(mode='OBJECT')
+
+def bend(a, b, c):
+    ba, bc = (ebs_w[a][0] - ebs_w[b][0]), (ebs_w[c][0] - ebs_w[b][0])
+    return 180 - math.degrees(ba.angle(bc))
+ebs_w = {b.name: (M @ b.head_local, M @ b.tail_local) for b in arm.data.bones}
+print(f"rest bends: knee {bend('c_thigh_b.l', 'thigh_stretch.l', 'leg_stretch.l'):.0f} deg, "
+      f"elbow {bend('thigh_stretch_dupli_001.l', 'leg_stretch_dupli_001.l', 'foot_dupli_001.l'):.0f} deg, "
+      f"neck-pin gap {(ebs_w['spine_03.x'][0] - ebs_w['c_subneck_1.x'][0]).length:.4f} m")
+
 # mesh data into armature space, identity parenting (like the cat)
 me.transform(arm.matrix_world.inverted() @ obj.matrix_world)
 obj.matrix_parent_inverse = Matrix.Identity(4)
@@ -386,7 +482,7 @@ for m in [m for m in bpy.data.materials if m != mat]:
 for i in [i for i in bpy.data.images if i != img]:
     bpy.data.images.remove(i)
 
-# ============================================================================ 5. report
+# ============================================================================ 6. report
 tris = sum(len(p.vertices) - 2 for p in me.polygons)
 infl = [sum(1 for g in v.groups if g.weight > 1e-4) for v in me.vertices]
 print(f"\n==== SEA OTTER verts={len(me.vertices)} tris={tris} bones={len(arm.data.bones)} deform={len(deform_bones)} "
@@ -404,7 +500,7 @@ for v in me.vertices:
             counts[groups[g.group]] = counts.get(groups[g.group], 0) + 1
 print("verts per bone (w>0.3):", ", ".join(f"{k}:{counts.get(k, 0)}" for k in deform_bones))
 
-# ============================================================================ 6. save + export
+# ============================================================================ 7. save + export
 for o in bpy.data.objects:
     o.select_set(True)
 bpy.ops.export_scene.fbx(filepath=os.path.join(UNITY_DIR, "sea_otter.fbx"), **FBX_EXPORT)
@@ -412,7 +508,7 @@ bpy.context.preferences.filepaths.save_version = 0
 bpy.ops.wm.save_as_mainfile(filepath=os.path.join(SOURCE_DIR, "sea_otter.blend"), relative_remap=True)
 print("exported", os.path.join(UNITY_DIR, "sea_otter.fbx"))
 
-# ============================================================================ 7. previews
+# ============================================================================ 8. previews
 if PREVIEW_DIR:
     scene = bpy.context.scene
     scene.render.engine = 'BLENDER_WORKBENCH'
