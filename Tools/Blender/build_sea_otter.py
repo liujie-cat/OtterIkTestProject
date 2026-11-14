@@ -1,9 +1,13 @@
-"""Build a low-poly sea otter on the cat rig's skeleton conventions.
+"""Build a cute low-poly sea otter on the cat rig's skeleton conventions.
 
 The armature is the cat's own (cat_lowpoly.fbx): same object transform, bone names, hierarchy and bone
 rolls, so every IK component that works on the cat can be pointed at the same-named otter bones.
-Only the face bones are dropped. Bones are moved to sea otter anatomy and re-rolled toward the cat's
+Only the face bones are dropped. Bones are moved to otter anatomy and re-rolled toward the cat's
 Z axes, so local frames (used by AdvancedTwoBoneIK axis settings and the hind trajectory) carry over.
+
+Mesh: smooth primitives (head, cheeks, body, limbs, tail) are fused with a voxel remesh, symmetrized and
+decimated into flat-shaded facets; eyes, ears, nose and mouth are separate crisp pieces placed on that
+surface. Skin weights come from Blender's bone heat; colours come from a small palette texture.
 
 Run (Blender 5.x) from the project root:
   blender -b --factory-startup --python Tools/Blender/build_sea_otter.py -- \
@@ -12,8 +16,9 @@ Outputs:
   <unity_out_dir>/sea_otter.fbx, sea_otter_palette.png   (the committed .meta files and SeaOtter.mat are kept)
   <source_out_dir>/sea_otter.blend, sea_otter_palette.png
 """
-import bpy, bmesh, sys, os, math, random
+import bpy, bmesh, sys, os, math
 from mathutils import Vector, Matrix, Quaternion
+from mathutils.bvhtree import BVHTree
 
 argv = sys.argv[sys.argv.index("--") + 1:]
 CAT_FBX, UNITY_DIR, SOURCE_DIR = argv[0], argv[1], argv[2]
@@ -29,201 +34,123 @@ FBX_EXPORT = dict(
     secondary_bone_axis='X', use_armature_deform_only=False, armature_nodetype='NULL', bake_anim=False,
     path_mode='STRIP')
 
+VOXEL = 0.0014          # fusing resolution (m)
+TARGET_TRIS = 2600      # hull triangles after decimation
+
 # ============================================================================ anatomy (meters)
 # Blender world space: +Z up, -Y forward (Unity +Z), +X = otter's left. z = 0 is the cat's ground plane.
-# Sea otter proportions: head-body ~72% / tail ~28% of total length, small round head on a thick neck,
-# long plump cylindrical torso, short forelimbs, large backward-pointing webbed hind flippers.
+# Cute but long-bodied: big round head, plump body, four clearly separated limbs that reach past the
+# body outline (they read from the top-down camera), thick tapered tail.
 
 SPINE = {
     # name: (head, tail)  - spine bones point forward like the cat's
-    "root.x":        ((0, 0.100, 0.080), (0, 0.072, 0.080)),
-    "spine_01.x":    ((0, 0.072, 0.080), (0, 0.012, 0.081)),
-    "spine_02.x":    ((0, 0.012, 0.081), (0, -0.048, 0.082)),
-    "spine_03.x":    ((0, -0.048, 0.082), (0, -0.082, 0.084)),
-    "c_subneck_1.x": ((0, -0.082, 0.084), (0, -0.106, 0.090)),
-    "neck.x":        ((0, -0.106, 0.090), (0, -0.134, 0.098)),
-    "head.x":        ((0, -0.134, 0.098), (0, -0.185, 0.094)),
+    "root.x":        ((0, 0.095, 0.080), (0, 0.062, 0.081)),
+    "spine_01.x":    ((0, 0.062, 0.081), (0, 0.010, 0.083)),
+    "spine_02.x":    ((0, 0.010, 0.083), (0, -0.045, 0.085)),
+    "spine_03.x":    ((0, -0.045, 0.085), (0, -0.082, 0.088)),
+    "c_subneck_1.x": ((0, -0.082, 0.088), (0, -0.106, 0.093)),
+    "neck.x":        ((0, -0.106, 0.093), (0, -0.128, 0.099)),
+    "head.x":        ((0, -0.128, 0.099), (0, -0.195, 0.100)),
 }
-TAIL = [(0, 0.110, 0.078), (0, 0.126, 0.077), (0, 0.150, 0.075), (0, 0.176, 0.073), (0, 0.200, 0.072), (0, 0.224, 0.071)]
+TAIL = [(0, 0.095, 0.080), (0, 0.122, 0.079), (0, 0.150, 0.077), (0, 0.177, 0.075), (0, 0.204, 0.073), (0, 0.230, 0.071)]
 TAIL_BONES = ["c_tail_00.x", "c_tail_01.x", "c_tail_02.x", "c_tail_03.x", "c_tail_04.x"]
 
-# Left limbs (mirrored for .r). Four segments like the cat: girdle, upper, lower, foot, toes.
-# Hind legs are mostly inside the body; the flippers trail backward at belly level beside the tail.
-HIND = [(0.026, 0.088, 0.066),   # hip joint (inside body)
-        (0.038, 0.072, 0.050),   # knee
-        (0.040, 0.100, 0.046),   # ankle
-        (0.044, 0.122, 0.044),   # flipper mid
-        (0.048, 0.143, 0.043),   # toe base
-        (0.051, 0.163, 0.042)]   # flipper tip
+# Left limbs (mirrored for .r): girdle, upper, lower, foot, toes - the cat's five-bone chains.
+HIND = [(0.022, 0.072, 0.072),   # hip joint (inside body)
+        (0.038, 0.058, 0.052),   # knee
+        (0.044, 0.088, 0.042),   # ankle
+        (0.049, 0.110, 0.038),   # flipper mid
+        (0.054, 0.130, 0.035),   # toe base
+        (0.058, 0.150, 0.033)]   # flipper tip
 HIND_BONES = ["c_thigh_b", "thigh_stretch", "leg_stretch", "foot", "toes_01"]
-# Short forelimbs: paws sit just under the chest.
-FRONT = [(0.024, -0.060, 0.085),  # scapula top (inside body)
-         (0.034, -0.078, 0.058),  # shoulder
-         (0.040, -0.068, 0.042),  # elbow
-         (0.036, -0.084, 0.030),  # wrist
-         (0.032, -0.094, 0.026),  # paw
-         (0.030, -0.102, 0.025)]  # paw tip
+FRONT = [(0.020, -0.060, 0.090),  # scapula top (inside body)
+         (0.032, -0.076, 0.068),  # shoulder
+         (0.045, -0.072, 0.046),  # elbow
+         (0.049, -0.092, 0.031),  # wrist
+         (0.050, -0.104, 0.025),  # paw
+         (0.050, -0.116, 0.022)]  # paw tip
 FRONT_BONES = ["c_thigh_b_dupli_001", "thigh_stretch_dupli_001", "leg_stretch_dupli_001", "foot_dupli_001", "toes_01_dupli_001"]
 TWIST = {"thigh_twist": "thigh_stretch", "leg_twist": "leg_stretch",
          "thigh_twist_dupli_001": "thigh_stretch_dupli_001", "leg_twist_dupli_001": "leg_stretch_dupli_001"}
 
-# Body tube stations, nose -> tail tip.
-# (y, z_center, half_width_top, half_width_bottom, half_height_top, half_height_bottom, squareness)
-BODY = [
-    (-0.1935, 0.0915, 0.011, 0.014, 0.009, 0.008, 2.0),   # nose pad
-    (-0.1860, 0.0910, 0.019, 0.027, 0.015, 0.014, 2.1),   # muzzle / puffy whisker pads
-    (-0.1750, 0.0925, 0.025, 0.032, 0.021, 0.019, 2.1),
-    (-0.1620, 0.0960, 0.030, 0.033, 0.027, 0.022, 2.0),   # eyes
-    (-0.1480, 0.0975, 0.033, 0.034, 0.029, 0.024, 2.0),   # widest skull
-    (-0.1340, 0.0965, 0.032, 0.033, 0.027, 0.026, 2.0),   # ears
-    (-0.1200, 0.0930, 0.032, 0.034, 0.026, 0.028, 2.1),   # thick neck
-    (-0.1040, 0.0890, 0.035, 0.037, 0.029, 0.032, 2.2),
-    (-0.0860, 0.0850, 0.039, 0.041, 0.032, 0.036, 2.3),   # shoulders
-    (-0.0660, 0.0830, 0.043, 0.045, 0.035, 0.041, 2.3),   # chest
-    (-0.0440, 0.0820, 0.046, 0.048, 0.037, 0.045, 2.3),
-    (-0.0200, 0.0810, 0.048, 0.050, 0.038, 0.048, 2.3),   # belly
-    (+0.0060, 0.0810, 0.048, 0.050, 0.038, 0.048, 2.3),
-    (+0.0320, 0.0800, 0.046, 0.048, 0.037, 0.046, 2.3),
-    (+0.0580, 0.0800, 0.043, 0.045, 0.035, 0.042, 2.3),
-    (+0.0800, 0.0790, 0.039, 0.041, 0.033, 0.038, 2.3),   # hips
-    (+0.1000, 0.0780, 0.032, 0.033, 0.028, 0.029, 2.3),
-    (+0.1160, 0.0770, 0.025, 0.025, 0.020, 0.019, 2.3),   # tail base
-    (+0.1350, 0.0750, 0.022, 0.022, 0.013, 0.012, 2.6),   # thick, flattened tail
-    (+0.1580, 0.0735, 0.021, 0.021, 0.011, 0.010, 2.6),
-    (+0.1820, 0.0720, 0.019, 0.019, 0.010, 0.009, 2.6),
-    (+0.2040, 0.0710, 0.015, 0.015, 0.008, 0.007, 2.5),
-    (+0.2220, 0.0700, 0.009, 0.009, 0.006, 0.005, 2.3),
+# Smooth shapes fused into the hull: (part, center, radii)
+ELLIPSOIDS = [
+    ("head",   (0, -0.152, 0.103), (0.043, 0.040, 0.038)),
+    ("muzzle", (0, -0.186, 0.090), (0.021, 0.016, 0.015)),
+    ("cheek",  (0.013, -0.183, 0.088), (0.016, 0.014, 0.013)),
+    ("cheek",  (-0.013, -0.183, 0.088), (0.016, 0.014, 0.013)),
 ]
-NOSE_TIP = (0, -0.1990, 0.0905)
-TAIL_TIP = (0, 0.2310, 0.0700)
-BODY_RING = 12
-
-# Limb ring radii at each joint (half_width, half_height); mid-segment rings are interpolated.
-HIND_RADII = [(0.018, 0.018), (0.015, 0.014), (0.011, 0.009), (0.017, 0.006), (0.022, 0.005), (0.020, 0.004)]
-FRONT_RADII = [(0.015, 0.015), (0.014, 0.014), (0.011, 0.011), (0.010, 0.008), (0.011, 0.007), (0.008, 0.005)]
-LIMB_RING = 6
-
-# Skinning along the body: (bone, y at its front edge). Regions are contiguous in y.
-BODY_REGIONS = [  # ordered by y ascending; each bone owns [prev_edge, edge)
-    ("head.x", -0.134), ("neck.x", -0.106), ("c_subneck_1.x", -0.082), ("spine_03.x", -0.048),
-    ("spine_02.x", 0.012), ("spine_01.x", 0.072), ("root.x", 0.110), ("c_tail_00.x", 0.126),
-    ("c_tail_01.x", 0.150), ("c_tail_02.x", 0.176), ("c_tail_03.x", 0.200), ("c_tail_04.x", 9.0),
+# One continuous body from inside the head to the tail tip: (y, z, lateral radius, vertical radius),
+# interpolated with Catmull-Rom so there are no bulges between stations.
+BODY_PROFILE = [
+    (-0.128, 0.097, 0.031, 0.030),
+    (-0.108, 0.092, 0.035, 0.032),
+    (-0.085, 0.088, 0.040, 0.036),
+    (-0.055, 0.085, 0.045, 0.039),
+    (-0.020, 0.083, 0.047, 0.040),
+    (+0.015, 0.082, 0.046, 0.039),
+    (+0.045, 0.081, 0.042, 0.036),
+    (+0.072, 0.080, 0.036, 0.032),
+    (+0.095, 0.080, 0.029, 0.025),
+    (+0.115, 0.079, 0.025, 0.019),
+    (+0.140, 0.077, 0.023, 0.016),
+    (+0.168, 0.075, 0.020, 0.014),
+    (+0.195, 0.073, 0.017, 0.012),
+    (+0.218, 0.072, 0.013, 0.009),
+    (+0.234, 0.071, 0.008, 0.006),
 ]
-BODY_BLEND = [0.012, 0.016, 0.016, 0.024, 0.030, 0.024, 0.012, 0.014, 0.016, 0.016, 0.014]
+BODY_PARTS = [(-0.095, "neck"), (-0.035, "chest"), (0.045, "belly"), (0.100, "hips"), (9.0, "tail")]
+# Limb tubes: (part per segment, points, radii (lateral, vertical) per point)
+FRONT_TUBE = (["arm", "forearm", "paw", "paw"], FRONT[1:],
+              [(0.0150, 0.0150), (0.0120, 0.0120), (0.0095, 0.0088), (0.0130, 0.0075), (0.0095, 0.0058)])
+HIND_TUBE = (["thigh", "shin", "foot", "foot", "foot"], HIND,
+             [(0.019, 0.019), (0.015, 0.015), (0.0095, 0.0085), (0.014, 0.0055), (0.019, 0.005), (0.017, 0.004)])
 
 # ============================================================================ palette
-PALETTE = {  # 4 shades per row, 8-bit sRGB
-    "brown": [(112, 77, 54), (122, 85, 59), (103, 70, 49), (131, 92, 64)],
-    "dark":  [(76, 53, 39), (84, 59, 43), (69, 48, 36), (92, 65, 47)],
-    "pale":  [(214, 194, 164), (224, 206, 178), (204, 182, 151), (232, 216, 190)],
-    "misc":  [(28, 23, 21), (168, 134, 101), (182, 148, 113), (245, 243, 238)],  # black, tan, tan2, white
+PALETTE = {  # name: shades (8-bit sRGB)
+    "fur":     [(198, 150, 106), (205, 157, 111), (191, 144, 101), (201, 153, 108)],
+    "back":    [(181, 133, 92), (186, 138, 96), (176, 129, 89), (184, 136, 94)],
+    "tail":    [(170, 124, 86), (176, 129, 89), (165, 120, 83), (173, 126, 87)],
+    "cream":   [(238, 215, 180), (243, 222, 188), (233, 209, 173), (240, 218, 184)],
+    "paw":     [(124, 86, 62), (131, 91, 65), (117, 81, 58), (127, 88, 63)],
+    "ear":     [(132, 93, 67)],
+    "earin":   [(98, 66, 49)],
+    "nose":    [(84, 54, 43)],
+    "mouth":   [(92, 60, 47)],
+    "eye":     [(22, 18, 18)],
+    "glint":   [(252, 252, 250)],
 }
-ROWS = ["brown", "dark", "pale", "misc"]
-CELLS = 4
+GRID = 8
 TEX_SIZE = 256
+CELL_OF = {}
+for name, shades in PALETTE.items():
+    for k in range(len(shades)):
+        CELL_OF[(name, k)] = len(CELL_OF)
 
-def cell_uv(row, col):
-    return ((col + 0.5) / CELLS, (ROWS.index(row) + 0.5) / CELLS)
+def cell_uv(name, k=0):
+    i = CELL_OF[(name, k % len(PALETTE[name]))]
+    return ((i % GRID + 0.5) / GRID, (i // GRID + 0.5) / GRID)
 
 def save_palette(path):
     img = bpy.data.images.new("sea_otter_palette", TEX_SIZE, TEX_SIZE, alpha=False)
-    cell = TEX_SIZE // CELLS
+    cell = TEX_SIZE // GRID
     px = [0.0] * (TEX_SIZE * TEX_SIZE * 4)
-    for r, row in enumerate(ROWS):
-        for c, rgb in enumerate(PALETTE[row]):
-            col = [v / 255.0 for v in rgb] + [1.0]  # byte image pixels are stored as sRGB
-            for y in range(r * cell, (r + 1) * cell):
-                for x in range(c * cell, (c + 1) * cell):
-                    i = (y * TEX_SIZE + x) * 4
-                    px[i:i + 4] = col
+    for (name, k), i in CELL_OF.items():
+        col = [v / 255.0 for v in PALETTE[name][k]] + [1.0]  # byte image pixels are stored as sRGB
+        cx, cy = i % GRID, i // GRID
+        for y in range(cy * cell, (cy + 1) * cell):
+            for x in range(cx * cell, (cx + 1) * cell):
+                j = (y * TEX_SIZE + x) * 4
+                px[j:j + 4] = col
     img.pixels = px
     img.filepath_raw = path
     img.file_format = 'PNG'
     img.save()
     return img
 
-# ============================================================================ helpers
-def sgnpow(v, e):
-    return math.copysign(abs(v) ** e, v)
-
-def smoothstep(x):
-    x = max(0.0, min(1.0, x))
-    return x * x * (3 - 2 * x)
-
-def sym_rng(*key):
-    h = 1469598103934665603
-    for k in key:
-        h = ((h ^ (int(k) & 0xFFFFFFFF)) * 1099511628211) & 0xFFFFFFFFFFFFFFFF
-    return random.Random(h)
-
-class Builder:
-    def __init__(self):
-        self.bm = bmesh.new()
-        self.vweights = []      # per vertex: {bone: weight}
-        self.face_part = {}     # face -> (part, extra)
-
-    def vert(self, co, weights):
-        v = self.bm.verts.new(co)
-        self.vweights.append(dict(weights))
-        return v
-
-    def tri(self, a, b, c, part, extra=None):
-        try:
-            f = self.bm.faces.new((a, b, c))
-        except ValueError:
-            return None
-        self.face_part[f] = (part, extra)
-        return f
-
-    def ring(self, ring_id, center, t, hw_top, hw_bot, ht, hb, p, n, odd, weights, noise=0.05):
-        t = t.normalized()
-        lat = Vector((1, 0, 0))
-        lat = (lat - t * t.dot(lat)).normalized()
-        up = t.cross(lat)
-        offset = math.pi / n if odd else 0.0
-        verts, angles = [], []
-        for k in range(n):
-            phi = offset + 2 * math.pi * k / n
-            s, c = math.sin(phi), math.cos(phi)
-            mirror = (n - k) % n if not odd else n - 1 - k
-            rng = sym_rng(ring_id, min(k, mirror))
-            f = 1.0 + noise * (rng.random() * 2 - 1)
-            along = 0.0012 * (rng.random() * 2 - 1)
-            hw = hw_bot + (hw_top - hw_bot) * (c + 1) * 0.5
-            h = ht if c >= 0 else hb
-            co = Vector(center) + lat * (hw * sgnpow(s, 2.0 / p) * f) + up * (h * sgnpow(c, 2.0 / p) * f) + t * along
-            verts.append(self.vert(co, weights))
-            angles.append(phi)
-        return verts, angles
-
-    def stitch(self, A, angA, B, angB, part, extra=None):
-        n, m = len(A), len(B)
-        ea = angA + [angA[0] + 2 * math.pi]
-        eb = angB + [angB[0] + 2 * math.pi]
-        i = j = 0
-        while i < n or j < m:
-            if i < n and (j >= m or ea[i + 1] <= eb[j + 1]):
-                self.tri(A[i % n], B[j % m], A[(i + 1) % n], part, extra)
-                i += 1
-            else:
-                self.tri(A[i % n], B[j % m], B[(j + 1) % m], part, extra)
-                j += 1
-
-    def cap(self, ring, apex, part, extra=None):
-        for k in range(len(ring)):
-            self.tri(ring[k], ring[(k + 1) % len(ring)], apex, part, extra)
-
-    def blob(self, kind, matrix, weights, part, **kw):
-        before = set(self.bm.faces)
-        if kind == 'sphere':
-            res = bmesh.ops.create_uvsphere(self.bm, u_segments=kw.get('u', 6), v_segments=kw.get('v', 4), radius=1.0, matrix=matrix)
-        else:
-            res = bmesh.ops.create_cone(self.bm, cap_ends=True, cap_tris=True, segments=kw.get('segments', 5),
-                                        radius1=1.0, radius2=kw.get('r2', 0.25), depth=1.0, matrix=matrix)
-        for v in res['verts']:
-            self.vweights.append(dict(weights))
-        for f in set(self.bm.faces) - before:
-            self.face_part[f] = (part, None)
+def shade_index(c):
+    h = hash((round(abs(c.x), 3), round(c.y, 3), round(c.z, 3))) & 0xFFFF
+    return h % 4
 
 # ============================================================================ 1. template armature
 bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -283,172 +210,339 @@ bpy.ops.object.mode_set(mode='OBJECT')
 for b in arm.data.bones:
     b.use_deform = b.name.split(".")[0] not in TWIST
 
-# ============================================================================ 2. mesh
-B = Builder()
+# ============================================================================ 2. hull
+def frame(direction):
+    d = Vector(direction).normalized()
+    lat = Vector((1, 0, 0))
+    lat = lat - d * d.dot(lat)
+    if lat.length < 1e-4:
+        lat = Vector((0, 0, 1)).cross(d)
+    lat.normalize()
+    up = d.cross(lat).normalized()
+    if up.z < 0:
+        up = -up
+    return lat, d, up
 
-def body_weights(y):
-    w = {}
-    lo_edge = -9.0
-    for i, (bone, edge) in enumerate(BODY_REGIONS):
-        lo = 1.0 if i == 0 else smoothstep((y - (lo_edge - BODY_BLEND[i - 1] / 2)) / BODY_BLEND[i - 1])
-        hi = 0.0 if i == len(BODY_REGIONS) - 1 else smoothstep((y - (edge - BODY_BLEND[i] / 2)) / BODY_BLEND[i])
-        v = lo - hi
-        if v > 1e-4:
-            w[bone] = v
-        lo_edge = edge
-    return w
+def add_ellipsoid(bm, center, radii, basis=None, u=36, v=18):
+    rot = (basis or Matrix.Identity(3)).to_4x4()
+    bmesh.ops.create_uvsphere(bm, u_segments=u, v_segments=v, radius=1.0,
+                              matrix=Matrix.Translation(center) @ rot @ Matrix.Diagonal((*radii, 1.0)))
 
-# body tube
-centers = [Vector((0, s[0], s[1])) for s in BODY]
-rings = []
-for i, s in enumerate(BODY):
-    if i == 0:
-        t = centers[1] - Vector(NOSE_TIP)
-    elif i == len(BODY) - 1:
-        t = Vector(TAIL_TIP) - centers[i - 1]
-    else:
-        t = centers[i + 1] - centers[i - 1]
-    t = -t  # forward direction (toward the nose), so +up stays +Z
-    rings.append(B.ring(100 + i, centers[i], t, s[2], s[3], s[4], s[5], s[6], BODY_RING, i % 2 == 1, body_weights(s[0])))
-for i in range(len(rings) - 1):
-    B.stitch(rings[i][0], rings[i][1], rings[i + 1][0], rings[i + 1][1], "body")
-nose_apex = B.vert(Vector(NOSE_TIP), body_weights(NOSE_TIP[1]))
-tail_apex = B.vert(Vector(TAIL_TIP), body_weights(TAIL_TIP[1]))
-B.cap(rings[0][0], nose_apex, "body")
-B.cap(rings[-1][0], tail_apex, "body")
+def catmull_rom(stations, step):
+    """Dense samples of a station list (tuples of floats, first component strictly increasing)."""
+    out = []
+    P = [stations[0]] + list(stations) + [stations[-1]]
+    for i in range(1, len(P) - 2):
+        p0, p1, p2, p3 = P[i - 1], P[i], P[i + 1], P[i + 2]
+        n = max(1, int(abs(p2[0] - p1[0]) / step))
+        for s in range(n):
+            t = s / n
+            out.append(tuple(0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t * t + (-a + 3 * b - 3 * c + d) * t ** 3)
+                             for a, b, c, d in zip(p0, p1, p2, p3)))
+    out.append(stations[-1])
+    return out
 
-# limbs
-def build_limb(limb_id, pts, radii, bones, parent_bone, side):
-    f = (lambda p: Vector(p)) if side == "l" else (lambda p: Vector(mirror(p)))
-    names = [f"{b}.{side}" for b in bones]
-    stations = []  # (pos, (hw, hh), weights)
-    for i in range(len(pts)):
-        if i == 0:
-            w = {parent_bone: 1.0}
-        elif i == len(pts) - 1:
-            w = {names[-1]: 1.0}
-        else:
-            w = {names[i - 1]: 0.5, names[i]: 0.5}
-        stations.append((f(pts[i]), radii[i], w))
-        if i < len(pts) - 1:
-            mid = f(pts[i]).lerp(f(pts[i + 1]), 0.5)
-            r = tuple((radii[i][k] + radii[i + 1][k]) / 2 for k in range(2))
-            stations.append((mid, r, {names[i]: 1.0}))
-    limb_rings = []
-    for i, (p, r, w) in enumerate(stations):
-        if i == 0:
-            t = stations[1][0] - p
-        elif i == len(stations) - 1:
-            t = p - stations[i - 1][0]
-        else:
-            t = stations[i + 1][0] - stations[i - 1][0]
-        limb_rings.append(B.ring(limb_id * 100 + i, p, t, r[0], r[0], r[1], r[1], 2.2, LIMB_RING, i % 2 == 1, w, noise=0.06))
-    for i in range(len(limb_rings) - 1):
-        B.stitch(limb_rings[i][0], limb_rings[i][1], limb_rings[i + 1][0], limb_rings[i + 1][1], "limb", side)
-    tip_dir = (stations[-1][0] - stations[-2][0]).normalized()
-    tip = B.vert(stations[-1][0] + tip_dir * stations[-1][1][1] * 1.5, {names[-1]: 1.0})
-    base = B.vert(stations[0][0] - (stations[1][0] - stations[0][0]).normalized() * 0.003, {parent_bone: 1.0})
-    B.cap(limb_rings[-1][0], tip, "limb", side)
-    B.cap(limb_rings[0][0], base, "limb", side)
+BODY_DENSE = catmull_rom(BODY_PROFILE, 0.003)
+BODY_PTS = [(0.0, s[0], s[1]) for s in BODY_DENSE]
+BODY_RADII = [(s[2], s[3]) for s in BODY_DENSE]
 
-for side in ("l", "r"):
-    build_limb(20, HIND, HIND_RADII, HIND_BONES, "root.x", side)
-    build_limb(30, FRONT, FRONT_RADII, FRONT_BONES, "spine_03.x", side)
+def body_part(y):
+    return next(name for edge, name in BODY_PARTS if y < edge)
 
-# eyes, ears, nose (rigid on the head)
-HEAD_W = {"head.x": 1.0}
-def surface_point(station, phi):
-    s = BODY[station]
-    hw = s[3] + (s[2] - s[3]) * (math.cos(phi) + 1) * 0.5
-    h = s[4] if math.cos(phi) >= 0 else s[5]
-    return Vector((hw * sgnpow(math.sin(phi), 2.0 / s[6]), s[0], s[1] + h * sgnpow(math.cos(phi), 2.0 / s[6])))
+def add_tube(bm, pts, radii, n=20, joint_caps=True):
+    pts = [Vector(p) for p in pts]
+    for i in range(len(pts) - 1):
+        a, b = pts[i], pts[i + 1]
+        lat, d, up = frame(b - a)
+        steps = max(2, int((b - a).length / 0.002))
+        rings = []
+        for s in range(steps + 1):
+            t = s / steps
+            c = a.lerp(b, t)
+            rl = radii[i][0] + (radii[i + 1][0] - radii[i][0]) * t
+            rv = radii[i][1] + (radii[i + 1][1] - radii[i][1]) * t
+            rings.append([bm.verts.new(c + lat * (rl * math.cos(2 * math.pi * k / n)) + up * (rv * math.sin(2 * math.pi * k / n)))
+                          for k in range(n)])
+        for r0, r1 in zip(rings, rings[1:]):
+            for k in range(n):
+                bm.faces.new((r0[k], r0[(k + 1) % n], r1[(k + 1) % n], r1[k]))
+    for i, p in enumerate(pts):
+        if not joint_caps and 0 < i < len(pts) - 1:
+            continue
+        seg = (pts[min(i + 1, len(pts) - 1)] - pts[max(i - 1, 0)])
+        lat, d, up = frame(seg)
+        basis = Matrix((lat, d, up)).transposed()
+        add_ellipsoid(bm, p, (radii[i][0], max(radii[i][0], radii[i][1]), radii[i][1]), basis, u=20, v=10)
+
+def mirrored(pts):
+    return [mirror(p) for p in pts]
+
+bm = bmesh.new()
+for part, c, r in ELLIPSOIDS:
+    add_ellipsoid(bm, Vector(c), r)
+add_tube(bm, BODY_PTS, BODY_RADII, n=32, joint_caps=False)
+for flip in (False, True):
+    for parts, pts, radii in (FRONT_TUBE, HIND_TUBE):
+        add_tube(bm, mirrored(pts) if flip else pts, radii)
+src_me = bpy.data.meshes.new("otter_src")
+bm.to_mesh(src_me)
+bm.free()
+src = bpy.data.objects.new("otter_src", src_me)
+bpy.context.scene.collection.objects.link(src)
+
+rm = src.modifiers.new("remesh", 'REMESH')
+rm.mode = 'VOXEL'
+rm.voxel_size = VOXEL
+rm.adaptivity = 0.0
+sm = src.modifiers.new("smooth", 'SMOOTH')
+sm.factor = 0.5
+sm.iterations = 6
+dg = bpy.context.evaluated_depsgraph_get()
+fused = bpy.data.meshes.new_from_object(src.evaluated_get(dg))
+bpy.data.objects.remove(src, do_unlink=True)
+
+bm = bmesh.new()
+bm.from_mesh(fused)
+bmesh.ops.symmetrize(bm, input=bm.verts[:] + bm.edges[:] + bm.faces[:], direction='X')
+bm.to_mesh(fused)
+fused_faces = len(bm.faces)
+bm.free()
+
+hull_src = bpy.data.objects.new("hull_src", fused)
+bpy.context.scene.collection.objects.link(hull_src)
+dm = hull_src.modifiers.new("decimate", 'DECIMATE')
+dm.decimate_type = 'COLLAPSE'
+dm.ratio = min(1.0, TARGET_TRIS / (2.0 * fused_faces))
+dm.use_symmetry = True
+dm.symmetry_axis = 'X'
+dm.use_collapse_triangulate = True
+dg = bpy.context.evaluated_depsgraph_get()
+hull_me = bpy.data.meshes.new_from_object(hull_src.evaluated_get(dg))
+bpy.data.objects.remove(hull_src, do_unlink=True)
+hull_me.name = "SeaOtter"
+
+bm = bmesh.new()
+bm.from_mesh(hull_me)
+# edge flips only (no vertex moves): trades the collapse's long slivers for rounder facets
+bmesh.ops.beautify_fill(bm, faces=bm.faces[:], edges=bm.edges[:], method='AREA')
+bm.to_mesh(hull_me)
+bm.free()
+print(f"fused faces={fused_faces} -> hull tris={len(hull_me.polygons)}")
+
+# ---------------------------------------------------------------- region colours on the hull
+def ellipsoid_sd(p, c, r):
+    q = Vector(((p.x - c[0]) / r[0], (p.y - c[1]) / r[1], (p.z - c[2]) / r[2]))
+    k0 = q.length
+    k1 = Vector((q.x / r[0], q.y / r[1], q.z / r[2])).length
+    return k0 * (k0 - 1.0) / max(k1, 1e-9)
+
+def segment_sd(p, a, b, ra, rb):
+    a, b = Vector(a), Vector(b)
+    ab = b - a
+    t = max(0.0, min(1.0, (p - a).dot(ab) / ab.length_squared))
+    lat, d, up = frame(ab)
+    rel = p - (a + ab * t)
+    rl = ra[0] + (rb[0] - ra[0]) * t
+    rv = ra[1] + (rb[1] - ra[1]) * t
+    q = Vector((rel.dot(lat) / rl, rel.dot(up) / rv))
+    radial = (q.length - 1.0) * min(rl, rv)
+    along = abs(rel.dot(d))  # non-zero only past the segment ends
+    return math.hypot(max(radial, 0.0), along) if along > 1e-9 else radial
+
+SHAPES = []
+for part, c, r in ELLIPSOIDS:
+    SHAPES.append((part, lambda p, c=c, r=r: ellipsoid_sd(p, c, r)))
+for i in range(len(BODY_PTS) - 1):
+    SHAPES.append((body_part(BODY_PTS[i][1]),
+                   lambda p, a=BODY_PTS[i], b=BODY_PTS[i + 1], ra=BODY_RADII[i], rb=BODY_RADII[i + 1]: segment_sd(p, a, b, ra, rb)))
+for parts, pts, radii in (FRONT_TUBE, HIND_TUBE):
+    for flip in (False, True):
+        P = mirrored(pts) if flip else pts
+        for i in range(len(P) - 1):
+            SHAPES.append((parts[i], lambda p, a=P[i], b=P[i + 1], ra=radii[i], rb=radii[i + 1]: segment_sd(p, a, b, ra, rb)))
+
+HEAD_C, HEAD_R = Vector(ELLIPSOIDS[0][1]), Vector(ELLIPSOIDS[0][2])
+
+def region_colour(p, normal):
+    part = min(SHAPES, key=lambda s: s[1](p))[0]
+    if part in ("muzzle", "cheek"):
+        return "cream"
+    if part == "head":
+        q = Vector(((p.x - HEAD_C.x) / HEAD_R.x, (p.y - HEAD_C.y) / HEAD_R.y, (p.z - HEAD_C.z) / HEAD_R.z))
+        if q.z < -0.35 or (q.y < -0.45 and q.z < 0.12):
+            return "cream"
+        return "fur"
+    if part in ("neck", "chest", "belly", "hips"):
+        st = min(BODY_DENSE, key=lambda s: abs(s[0] - p.y))
+        qz = (p.z - st[1]) / st[3]
+        if qz < (-0.45 if part in ("neck", "chest") else -0.7):
+            return "cream"
+        return "back" if qz > 0.8 else "fur"
+    if part == "tail":
+        return "tail"
+    if part in ("paw", "foot"):
+        return "paw"
+    return "fur"
+
+bm = bmesh.new()
+bm.from_mesh(hull_me)
+uv = bm.loops.layers.uv.verify()
+region_counts = {}
+for f in bm.faces:
+    c = f.calc_center_median()
+    name = region_colour(c, f.normal)
+    region_counts[name] = region_counts.get(name, 0) + 1
+    u_, v_ = cell_uv(name, shade_index(c))
+    for loop in f.loops:
+        loop[uv].uv = (u_, v_)
+bm.to_mesh(hull_me)
+bm.free()
+print("hull faces per colour:", region_counts)
+
+obj = bpy.data.objects.new("SeaOtter", hull_me)
+bpy.context.scene.collection.objects.link(obj)
+
+# ---------------------------------------------------------------- bone heat weights
+for o in bpy.context.scene.objects:
+    o.select_set(False)
+obj.select_set(True)
+arm.select_set(True)
+bpy.context.view_layer.objects.active = arm
+bpy.ops.object.parent_set(type='ARMATURE_AUTO')
+obj.select_set(False)
+arm.select_set(False)
+
+# ---------------------------------------------------------------- face details (rigid on the head)
+bm = bmesh.new()
+bm.from_mesh(hull_me)
+bm.verts.ensure_lookup_table()
+bvh = BVHTree.FromBMesh(bm)
+uv = bm.loops.layers.uv.verify()
+dl = bm.verts.layers.deform.verify()
+head_group = obj.vertex_groups["head.x"].index
+detail_verts = []
+
+def surface(origin, direction):
+    hit = bvh.ray_cast(Vector(origin) + Vector(direction).normalized() * 0.2, -Vector(direction).normalized())
+    if hit[0] is None:
+        raise RuntimeError(f"no surface hit from {origin} along {direction}")
+    n = hit[1]
+    return hit[0], (n if n.dot(Vector(direction)) > 0 else -n).normalized()
+
+def onto(p, offset):
+    loc, n, _, _ = bvh.find_nearest(Vector(p))
+    return loc + n * offset
+
+def finish(res_verts, colour):
+    new_faces = {f for v in res_verts for f in v.link_faces}
+    for f in new_faces:
+        for loop in f.loops:
+            loop[uv].uv = cell_uv(colour)
+    for v in res_verts:
+        detail_verts.append(v)
+
+def blob(center, basis, radii, colour, u=8, v=6, shape=None):
+    res = bmesh.ops.create_uvsphere(bm, u_segments=u, v_segments=v, radius=1.0)
+    for vv in res['verts']:
+        co = vv.co.copy()
+        if shape:
+            co = shape(co)
+        vv.co = Vector(center) + basis @ Vector((co.x * radii[0], co.y * radii[1], co.z * radii[2]))
+    finish(res['verts'], colour)
+
+def basis_facing(n, up_hint=Vector((0, 0, 1))):
+    """columns: x = sideways, y = along the normal, z = up on the surface"""
+    y = n.normalized()
+    x = up_hint.cross(y)
+    if x.length < 1e-4:
+        x = Vector((1, 0, 0))
+    x.normalize()
+    z = y.cross(x).normalized()
+    if z.z < 0:
+        x, z = -x, -z
+    return Matrix((x, y, z)).transposed()
+
+def tube(points, radius, colour, sides=4):
+    pts = [Vector(p) for p in points]
+    rings = []
+    for i, p in enumerate(pts):
+        d = (pts[min(i + 1, len(pts) - 1)] - pts[max(i - 1, 0)]).normalized()
+        a = d.orthogonal().normalized()
+        b = d.cross(a).normalized()
+        rings.append([bm.verts.new(p + (a * math.cos(2 * math.pi * k / sides) + b * math.sin(2 * math.pi * k / sides)) * radius)
+                      for k in range(sides)])
+    made = [v for r in rings for v in r]
+    for r0, r1 in zip(rings, rings[1:]):
+        for k in range(sides):
+            bm.faces.new((r0[k], r0[(k + 1) % sides], r1[(k + 1) % sides], r1[k]))
+    for r in (rings[0], rings[-1]):
+        bm.faces.new(r if r is rings[-1] else list(reversed(r)))
+    finish(made, colour)
 
 for sx in (1, -1):
-    eye = surface_point(3, math.radians(55))
-    eye = Vector((eye.x * sx, eye.y - 0.0015, eye.z))
-    r = 0.0042
-    eye_c = eye - Vector((0.0012 * sx, 0, 0.0008))
-    B.blob('sphere', Matrix.Translation(eye_c) @ Matrix.Diagonal((r, r * 0.9, r, 1)), HEAD_W, "eye", u=6, v=4)
-    glint = eye_c + Vector((0.0028 * sx, -0.0022, 0.0020))
-    B.blob('sphere', Matrix.Translation(glint) @ Matrix.Diagonal((0.0012, 0.0012, 0.0012, 1)), HEAD_W, "glint", u=4, v=3)
+    # eyes: big glossy domes on the front of the face, with a highlight
+    hit, n = surface(HEAD_C, (0.50 * sx, -0.74, 0.36))
+    r_eye = 0.0088
+    eb = basis_facing(n)
+    blob(hit - n * (0.30 * r_eye), eb, (r_eye, r_eye * 0.75, r_eye * 1.08), "eye", u=10, v=7)
+    light = Vector((-0.5, 0, 1))  # same key-light side on both eyes
+    light = (light - n * light.dot(n)).normalized()
+    glint = hit + n * (0.40 * r_eye) + light * (0.45 * r_eye)
+    blob(glint, eb, (0.0024, 0.0016, 0.0024), "glint", u=6, v=4)
 
-    ear = surface_point(5, math.radians(64))
-    ear = Vector((ear.x * sx, ear.y + 0.002, ear.z))
-    normal = Vector((0.75 * sx, 0.35, 0.55)).normalized()
-    rot = Vector((0, 0, 1)).rotation_difference(normal).to_matrix().to_4x4()
-    B.blob('sphere', Matrix.Translation(ear + normal * 0.0012) @ rot @ Matrix.Diagonal((0.0055, 0.0035, 0.0045, 1)), HEAD_W, "ear", u=5, v=3)
+    # round ears on the upper sides of the head, facing forward
+    hit, n = surface(HEAD_C, (0.86 * sx, 0.15, 0.50))
+    facing = (n + Vector((0, -0.6, 0))).normalized()
+    ebasis = basis_facing(facing)
+    ear_c = hit + n * 0.0045
+    blob(ear_c, ebasis, (0.0128, 0.0055, 0.0118), "ear", u=10, v=6)
+    blob(ear_c + facing * 0.0036 + Vector((0, 0, -0.0012)), ebasis, (0.0080, 0.0025, 0.0072), "earin", u=8, v=5)
 
-nose = Vector((0, -0.1975, 0.0965))
-B.blob('sphere', Matrix.Translation(nose) @ Matrix.Diagonal((0.0068, 0.0045, 0.0050, 1)), HEAD_W, "nose", u=5, v=3)
+# nose: rounded triangle on top of the muzzle
+mc = Vector(ELLIPSOIDS[1][1])
+nose_hit, nose_n = surface(mc + Vector((0, 0, 0.003)), (0, -0.82, 0.57))
+nb = basis_facing(nose_n)
+blob(nose_hit + nose_n * 0.0015, nb, (0.0098, 0.0062, 0.0068), "nose", u=8, v=5,
+     shape=lambda co: Vector((co.x * (1.0 + 0.38 * co.z), co.y, co.z)))
 
-bm = B.bm
-bm.verts.index_update()
-bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
+# mouth: a small "w" under the nose
+down = nb @ Vector((0, 0, -1))
+side = nb @ Vector((1, 0, 0))
+top = nose_hit + down * 0.0058
+mid = nose_hit + down * 0.0102
+off = 0.0007
+for s in (1, -1):
+    arc = [mid, mid + side * (0.0038 * s) + down * 0.0016, mid + side * (0.0076 * s) + down * 0.0008, mid + side * (0.0100 * s) - down * 0.0016]
+    tube([onto(p, off) for p in arc], 0.00085, "mouth")
+tube([onto(top, off), onto(mid, off)], 0.00085, "mouth")
 
-# ---------------------------------------------------------------- colours
-uv = bm.loops.layers.uv.new("UVMap")
-def pick(face):
-    part, side = B.face_part.get(face, ("body", None))
-    c = face.calc_center_median()
-    rng = random.Random(hash((round(abs(c.x), 4), round(c.y, 4), round(c.z, 4))) & 0xFFFFFFFF)
-    shade = rng.randrange(CELLS)
-    if part in ("eye", "nose"):
-        return ("misc", 0)
-    if part == "glint":
-        return ("misc", 3)
-    if part == "limb":
-        return ("dark", shade)
-    if part == "ear":
-        return ("brown", 2)
-    y, z = c.y, c.z
-    if y > 0.112:
-        return ("dark", shade)
-    zc = 0.08
-    # pale head/throat; the boundary sweeps back along the underside
-    t = max(-1.0, min(1.0, (z - zc) / 0.035))
-    edge = -0.112 - 0.016 * t
-    if y < edge - 0.010:
-        return ("pale", shade)
-    if y < edge + 0.016:
-        keep = (edge + 0.016 - y) / 0.026
-        if rng.random() < keep:
-            return ("pale", shade)
-        return ("misc", 1 + rng.randrange(2)) if t < 0 else ("brown", 3)
-    if y < -0.050 and z < zc - 0.012:
-        return ("misc", 1 + rng.randrange(2)) if rng.random() < 0.7 else ("brown", shade)
-    if z > zc + 0.022:
-        return ("brown", (0, 2)[rng.randrange(2)])
-    return ("brown", shade)
+# ---------------------------------------------------------------- weights: details rigid, max 4 influences
+for v in detail_verts:
+    v[dl].clear()
+    v[dl][head_group] = 1.0
+unweighted = 0
+for v in bm.verts:
+    w = sorted(((g, x) for g, x in v[dl].items() if x > 0.01), key=lambda kv: -kv[1])[:4]
+    total = sum(x for _, x in w)
+    v[dl].clear()
+    if total <= 0:
+        unweighted += 1
+        continue
+    for g, x in w:
+        v[dl][g] = x / total
+bm.to_mesh(hull_me)
+bm.free()
+if unweighted:
+    raise RuntimeError(f"bone heat left {unweighted} vertices unweighted")
 
-for face in bm.faces:
-    row, col = pick(face)
-    u, v = cell_uv(row, col)
-    for loop in face.loops:
-        loop[uv].uv = (u, v)
-
-# ---------------------------------------------------------------- object + weights
-bmesh.ops.transform(bm, matrix=Minv, verts=list(bm.verts))
-me = bpy.data.meshes.new("SeaOtter")
-obj = bpy.data.objects.new("SeaOtter", me)
-bpy.context.scene.collection.objects.link(obj)
-obj.parent = arm
+# mesh data into armature space, identity parenting (like the cat)
+hull_me.transform(arm.matrix_world.inverted() @ obj.matrix_world)
 obj.matrix_parent_inverse = Matrix.Identity(4)
 obj.matrix_basis = Matrix.Identity(4)
-
-deform_bones = [b.name for b in arm.data.bones if b.use_deform]
-groups = {name: obj.vertex_groups.new(name=name) for name in deform_bones}
-dl = bm.verts.layers.deform.verify()
-for v in bm.verts:
-    w = B.vweights[v.index]
-    total = sum(w.values())
-    for bone, val in sorted(w.items(), key=lambda kv: -kv[1])[:4]:
-        v[dl][groups[bone].index] = val / total
-bm.to_mesh(me)
-bm.free()
-for p in me.polygons:
+for p in hull_me.polygons:
     p.use_smooth = False
-mod = obj.modifiers.new("Armature", 'ARMATURE')
-mod.object = arm
+me = hull_me
+deform_bones = [b.name for b in arm.data.bones if b.use_deform]
 
 # ---------------------------------------------------------------- material
 tex_unity = os.path.join(UNITY_DIR, "sea_otter_palette.png")
@@ -460,40 +554,39 @@ mat = bpy.data.materials.new("SeaOtter")
 mat.use_nodes = True
 nt = mat.node_tree
 bsdf = next(n for n in nt.nodes if n.type == 'BSDF_PRINCIPLED')
-bsdf.inputs['Roughness'].default_value = 0.85
+bsdf.inputs['Roughness'].default_value = 0.8
 tn = nt.nodes.new('ShaderNodeTexImage')
 tn.image = img
 tn.interpolation = 'Closest'
 nt.links.new(tn.outputs['Color'], bsdf.inputs['Base Color'])
 nt.nodes.active = tn
+me.materials.clear()
 me.materials.append(mat)
 
 # ============================================================================ 3. report
 tris = sum(len(p.vertices) - 2 for p in me.polygons)
 infl = [sum(1 for g in v.groups if g.weight > 1e-4) for v in me.vertices]
-unweighted = sum(1 for n in infl if n == 0)
 print(f"\n==== SEA OTTER verts={len(me.vertices)} tris={tris} bones={len(arm.data.bones)} deform={len(deform_bones)} "
-      f"maxInfluences={max(infl)} unweighted={unweighted}")
+      f"maxInfluences={max(infl)}")
 mins = Vector((1e9,) * 3); maxs = Vector((-1e9,) * 3)
 for v in me.vertices:
     w = arm.matrix_world @ v.co
     mins = Vector(map(min, mins, w)); maxs = Vector(map(max, maxs, w))
 print(f"bounds min=({mins.x:.3f},{mins.y:.3f},{mins.z:.3f}) max=({maxs.x:.3f},{maxs.y:.3f},{maxs.z:.3f})")
-print("bone frames vs cat (deg between local X / Z axes; Y follows the new bone direction):")
-for b in arm.data.bones:
-    m = arm.matrix_world @ b.matrix_local
-    c = cat_frames[b.name]
-    ax = lambda mm, i: mm.to_3x3().col[i].normalized()
-    dx = math.degrees(ax(m, 0).angle(ax(c, 0)))
-    dz = math.degrees(ax(m, 2).angle(ax(c, 2)))
-    dy = math.degrees(ax(m, 1).angle(ax(c, 1)))
-    print(f"  {b.name:26s} dirChange={dy:6.1f} dX={dx:6.1f} dZ={dz:6.1f}")
+groups = {g.index: g.name for g in obj.vertex_groups}
+counts = {}
+for v in me.vertices:
+    for g in v.groups:
+        if g.weight > 0.3:
+            counts[groups[g.group]] = counts.get(groups[g.group], 0) + 1
+print("verts per bone (w>0.3):", ", ".join(f"{k}:{counts.get(k, 0)}" for k in deform_bones))
 
 # ============================================================================ 4. save + export
 for o in bpy.data.objects:
     o.select_set(True)
 bpy.ops.export_scene.fbx(filepath=os.path.join(UNITY_DIR, "sea_otter.fbx"), **FBX_EXPORT)
 img.filepath = "//sea_otter_palette.png"
+bpy.context.preferences.filepaths.save_version = 0
 bpy.ops.wm.save_as_mainfile(filepath=os.path.join(SOURCE_DIR, "sea_otter.blend"))
 img.filepath = tex_source
 print("exported", os.path.join(UNITY_DIR, "sea_otter.fbx"))
@@ -508,6 +601,7 @@ if PREVIEW_DIR:
     scene.render.resolution_x, scene.render.resolution_y = 1000, 700
     if scene.world is None:
         scene.world = bpy.data.worlds.new("w")
+    scene.world.color = (0.62, 0.70, 0.64)
     center = (mins + maxs) / 2
     size = (maxs - mins).length
     cam = bpy.data.objects.new("cam", bpy.data.cameras.new("cam"))
@@ -543,7 +637,7 @@ if PREVIEW_DIR:
     shoot("rest_side", (1, 0, 0))
     shoot("rest_top", (0, 0, 1))
     shoot("rest_front", (0, -1, 0.15), scale=0.6)
-    shoot("rest_face", (0.6, -1, 0.35), scale=0.42, look=Vector((0, -0.16, 0.095)))
+    shoot("rest_face", (0.35, -1, 0.3), scale=0.38, look=Vector((0, -0.17, 0.1)))
 
     # C-shaped turn: front leads, back trails (yaw about world up)
     for n_, d in (("spine_01.x", 12), ("spine_02.x", 14), ("spine_03.x", 12), ("c_subneck_1.x", 10), ("neck.x", 12), ("head.x", 8)):
@@ -553,40 +647,19 @@ if PREVIEW_DIR:
     shoot("pose_turn_top", (0, 0, 1))
     reset_pose()
 
-    # kick + chest roll + head up
-    rot("spine_03.x", (0, -1, 0), 35)
-    rot("spine_02.x", (0, -1, 0), 15)
-    rot("neck.x", (1, 0, 0), -15)
+    # paddle stroke + kick + chest roll
+    rot("spine_03.x", (0, -1, 0), 30)
+    rot("spine_02.x", (0, -1, 0), 12)
     for side, sgn in (("l", 1), ("r", -1)):
-        rot(f"thigh_stretch.{side}", (1, 0, 0), 35 * sgn)
-        rot(f"leg_stretch.{side}", (1, 0, 0), -25)
-        rot(f"thigh_stretch_dupli_001.{side}", (1, 0, 0), -40 * sgn)
-    shoot("pose_kick_roll", (1, -1.1, 0.7))
+        rot(f"thigh_stretch_dupli_001.{side}", (1, 0, 0), -55)
+        rot(f"leg_stretch_dupli_001.{side}", (1, 0, 0), 35)
+        rot(f"c_thigh_b.{side}", (1, 0, 0), 35 * sgn)
+        rot(f"thigh_stretch.{side}", (1, 0, 0), -30)
+    shoot("pose_paddle", (1, -1.1, 0.7))
     reset_pose()
 
-    # flip: whole spine rolled onto the back (back-float), to check the belly / chest colours
+    # flip: whole spine rolled onto the back (back-float)
     rot("root.x", (0, -1, 0), 180)
     shoot("pose_backfloat", (1, -0.6, 0.9))
     reset_pose()
-
-    # scale reference: the cat, lifted above the otter, same orthographic scale
-    before = set(bpy.data.objects)
-    bpy.ops.import_scene.fbx(filepath=CAT_FBX)
-    cat_tex = os.path.join(os.path.dirname(os.path.dirname(CAT_FBX)), "Textures", "cat_tex_11.png")
-    cat_img = bpy.data.images.load(cat_tex) if os.path.exists(cat_tex) else None
-    for o in set(bpy.data.objects) - before:
-        if o.parent is None:
-            o.location.z += 0.16
-        if o.type == 'MESH' and cat_img:
-            for slot in o.material_slots:
-                if slot.material is None:
-                    continue
-                slot.material.use_nodes = True
-                cnt = slot.material.node_tree
-                ctn = cnt.nodes.new('ShaderNodeTexImage')
-                ctn.image = cat_img
-                ctn.interpolation = 'Closest'
-                cnt.nodes.active = ctn
-    center = center + Vector((0, 0, 0.08))
-    shoot("compare_cat_side", (1, 0, 0), scale=1.25)
     print("previews in", PREVIEW_DIR)

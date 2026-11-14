@@ -197,6 +197,14 @@ namespace OtterIK.EditorTools
             var log = new StringBuilder();
             var catRoot = cat.transform;
 
+            if (otterAsset.GetComponentInChildren<SkinnedMeshRenderer>(true) == null)
+            {
+                string why = $"'{AssetDatabase.GetAssetPath(otterAsset)}' has no SkinnedMeshRenderer, so the IK would move bones " +
+                             "but not the mesh. Set its import Rig > Animation Type to Generic and try again. Nothing was changed.";
+                Debug.LogError("[SeaOtterRig] " + why);
+                return why;
+            }
+
             Undo.IncrementCurrentGroup();
             int group = Undo.GetCurrentGroup();
             Undo.SetCurrentGroupName("Transplant cat rig to sea otter");
