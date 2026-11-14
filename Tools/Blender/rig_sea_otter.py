@@ -9,9 +9,10 @@ The source mesh (ArtSource/SeaOtter/generated, an image-to-3D export) stands on 
 an arched back, is off-centre, 1 m long and has its tail curled on the ground. It is recentred on its
 mirror plane, scaled so shoulders and hips land near the cat's, and the tail is unbent along its centre
 line. Bones are placed on that standing anatomy and skinned with Blender's bone heat (the eyes ride
-rigidly on the head); then the skeleton is posed into a relaxed float (straight level spine, neck
-reaching forward, hind legs trailing with the feet pointed back, forelegs hanging loose, tail straight)
-and the mesh is baked into it, so that float is the bind pose.
+rigidly on the head); then the skeleton is re-proportioned (longer back, stubby legs) and posed into a
+relaxed float (straight level spine, neck reaching forward, hind legs trailing with the feet pointed back,
+forelegs hanging loose, tail straight), the mesh is carried along, and that float becomes the bind pose
+with fresh weights.
 
 The rest pose matters at runtime: the IK leaves feet, paws and toes at their rest angle to the shin and
 forearm, the hind knee limits are centred on the rest knee, and the spine and neck controllers treat the
@@ -83,6 +84,15 @@ FRONT_BONES = ["c_thigh_b_dupli_001", "thigh_stretch_dupli_001", "leg_stretch_du
 TWIST = {"thigh_twist": "thigh_stretch", "leg_twist": "leg_stretch",
          "thigh_twist_dupli_001": "thigh_stretch_dupli_001", "leg_twist_dupli_001": "leg_stretch_dupli_001"}
 
+# Body proportions: length scale along each bone (default 1). The source is leggy and short-backed;
+# a sea otter is a long tube on stubby legs with big hind flippers (feet keep their size).
+PROPORTION = {
+    "root.x": 1.1, "spine_01.x": 1.5, "spine_02.x": 1.5,
+    "c_thigh_b": 0.7, "thigh_stretch": 0.6,
+    "thigh_stretch_dupli_001": 0.6, "leg_stretch_dupli_001": 0.55,
+    "foot_dupli_001": 0.9, "toes_01_dupli_001": 0.9,
+}
+
 # Relaxed float = the bind pose: world direction of each bone (head -> tail), left side; .r is mirrored.
 # Applied parent-first as swings about each bone's head; bones not listed follow their parent.
 def _deg(back_from_down, out=0.0):
@@ -94,13 +104,13 @@ RELAXED = {
     "spine_01.x":    (0, -1, 0),
     "spine_02.x":    (0, -1, 0),
     "spine_03.x":    (0, -1, 0.03),
-    "c_subneck_1.x": (0, -1, math.tan(math.radians(15))),
-    "neck.x":        (0, -1, math.tan(math.radians(25))),
-    "head.x":        (0, -1, 0),
-    "c_tail_00.x":   (0, 1, -0.14),
-    "c_tail_01.x":   (0, 1, -0.10),
-    "c_tail_02.x":   (0, 1, -0.06),
-    "c_tail_03.x":   (0, 1, -0.03),
+    "c_subneck_1.x": (0, -1, math.tan(math.radians(5))),
+    "neck.x":        (0, -1, math.tan(math.radians(12))),
+    "head.x":        (0, -1, -math.tan(math.radians(3))),
+    "c_tail_00.x":   (0, 1, -0.06),
+    "c_tail_01.x":   (0, 1, -0.03),
+    "c_tail_02.x":   (0, 1, 0),
+    "c_tail_03.x":   (0, 1, 0),
     "c_tail_04.x":   (0, 1, 0),
     # hind: thigh down and a little back, shin trailing, foot pointed back in line with the shin
     "c_thigh_b":     _deg(13, 0.32),
@@ -349,91 +359,113 @@ for b in arm.data.bones:
     b.use_deform = b.name.split(".")[0] not in TWIST
 
 # ============================================================================ 4. skin weights
-for o in bpy.context.scene.objects:
-    o.select_set(False)
-obj.select_set(True)
-arm.select_set(True)
-bpy.context.view_layer.objects.active = arm
-bpy.ops.object.parent_set(type='ARMATURE_AUTO')
+def skin():
+    """Bone-heat weights, eyes rigid on the head, top-4 normalised; misses borrow a neighbour's weights."""
+    for m in [m for m in obj.modifiers if m.type == 'ARMATURE']:
+        obj.modifiers.remove(m)
+    obj.vertex_groups.clear()
+    for o in bpy.context.scene.objects:
+        o.select_set(False)
+    obj.select_set(True)
+    arm.select_set(True)
+    bpy.context.view_layer.objects.active = arm
+    bpy.ops.object.parent_set(type='ARMATURE_AUTO')
 
-head_group = obj.vertex_groups["head.x"].index
-bm = bmesh.new()
-bm.from_mesh(me)
-dl = bm.verts.layers.deform.verify()
-bm.verts.ensure_lookup_table()
-for i in eye_vert_ids:
-    v = bm.verts[i]
-    v[dl].clear()
-    v[dl][head_group] = 1.0
-unweighted = []
-for v in bm.verts:
-    w = sorted(((g, x) for g, x in v[dl].items() if x > 0.01), key=lambda kv: -kv[1])[:4]
-    total = sum(x for _, x in w)
-    v[dl].clear()
-    if total <= 0:
-        unweighted.append(v)
-        continue
-    for g, x in w:
-        v[dl][g] = x / total
-# bone heat can miss a few vertices on open or tangled spots: borrow the nearest weighted neighbour's
-for _ in range(8):
-    if not unweighted:
-        break
-    left = []
-    for v in unweighted:
-        n = next((e.other_vert(v) for e in v.link_edges if len(e.other_vert(v)[dl])), None)
-        if n is None:
-            left.append(v)
+    head_group = obj.vertex_groups["head.x"].index
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    dl = bm.verts.layers.deform.verify()
+    bm.verts.ensure_lookup_table()
+    for i in eye_vert_ids:
+        v = bm.verts[i]
+        v[dl].clear()
+        v[dl][head_group] = 1.0
+    unweighted = []
+    for v in bm.verts:
+        w = sorted(((g, x) for g, x in v[dl].items() if x > 0.01), key=lambda kv: -kv[1])[:4]
+        total = sum(x for _, x in w)
+        v[dl].clear()
+        if total <= 0:
+            unweighted.append(v)
             continue
-        for g, x in n[dl].items():
-            v[dl][g] = x
-    unweighted = left
-bm.to_mesh(me)
-bm.free()
-if unweighted:
-    raise RuntimeError(f"{len(unweighted)} vertices have no skin weights")
+        for g, x in w:
+            v[dl][g] = x / total
+    # bone heat can miss a few vertices on open or tangled spots
+    for _ in range(8):
+        if not unweighted:
+            break
+        left = []
+        for v in unweighted:
+            n = next((e.other_vert(v) for e in v.link_edges if len(e.other_vert(v)[dl])), None)
+            if n is None:
+                left.append(v)
+                continue
+            for g, x in n[dl].items():
+                v[dl][g] = x
+        unweighted = left
+    bm.to_mesh(me)
+    bm.free()
+    if unweighted:
+        raise RuntimeError(f"{len(unweighted)} vertices have no skin weights")
 
-# ============================================================================ 5. relaxed float as bind pose
+skin()
+
+# ============================================================================ 5. proportions + relaxed float
+# Every bone gets an armature-space map D = T(new head) R S T(-old head): S stretches it along itself
+# (PROPORTION), R swings it to its RELAXED direction (unlisted bones keep their parent's R), and its head
+# rides on the parent's map. The mesh follows by blend skinning; the mapped bones become the rest pose,
+# their rolls carried by R so each bone's axes stay where the cat's are relative to the bone.
+M = arm.matrix_world
+R_world = M.to_3x3().normalized()
+
+def per_bone(table, name):
+    base, _, side = name.partition(".")
+    return table.get(base if side in ("l", "r") else name)
+
+def relaxed_dir(name):
+    d = per_bone(RELAXED, name)
+    if d is None:
+        return None
+    d = Vector((-d[0], d[1], d[2]) if name.endswith(".r") else d)
+    return (R_world.inverted() @ d).normalized()
+
+def stretch(axis, k):
+    return Matrix.Identity(3) + (k - 1) * Matrix([[a * b for b in axis] for a in axis])
+
+rest = {b.name: (b.head_local.copy(), b.tail_local.copy(), b.matrix_local.to_3x3().col[2].copy()) for b in arm.data.bones}
+D, R_of, swings = {}, {}, {}
+for b in sorted(arm.data.bones, key=lambda b: len(b.parent_recursive)):
+    h0, t0, _ = rest[b.name]
+    axis = (t0 - h0).normalized()
+    R = R_of[b.parent.name] if b.parent else Matrix.Identity(3)
+    want = relaxed_dir(b.name)
+    if want is not None:
+        cur = R @ axis
+        swings[b.name] = math.degrees(cur.angle(want))
+        R = cur.rotation_difference(want).to_matrix() @ R
+    R_of[b.name] = R
+    h1 = D[b.parent.name] @ h0 if b.parent else h0
+    D[b.name] = Matrix.Translation(h1) @ (R @ stretch(axis, per_bone(PROPORTION, b.name) or 1.0)).to_4x4() @ Matrix.Translation(-h0)
+print("relaxed swing (deg):", ", ".join(f"{k}:{v:.0f}" for k, v in swings.items() if not k.endswith(".r")))
+
+groups = {g.index: g.name for g in obj.vertex_groups}
+for v in me.vertices:
+    p = Minv @ v.co
+    acc, total = Vector(), 0.0
+    for g in v.groups:
+        acc += g.weight * (D[groups[g.group]] @ p)
+        total += g.weight
+    v.co = M @ (acc / total)
+
 bpy.context.view_layer.objects.active = arm
 for o in bpy.context.scene.objects:
     o.select_set(o == arm)
-bpy.ops.object.mode_set(mode='POSE')
-M = arm.matrix_world
-R = M.to_3x3().normalized()
-
-def relaxed_dir(name):
-    base, _, side = name.partition(".")
-    d = RELAXED.get(base if side in ("l", "r") else name)
-    if d is None:
-        return None
-    return Vector((-d[0], d[1], d[2]) if side == "r" else d).normalized()
-
-swings = {}
-for pb in sorted(arm.pose.bones, key=lambda pb: len(pb.parent_recursive)):
-    want = relaxed_dir(pb.name)
-    if want is None:
-        continue
-    bpy.context.view_layer.update()
-    cur = R @ (pb.tail - pb.head).normalized()
-    q = R.inverted() @ cur.rotation_difference(want).to_matrix() @ R
-    h = pb.head.copy()
-    pb.matrix = Matrix.Translation(h) @ q.to_4x4() @ Matrix.Translation(-h) @ pb.matrix
-    swings[pb.name] = math.degrees(cur.angle(want))
-bpy.context.view_layer.update()
-print("relaxed swing (deg):", ", ".join(f"{k}:{v:.0f}" for k, v in swings.items() if not k.endswith(".r")))
-
-ev = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
-baked = ev.to_mesh()
-posed = [v.co.copy() for v in baked.vertices]
-ev.to_mesh_clear()
-for v, p in zip(me.vertices, posed):
-    v.co = p
-# swung bones keep their rolls, so each bone's axes stay where the cat's are relative to the bone
-# (re-aligning to the cat's world Z degenerates on bones that turned ~90deg, e.g. the paws)
-bpy.ops.pose.armature_apply(selected=False)
-
 bpy.ops.object.mode_set(mode='EDIT')
 ebs = arm.data.edit_bones
+for name, (h0, t0, z0) in rest.items():
+    ebs[name].head = D[name] @ h0
+    ebs[name].tail = D[name] @ t0
+    ebs[name].align_roll(R_of[name] @ z0)
 for side in ("l", "r"):
     for twist, parent in TWIST.items():
         p = ebs[f"{parent}.{side}"]
@@ -449,6 +481,8 @@ ebs_w = {b.name: (M @ b.head_local, M @ b.tail_local) for b in arm.data.bones}
 print(f"rest bends: knee {bend('c_thigh_b.l', 'thigh_stretch.l', 'leg_stretch.l'):.0f} deg, "
       f"elbow {bend('thigh_stretch_dupli_001.l', 'leg_stretch_dupli_001.l', 'foot_dupli_001.l'):.0f} deg, "
       f"neck-pin gap {(ebs_w['spine_03.x'][0] - ebs_w['c_subneck_1.x'][0]).length:.4f} m")
+
+skin()  # re-weight on the final shape: the standing weights only carried the mesh into it
 
 # mesh data into armature space, identity parenting (like the cat)
 me.transform(arm.matrix_world.inverted() @ obj.matrix_world)
