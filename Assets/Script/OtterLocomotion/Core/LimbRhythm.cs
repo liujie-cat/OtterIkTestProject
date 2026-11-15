@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace OtterLocomotion
 {
@@ -28,10 +29,20 @@ namespace OtterLocomotion
     [Serializable]
     public class RhythmSettings
     {
-        public RhythmProfile hind = new RhythmProfile(1f, 2.2f, 0.45f, 3f);
+        [Tooltip("Hind feet kicking together: big, slower kicks when swimming fast.")]
+        [FormerlySerializedAs("hind")]
+        public RhythmProfile hindTogether = new RhythmProfile(1.1f, 1.5f, 0.4f, 3f);
+        [Tooltip("Hind feet taking turns: small, quicker kicks at low speed (turning on the spot, swimming on the back).")]
+        public RhythmProfile hindAlternate = new RhythmProfile(1.6f, 2.2f, 0.45f, 3f);
         public RhythmProfile fore = new RhythmProfile(1.6f, 3.2f, 0.4f, 1.5f);
+        [Tooltip("Hind feet kick together once the speed target (m/s) reaches this, and take turns again below hindApartSpeed; in between they keep their gait.")]
+        public float hindTogetherSpeed = 1.6f;
+        public float hindApartSpeed = 1.3f;
 
-        [Header("Drive = allocated force / the limb's strongest stroke")]
+        [Header("Drive = allocated force / full-drive force")]
+        [Tooltip("Allocated force (N) at which a limb strokes at full size and rate.")]
+        public float hindFullForce = 2.5f;
+        public float foreFullForce = 0.6f;
         [Tooltip("Drive needed to start stroking. Below the release drive a limb finishes its cycle and rests.")]
         public float engageDrive = 0.08f;
         public float releaseDrive = 0.04f;
@@ -47,8 +58,6 @@ namespace OtterLocomotion
         public float resetAngleDeg = 60f;
         [Tooltip("A limb joining a stroking partner waits for its place in the pair's rhythm only if that comes this soon (s); otherwise it pushes at once.")]
         public float maxJoinDelay = 0.15f;
-        [Tooltip("Hind feet paddle alternately when cruising and together when sprinting (Williams 1989).")]
-        public bool hindTogetherWhenSprinting = true;
     }
 
     /// <summary>One limb's stroke cycle. Phase 0..powerFraction is the power stroke, the rest the recovery.</summary>
@@ -79,36 +88,44 @@ namespace OtterLocomotion
     /// <summary>
     /// Per-limb phase oscillators (a small central pattern generator) driven by the allocation: how hard a limb is
     /// asked to push sets its stroke strength and rate, the force direction sets its stroke direction, fixed when each
-    /// power phase begins. Left and right of a girdle pull toward alternating strokes (hind feet together when
-    /// sprinting). A limb with nothing to do finishes its cycle and rests; a fresh demand in the late recovery starts
-    /// the next power stroke at once, and a limb starting from rest pushes immediately.
+    /// power phase begins. Left and right of a girdle pull toward alternating strokes; the hind feet kick together
+    /// when swimming fast. A limb with nothing to do finishes its cycle and rests; a fresh demand in the late recovery
+    /// starts the next power stroke at once, and a limb starting from rest pushes immediately.
     /// </summary>
     public sealed class LimbRhythm
     {
         public readonly LimbStroke[] limbs = new LimbStroke[OtterRig.LimbCount];
         public event Action<LimbId, LimbStroke> PowerStarted;
+        /// <summary>Hind feet kicking together (fast swimming) rather than taking turns.</summary>
+        public bool HindTogether { get; private set; }
 
         private readonly bool[] want = new bool[OtterRig.LimbCount];
         private readonly bool[] startedNow = new bool[OtterRig.LimbCount];
 
-        public void Reset() => Array.Clear(limbs, 0, limbs.Length);
+        public void Reset()
+        {
+            Array.Clear(limbs, 0, limbs.Length);
+            HindTogether = false;
+        }
 
         private static int Partner(int limb) => limb ^ 1;
         private static bool IsLeft(int limb) => (limb & 1) == 0;
         private static float Wrap(float x) => x - Mathf.Round(x);
 
-        public void Step(RhythmSettings s, ControlAllocator allocation, ActuatorModel model, SpeedBand band, float dt)
+        /// <param name="speedTarget">The demand layer's speed target (m/s), which picks the hind gait.</param>
+        public void Step(RhythmSettings s, ControlAllocator allocation, float speedTarget, float dt)
         {
+            if (speedTarget >= s.hindTogetherSpeed) HindTogether = true;
+            else if (speedTarget < s.hindApartSpeed) HindTogether = false;
+
             for (int i = 0; i < OtterRig.LimbCount; i++)
             {
                 ref var l = ref limbs[i];
                 l.powerFraction = Profile(s, i).powerFraction;
                 Vector2 force = allocation.limbs[i].force;
-                float strongest = 0f;
-                for (int k = 0; k < ActuatorModel.ColumnsPerLimb; k++)
-                    strongest = Mathf.Max(strongest, model.columns[i * ActuatorModel.ColumnsPerLimb + k].hi);
+                float full = OtterRig.IsFore((LimbId)i) ? s.foreFullForce : s.hindFullForce;
                 float magnitude = force.magnitude;
-                l.targetDrive = strongest > 1e-4f ? Mathf.Clamp01(magnitude / strongest) : 0f;
+                l.targetDrive = full > 1e-4f ? Mathf.Clamp01(magnitude / full) : 0f;
                 if (magnitude > 1e-4f) l.targetDirection = -force / magnitude;
                 else if (l.targetDirection == Vector2.zero) l.targetDirection = new Vector2(-1f, 0f);
 
@@ -126,7 +143,7 @@ namespace OtterLocomotion
                 {
                     int first = limbs[pair].targetDrive >= limbs[pair + 1].targetDrive ? pair : pair + 1;
                     int i = pass == 0 ? first : Partner(first);
-                    if (!limbs[i].active && want[i]) Start(s, i, band);
+                    if (!limbs[i].active && want[i]) Start(s, i);
                 }
             }
 
@@ -139,7 +156,7 @@ namespace OtterLocomotion
                 float rate = Mathf.Lerp(profile.minHz, profile.maxHz, l.drive);
                 ref var p = ref limbs[Partner(i)];
                 if (p.active)
-                    rate += profile.coupling * Wrap(p.phase - l.phase - PartnerLead(s, i, band));
+                    rate += profile.coupling * Wrap(p.phase - l.phase - PartnerLead(i));
                 rate = Mathf.Max(0.2f * profile.minHz, rate);
 
                 if (!l.parking && !startedNow[i] && l.phase >= l.powerFraction &&
@@ -163,24 +180,25 @@ namespace OtterLocomotion
             }
         }
 
-        private static RhythmProfile Profile(RhythmSettings s, int limb) => OtterRig.IsFore((LimbId)limb) ? s.fore : s.hind;
+        private RhythmProfile Profile(RhythmSettings s, int limb) =>
+            OtterRig.IsFore((LimbId)limb) ? s.fore : HindTogether ? s.hindTogether : s.hindAlternate;
 
         /// <summary>How far the partner's phase should run ahead of this limb's (cycles).</summary>
-        private static float PartnerLead(RhythmSettings s, int limb, SpeedBand band)
+        private float PartnerLead(int limb)
         {
-            bool together = !OtterRig.IsFore((LimbId)limb) && s.hindTogetherWhenSprinting && band == SpeedBand.Sprint;
+            bool together = !OtterRig.IsFore((LimbId)limb) && HindTogether;
             float rightAhead = together ? 0f : 0.5f;
             return IsLeft(limb) ? rightAhead : -rightAhead;
         }
 
-        private void Start(RhythmSettings s, int i, SpeedBand band)
+        private void Start(RhythmSettings s, int i)
         {
             ref var l = ref limbs[i];
             ref var p = ref limbs[Partner(i)];
             float phase = 0f;
             if (p.active)
             {
-                float slot = Mathf.Repeat(p.phase - PartnerLead(s, i, band), 1f);
+                float slot = Mathf.Repeat(p.phase - PartnerLead(i), 1f);
                 float rate = Mathf.Max(0.1f, Mathf.Lerp(Profile(s, i).minHz, Profile(s, i).maxHz, l.targetDrive));
                 bool soon = slot < 0.5f * l.powerFraction || (1f - slot) / rate <= s.maxJoinDelay;
                 // a pair starting together has to split up to alternate, so the second one always takes its slot

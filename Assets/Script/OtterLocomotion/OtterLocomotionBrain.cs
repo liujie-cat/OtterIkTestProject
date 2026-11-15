@@ -166,7 +166,7 @@ namespace OtterLocomotion
             if (!HasLimbGeometry) return;
             actuators.Build(actuatorSettings, geometry, centerOfMass, postureMachine.RollDeg, postureMachine.SupineFraction, Parameters.mass);
             allocator.Solve(allocatorSettings, actuators, demand, Parameters);
-            rhythm.Step(rhythmSettings, allocator, actuators, Intent.band, dt);
+            rhythm.Step(rhythmSettings, allocator, demand.speedTarget, dt);
         }
 
         private LocomotionIntent ReadIntent()

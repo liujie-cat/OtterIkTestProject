@@ -60,7 +60,8 @@ namespace OtterLocomotion.Testing
             public int seg;
             public bool held, kick;
             public MovementControllerRB.MoveZone zone;
-            public float[] limb;
+            public float[] limb, limbOut;
+            public int[] limbSide;
             public Posture posture;
             public float supine, roll, speedTarget, speedCap, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
             public bool allocated;
@@ -68,7 +69,7 @@ namespace OtterLocomotion.Testing
             public Vector2[] limbForce;
             public float[] limbYaw;
             public int saturated;
-            public bool rhythm;
+            public bool rhythm, hindTogether;
             public float[] phase, drive;
             public int[] strokes;
             public int powerMask;
@@ -155,7 +156,9 @@ namespace OtterLocomotion.Testing
                 chestBend = hip && chest ? Vector3.SignedAngle(Flat(hip.up), Flat(chest.up), Vector3.up) : 0f,
                 chestRoll = chest ? ChestRoll(body) : 0f,
                 limb = limbs.Select(l => l.space.TransformVector(l.space.InverseTransformPoint(l.target.position) - l.restLocal).magnitude * 100f).ToArray(),
+                limbSide = limbs.Select(l => Vector3.Dot(l.space.TransformPoint(l.restLocal) - l.space.position, right) >= 0f ? 1 : -1).ToArray(),
             };
+            s.limbOut = limbs.Select((l, k) => Vector3.Dot(l.target.position - l.space.TransformPoint(l.restLocal), right) * s.limbSide[k] * 100f).ToArray();
             if (brain != null)
             {
                 var d = brain.Demand;
@@ -179,6 +182,7 @@ namespace OtterLocomotion.Testing
                     s.saturated = a.SaturatedStrokes;
                     var r = brain.Rhythm.limbs;
                     s.rhythm = true;
+                    s.hindTogether = brain.Rhythm.HindTogether;
                     s.phase = r.Select(x => x.active ? x.phase : -1f).ToArray();
                     s.drive = r.Select(x => x.drive).ToArray();
                     s.strokes = r.Select(x => x.strokes).ToArray();
@@ -227,6 +231,10 @@ namespace OtterLocomotion.Testing
             var ci = CultureInfo.InvariantCulture;
             var sb = new StringBuilder("t,seg,held,zone,intentYaw,steerYaw,bodyYaw,yawRate,speedFwd,speedLat,targetSpeed,kick,demand,headYaw,chestBend,chestRoll,reach");
             foreach (var l in limbs) sb.Append(',').Append(l.name).Append("_cm");
+            // horizontal offset away from the body midline, + = outward; side = which side of the midline the limb is on
+            // now (+1 right), which swaps left and right while on the back
+            foreach (var l in limbs) sb.Append(',').Append(l.name).Append("_out");
+            foreach (var l in limbs) sb.Append(',').Append(l.name).Append("_side");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedCap,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -245,6 +253,8 @@ namespace OtterLocomotion.Testing
                     s.targetSpeed, s.kick ? 1 : 0, s.demand, s.headYaw, s.chestBend, s.chestRoll));
                 sb.Append(',').Append(s.reach.ToString("F2", ci));
                 foreach (var x in s.limb) sb.Append(',').Append(x.ToString("F2", ci));
+                foreach (var x in s.limbOut) sb.Append(',').Append(x.ToString("F2", ci));
+                foreach (var x in s.limbSide) sb.Append(',').Append(x);
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.speedCap, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
@@ -466,7 +476,9 @@ namespace OtterLocomotion.Testing
                 return $"{mean.ToString("F2", ci)} (spread {spread.ToString("F2", ci)}, {both.Count * 100 / seq.Count}% of frames)";
             }
             float idle = seq.Count(s => s.phase.All(p => p < 0f)) / (float)seq.Count;
-            sb.AppendLine($"  rhythm: strokes {counts} | hind L-R phase {PairOffset(LimbId.HL, LimbId.HR)}, fore L-R {PairOffset(LimbId.FL, LimbId.FR)} | all limbs resting {idle.ToString("P0", ci)} of frames");
+            float together = seq.Count(s => s.hindTogether) / (float)seq.Count;
+            sb.AppendLine($"  rhythm: strokes {counts} | hind kicking together {together.ToString("P0", ci)} of frames, L-R phase {PairOffset(LimbId.HL, LimbId.HR)}, " +
+                          $"fore L-R {PairOffset(LimbId.FL, LimbId.FR)} | all limbs resting {idle.ToString("P0", ci)} of frames");
         }
 
         private void SpeedMetrics(StringBuilder sb, List<int> idx, float t0)
