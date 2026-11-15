@@ -7,8 +7,9 @@ namespace OtterLocomotion.EditorTools
 {
     /// <summary>
     /// Enters Play, drives the active otter with a scripted input (OtterInputPlayback) while LocomotionTelemetry
-    /// records, writes Logs/Locomotion_&lt;label&gt;_summary.txt + CSV, then leaves Play. Adds an OtterLocomotionBrain
-    /// at runtime if the otter has none, so the demand layer is recorded too. The scene is never modified.
+    /// records, writes Logs/Locomotion_&lt;label&gt;_summary.txt + CSV, then leaves Play. The otter gets a fresh
+    /// OtterLocomotionBrain for the run (code defaults, replacing the scene's for this Play only), so runs compare.
+    /// The scene is never modified.
     /// </summary>
     [InitializeOnLoad]
     static class LocomotionPlaybackRunner
@@ -32,34 +33,7 @@ namespace OtterLocomotion.EditorTools
 
         [MenuItem("Tools/Otter Locomotion/Run Baseline Playback", true)]
         [MenuItem("Tools/Otter Locomotion/Run Posture Playback", true)]
-        [MenuItem("Tools/Otter Locomotion/Add Locomotion Brain To Otter", true)]
         static bool CanRun() => !EditorApplication.isPlayingOrWillChangePlaymode;
-
-        [MenuItem("Tools/Otter Locomotion/Debug/Report Brain Settings")]
-        static void ReportBrain()
-        {
-            var brains = Object.FindObjectsByType<OtterLocomotionBrain>(FindObjectsSortMode.None);
-            var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
-            var lines = new System.Collections.Generic.List<string> { $"scene {scene.name} dirty={scene.isDirty} playing={EditorApplication.isPlaying} brains={brains.Length}" };
-            foreach (var b in brains)
-                lines.Add($"{b.name}: swayPriority={b.allocatorSettings.swayPriority} foreThrust(max={b.actuatorSettings.foreThrust.maxAccel}, cost={b.actuatorSettings.foreThrust.cost}) " +
-                          $"yawDampingTime={b.yawDampingTime} headLengthRatio={b.headLengthRatio}");
-            System.IO.File.WriteAllLines(System.IO.Path.Combine("Logs", "LocomotionBrainReport.txt"), lines);
-        }
-
-        /// <summary>Puts the (compute-only) brain on the otter so its gizmos show during manual Play. Undoable; not saved.</summary>
-        [MenuItem("Tools/Otter Locomotion/Add Locomotion Brain To Otter")]
-        static void AddBrain()
-        {
-            var movement = Object.FindObjectsByType<MovementControllerRB>(FindObjectsSortMode.None).FirstOrDefault(m => m.isActiveAndEnabled);
-            if (movement == null)
-            {
-                Debug.LogWarning("[LocomotionPlaybackRunner] No active MovementControllerRB in the scene.");
-                return;
-            }
-            if (movement.GetComponent<OtterLocomotionBrain>() == null) Undo.AddComponent<OtterLocomotionBrain>(movement.gameObject);
-            Selection.activeGameObject = movement.gameObject;
-        }
 
         public static void Run(string label, string script)
         {

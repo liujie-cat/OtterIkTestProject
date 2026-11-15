@@ -119,7 +119,7 @@ namespace OtterIK.EditorTools
         static T[] FindAll<T>() where T : UnityEngine.Object =>
             UnityEngine.Object.FindObjectsByType<T>(FindObjectsInactive.Include, FindObjectsSortMode.None);
 
-        static GameObject FindCatInstance()
+        internal static GameObject FindCatInstance()
         {
             foreach (var t in FindAll<Transform>())
             {
@@ -133,7 +133,7 @@ namespace OtterIK.EditorTools
             return null;
         }
 
-        static GameObject FindOtterInstance()
+        internal static GameObject FindOtterInstance()
         {
             foreach (var t in FindAll<Transform>())
             {
@@ -233,7 +233,9 @@ namespace OtterIK.EditorTools
             public float catLength;
         }
 
-        static string Transplant(GameObject cat, GameObject otterAsset, bool alignSpine, bool fitTargets)
+        internal static GameObject LoadOtterModel() => AssetDatabase.LoadAssetAtPath<GameObject>(OtterModelPath);
+
+        internal static string Transplant(GameObject cat, GameObject otterAsset, bool alignSpine, bool fitTargets)
         {
             var log = new StringBuilder();
             var catRoot = cat.transform;
@@ -460,12 +462,22 @@ namespace OtterIK.EditorTools
             return log.ToString();
         }
 
+        const float RestTolerance = 0.001f;
+
+        /// <summary>Chains whose IK target is off the end joint, i.e. what Refit would move.</summary>
+        internal static List<string> ChainsOffRest(GameObject otter) =>
+            otter.GetComponentsInChildren<AdvancedTwoBoneIK>(true)
+                .Where(ik => ik.root?.bone && ik.mid?.bone && ik.end?.bone && ik.target)
+                .Select(ik => (ik.name, off: Vector3.Distance(ik.target.position, ik.end.bone.position)))
+                .Where(c => c.off >= RestTolerance)
+                .Select(c => $"{c.name} {c.off * 100f:F1} cm")
+                .ToList();
+
         // After the otter model's rest pose changes (re-rig + reimport), chains whose IK target no longer sits on
         // the end joint get their target, stroke rest point and pole moved back onto the new rest pose; chains
         // still at rest are left alone so their pole tuning survives. One Undo step; the scene is not saved.
-        static string Refit(GameObject otter)
+        internal static string Refit(GameObject otter)
         {
-            const float AtRest = 0.001f;
             var log = new StringBuilder($"Refit IK of '{otter.name}' to its rest pose\n");
             Undo.IncrementCurrentGroup();
             int group = Undo.GetCurrentGroup();
@@ -484,7 +496,7 @@ namespace OtterIK.EditorTools
             {
                 var j = new[] { ik.root.bone, ik.mid.bone, ik.end.bone };
                 float off = Vector3.Distance(ik.target.position, j[2].position);
-                if (off < AtRest) { log.AppendLine($"{ik.name}: target on {j[2].name}, kept"); continue; }
+                if (off < RestTolerance) { log.AppendLine($"{ik.name}: target on {j[2].name}, kept"); continue; }
                 refit.Add(ik);
                 log.AppendLine($"{ik.name}: target {off * 100f:F1} cm off {j[2].name}");
                 Move(ik.target, j[2].position, $"target {ik.target.name}");
