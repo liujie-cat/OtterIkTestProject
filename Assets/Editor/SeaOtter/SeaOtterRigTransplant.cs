@@ -54,6 +54,17 @@ namespace OtterIK.EditorTools
         [MenuItem("Tools/Sea Otter/Transplant With Defaults", true)]
         static bool TransplantMenuValid() => !EditorApplication.isPlayingOrWillChangePlaymode;
 
+        [MenuItem("Tools/Sea Otter/Refit IK To Rest Pose")]
+        static void RefitMenu()
+        {
+            var otter = FindOtterInstance();
+            if (otter == null) { Debug.LogWarning("[SeaOtterRig] No active sea otter instance found in the open scene."); return; }
+            WriteLog("SeaOtterRig_Refit.txt", Refit(otter));
+        }
+
+        [MenuItem("Tools/Sea Otter/Refit IK To Rest Pose", true)]
+        static bool RefitMenuValid() => !EditorApplication.isPlayingOrWillChangePlaymode;
+
         [MenuItem("Tools/Sea Otter/Report Cat Rig")]
         static void ReportCatMenu()
         {
@@ -118,6 +129,19 @@ namespace OtterIK.EditorTools
                 var src = PrefabUtility.GetCorrespondingObjectFromOriginalSource(root);
                 if (src != null && AssetDatabase.GetAssetPath(src) == OtterModelPath) continue;
                 return root;
+            }
+            return null;
+        }
+
+        static GameObject FindOtterInstance()
+        {
+            foreach (var t in FindAll<Transform>())
+            {
+                if (t.name != HipBone) continue;
+                var root = PrefabUtility.GetOutermostPrefabInstanceRoot(t.gameObject);
+                if (root == null || !root.activeInHierarchy) continue;
+                var src = PrefabUtility.GetCorrespondingObjectFromOriginalSource(root);
+                if (src != null && AssetDatabase.GetAssetPath(src) == OtterModelPath) return root;
             }
             return null;
         }
@@ -433,6 +457,56 @@ namespace OtterIK.EditorTools
 
             log.AppendLine();
             log.Append(Report(otter));
+            return log.ToString();
+        }
+
+        // After the otter model's rest pose changes (re-rig + reimport), chains whose IK target no longer sits on
+        // the end joint get their target, stroke rest point and pole moved back onto the new rest pose; chains
+        // still at rest are left alone so their pole tuning survives. One Undo step; the scene is not saved.
+        static string Refit(GameObject otter)
+        {
+            const float AtRest = 0.001f;
+            var log = new StringBuilder($"Refit IK of '{otter.name}' to its rest pose\n");
+            Undo.IncrementCurrentGroup();
+            int group = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName("Refit sea otter IK to rest pose");
+            void Move(Transform t, Vector3 position, string what)
+            {
+                log.AppendLine($"  {what,-34} moved {Vector3.Distance(t.position, position) * 100f:F1} cm");
+                Undo.RecordObject(t, "Refit rig object");
+                t.position = position;
+            }
+
+            var iks = otter.GetComponentsInChildren<AdvancedTwoBoneIK>(true)
+                .Where(ik => ik.root?.bone && ik.mid?.bone && ik.end?.bone && ik.target).ToList();
+            var refit = new HashSet<AdvancedTwoBoneIK>();
+            foreach (var ik in iks)
+            {
+                var j = new[] { ik.root.bone, ik.mid.bone, ik.end.bone };
+                float off = Vector3.Distance(ik.target.position, j[2].position);
+                if (off < AtRest) { log.AppendLine($"{ik.name}: target on {j[2].name}, kept"); continue; }
+                refit.Add(ik);
+                log.AppendLine($"{ik.name}: target {off * 100f:F1} cm off {j[2].name}");
+                Move(ik.target, j[2].position, $"target {ik.target.name}");
+                if (ik.pole && TryBendFrame(j, out var frame))
+                {
+                    float length = Vector3.Distance(j[0].position, j[1].position) + Vector3.Distance(j[1].position, j[2].position);
+                    float dist = Mathf.Max(Vector3.Distance(ik.pole.position, j[1].position), 0.25f * length);
+                    Move(ik.pole, j[1].position + frame * Vector3.up * dist, $"pole {ik.pole.name} (bend plane, {dist * 100f:F1} cm)");
+                }
+            }
+            foreach (var ctl in otter.GetComponentsInChildren<IKStrokeController>(true))
+            {
+                var tr = ctl.trajectorySource;
+                if (tr == null) continue;
+                foreach (var (rest, target) in new[] { (tr.leftRestPoint, ctl.leftLimbIkTarget), (tr.rightRestPoint, ctl.rightLimbIkTarget) })
+                {
+                    var ik = iks.FirstOrDefault(k => k.target == target);
+                    if (rest && ik && refit.Contains(ik))
+                        Move(rest, ik.end.bone.position, $"stroke rest point {rest.name}");
+                }
+            }
+            Undo.CollapseUndoOperations(group);
             return log.ToString();
         }
 
