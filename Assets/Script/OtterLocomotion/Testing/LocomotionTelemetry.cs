@@ -1,0 +1,284 @@
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Text;
+using UnityEngine;
+
+namespace OtterLocomotion.Testing
+{
+    /// <summary>
+    /// Records an OtterInputPlayback run every frame (after IK): intent, body heading/speed, head and chest response,
+    /// and each limb's IK target offset from its rest. WriteFiles() saves a CSV and a per-segment summary to Logs/:
+    /// when the head, limbs, spine and body first react, how fast and how cleanly turns complete, speed rise, stopping.
+    /// </summary>
+    [DefaultExecutionOrder(1000)]
+    [DisallowMultipleComponent]
+    public class LocomotionTelemetry : MonoBehaviour
+    {
+        public OtterInputPlayback playback;
+        public MovementControllerRB movement;
+        public string label = "baseline";
+
+        [Header("Reaction thresholds")]
+        public float bodyYawThresholdDeg = 2f;
+        public float headYawThresholdDeg = 3f;
+        public float spineBendThresholdDeg = 2f;
+        public float limbThresholdCm = 1f;
+        public float turnMinDeg = 15f;
+        public float settleToleranceDeg = 5f;
+        public float stopSpeed = 0.1f;
+
+        private struct Limb
+        {
+            public string name;
+            public Transform target, space;
+            public Vector3 restLocal;
+        }
+
+        private struct Sample
+        {
+            public float t, dt, intentYaw, steerYaw, bodyYaw, yawRate, speedFwd, speedLat, targetSpeed, demand;
+            public float headYaw, chestBend, chestRoll;
+            public int seg;
+            public bool held, kick;
+            public MovementControllerRB.MoveZone zone;
+            public float[] limb;
+        }
+
+        private readonly List<Limb> limbs = new List<Limb>();
+        private readonly List<Sample> samples = new List<Sample>();
+        private Transform hip, chest, head;
+        private bool kickThisFrame;
+        private float prevYaw;
+        private bool hasPrevYaw;
+
+        private void Start()
+        {
+            if (movement == null) movement = FindObjectOfType<MovementControllerRB>();
+            if (playback == null) playback = FindObjectOfType<OtterInputPlayback>();
+            if (movement == null || playback == null)
+            {
+                Debug.LogWarning("[LocomotionTelemetry] Needs a MovementControllerRB and an OtterInputPlayback.", this);
+                enabled = false;
+                return;
+            }
+            foreach (var ik in FindObjectsOfType<AdvancedTwoBoneIK>().Where(k => k.isActiveAndEnabled && k.target && k.root?.bone))
+            {
+                string bone = ik.root.bone.name;
+                string name = (bone.Contains("dupli") ? "F" : "H") + (bone.EndsWith(".r") ? "R" : "L");
+                var space = Girdle(ik.root.bone);
+                limbs.Add(new Limb { name = name, target = ik.target, space = space, restLocal = space.InverseTransformPoint(ik.target.position) });
+            }
+            limbs.Sort((a, b) => string.CompareOrdinal(a.name, b.name));
+            var bones = movement.GetComponentsInChildren<Transform>().Where(t => t.gameObject.activeInHierarchy).ToList();
+            hip = bones.FirstOrDefault(t => t.name == "root.x");
+            chest = bones.FirstOrDefault(t => t.name == "spine_03.x");
+            head = bones.FirstOrDefault(t => t.name == "head.x");
+            movement.OnKickCycleStart += OnKick;
+        }
+
+        private void OnDestroy()
+        {
+            if (movement != null) movement.OnKickCycleStart -= OnKick;
+        }
+
+        private void OnKick(MovementControllerRB.KickCycleEvent e) => kickThisFrame = true;
+
+        private void LateUpdate()
+        {
+            if (playback == null || playback.SegmentIndex < 0 || playback.Finished) return;
+            var body = movement.transform;
+            float dt = Mathf.Max(Time.deltaTime, 1e-5f);
+            float yaw = body.eulerAngles.y;
+            if (hasPrevYaw) yaw = prevYaw + Mathf.DeltaAngle(prevYaw, yaw);
+            float yawRate = hasPrevYaw ? (yaw - prevYaw) / dt : 0f;
+            prevYaw = yaw;
+            hasPrevYaw = true;
+
+            Vector3 fwd = Flat(body.forward), right = Vector3.Cross(Vector3.up, fwd);
+            Vector3 v = movement.GetVelocity();
+            var s = new Sample
+            {
+                t = Time.time, dt = dt, seg = playback.SegmentIndex, held = playback.Held, zone = movement.GetZone(),
+                intentYaw = Yaw(movement.GetWorldDir()), steerYaw = Yaw(movement.GetSteerDir()),
+                bodyYaw = yaw, yawRate = yawRate,
+                speedFwd = Vector3.Dot(v, fwd), speedLat = Vector3.Dot(v, right),
+                targetSpeed = movement.GetTargetSpeed(), demand = movement.GetDemand01(), kick = kickThisFrame,
+                // bones point at their child along local +Y, so .up is the head/chest/hip direction
+                headYaw = head ? Vector3.SignedAngle(fwd, Flat(head.up), Vector3.up) : 0f,
+                chestBend = hip && chest ? Vector3.SignedAngle(Flat(hip.up), Flat(chest.up), Vector3.up) : 0f,
+                chestRoll = chest ? ChestRoll(body) : 0f,
+                limb = limbs.Select(l => l.space.TransformVector(l.space.InverseTransformPoint(l.target.position) - l.restLocal).magnitude * 100f).ToArray(),
+            };
+            kickThisFrame = false;
+            samples.Add(s);
+        }
+
+        // Roll of the chest about its own axis, 0 = back up, ±180 = belly up. The forelimbs hang on the chest's +Z.
+        private float ChestRoll(Transform body)
+        {
+            Vector3 axis = chest.up;
+            Vector3 dorsal = Vector3.ProjectOnPlane(-chest.forward, axis);
+            Vector3 up = Vector3.ProjectOnPlane(body.up, axis);
+            return Vector3.SignedAngle(up, dorsal, axis);
+        }
+
+        private static Transform Girdle(Transform limbRoot)
+        {
+            for (var p = limbRoot.parent; p != null; p = p.parent)
+                if (p.name == "spine_03.x" || p.name == "root.x") return p;
+            return limbRoot.parent;
+        }
+
+        private static Vector3 Flat(Vector3 v)
+        {
+            v.y = 0f;
+            return v.sqrMagnitude > 1e-8f ? v.normalized : Vector3.forward;
+        }
+
+        private static float Yaw(Vector3 dir) => Mathf.Atan2(dir.x, dir.z) * Mathf.Rad2Deg;
+
+        // ------------------------------------------------------------------ output
+
+        public string WriteFiles()
+        {
+            string dir = Path.GetFullPath(Path.Combine(Application.dataPath, "..", "Logs"));
+            Directory.CreateDirectory(dir);
+            string stamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss");
+            string csvPath = Path.Combine(dir, $"Locomotion_{label}_{stamp}.csv");
+            File.WriteAllText(csvPath, Csv(), new UTF8Encoding(false));
+            string summary = Summary() + $"\ncsv: {csvPath}\n";
+            File.WriteAllText(Path.Combine(dir, $"Locomotion_{label}_summary.txt"), summary, new UTF8Encoding(false));
+            Debug.Log($"[LocomotionTelemetry] {label}\n{summary}");
+            return summary;
+        }
+
+        private string Csv()
+        {
+            var ci = CultureInfo.InvariantCulture;
+            var sb = new StringBuilder("t,seg,held,zone,intentYaw,steerYaw,bodyYaw,yawRate,speedFwd,speedLat,targetSpeed,kick,demand,headYaw,chestBend,chestRoll");
+            foreach (var l in limbs) sb.Append(',').Append(l.name).Append("_cm");
+            sb.AppendLine();
+            float t0 = samples.Count > 0 ? samples[0].t : 0f;
+            foreach (var s in samples)
+            {
+                sb.Append(string.Format(ci, "{0:F4},{1},{2},{3},{4:F2},{5:F2},{6:F2},{7:F1},{8:F3},{9:F3},{10:F2},{11},{12:F2},{13:F2},{14:F2},{15:F2}",
+                    s.t - t0, s.seg, s.held ? 1 : 0, s.zone, s.intentYaw, s.steerYaw, s.bodyYaw, s.yawRate, s.speedFwd, s.speedLat,
+                    s.targetSpeed, s.kick ? 1 : 0, s.demand, s.headYaw, s.chestBend, s.chestRoll));
+                foreach (var x in s.limb) sb.Append(',').Append(x.ToString("F2", ci));
+                sb.AppendLine();
+            }
+            return sb.ToString();
+        }
+
+        private string Summary()
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"# Locomotion playback '{label}', {samples.Count} frames, limbs: {string.Join(" ", limbs.Select(l => l.name))}");
+            sb.AppendLine("# times in seconds from segment start; 'lead' = body reaction time minus limb reaction time (+ = limbs first)");
+            for (int seg = 0; seg < playback.segments.Count; seg++)
+            {
+                var idx = Enumerable.Range(0, samples.Count).Where(i => samples[i].seg == seg).ToList();
+                if (idx.Count < 2) continue;
+                var spec = playback.segments[seg];
+                var first = samples[idx[0]];
+                float t0 = first.t;
+                sb.AppendLine($"\n[{seg}] {spec.name}  ({spec.zone}, {spec.duration:F1}s)");
+                int kicks = idx.Count(i => samples[i].kick);
+                if (kicks > 0) sb.AppendLine($"  kicks {kicks}");
+
+                if (spec.zone != OtterInputPlayback.Zone.Release)
+                {
+                    float delta = Mathf.DeltaAngle(first.bodyYaw, playback.TargetYaw(seg));
+                    if (Mathf.Abs(delta) >= turnMinDeg) TurnMetrics(sb, idx, t0, first, delta);
+                    else if (first.targetSpeed > 0f || samples[idx[idx.Count - 1]].targetSpeed > 0f) SpeedMetrics(sb, idx, t0);
+                }
+                else if (Mathf.Abs(first.speedFwd) > stopSpeed)
+                {
+                    StopMetrics(sb, idx, t0);
+                }
+            }
+            return sb.ToString();
+        }
+
+        // Left-minus-right IK target offset of a limb pair; symmetric cruise strokes cancel, steering strokes don't.
+        private float Asymmetry(Sample s, string pair)
+        {
+            int l = limbs.FindIndex(x => x.name == pair + "L"), r = limbs.FindIndex(x => x.name == pair + "R");
+            return l >= 0 && r >= 0 ? s.limb[l] - s.limb[r] : 0f;
+        }
+
+        private void TurnMetrics(StringBuilder sb, List<int> idx, float t0, Sample first, float delta)
+        {
+            // a near-reversal can legitimately go either way; measure against the way the body actually went
+            float net = samples[idx[idx.Count - 1]].bodyYaw - first.bodyYaw;
+            if (Mathf.Abs(delta) > 170f && Mathf.Abs(net) > 90f && Mathf.Sign(net) != Mathf.Sign(delta))
+                delta -= 360f * Mathf.Sign(delta);
+            float target = first.bodyYaw + delta;
+            float? tBody = null, tHead = null, tSpine = null, tFront = null, tHind = null, t50 = null, t90 = null;
+            float maxProgress = 0f, peakRate = 0f, lastOutside = 0f;
+            float front0 = Asymmetry(first, "F"), hind0 = Asymmetry(first, "H");
+            foreach (int i in idx)
+            {
+                var s = samples[i];
+                float t = s.t - t0;
+                float turned = s.bodyYaw - first.bodyYaw;
+                float progress = turned / delta;
+                if (tBody == null && Mathf.Abs(turned) > bodyYawThresholdDeg) tBody = t;
+                if (tHead == null && Mathf.Abs(Mathf.DeltaAngle(first.headYaw, s.headYaw)) > headYawThresholdDeg) tHead = t;
+                if (tSpine == null && Mathf.Abs(Mathf.DeltaAngle(first.chestBend, s.chestBend)) > spineBendThresholdDeg) tSpine = t;
+                if (tFront == null && Mathf.Abs(Asymmetry(s, "F") - front0) > limbThresholdCm) tFront = t;
+                if (tHind == null && Mathf.Abs(Asymmetry(s, "H") - hind0) > limbThresholdCm) tHind = t;
+                if (t50 == null && progress >= 0.5f) t50 = t;
+                if (t90 == null && progress >= 0.9f) t90 = t;
+                maxProgress = Mathf.Max(maxProgress, progress);
+                peakRate = Mathf.Max(peakRate, Mathf.Abs(s.yawRate));
+                if (Mathf.Abs(target - s.bodyYaw) > settleToleranceDeg) lastOutside = t;
+            }
+            float end = samples[idx[idx.Count - 1]].t - t0;
+            string F(float? x) => x.HasValue ? x.Value.ToString("F2", CultureInfo.InvariantCulture) : "never";
+            float? tLimb = tFront.HasValue && tHind.HasValue ? Mathf.Min(tFront.Value, tHind.Value) : tFront ?? tHind;
+            string lead = tBody.HasValue && tLimb.HasValue ? (tBody.Value - tLimb.Value).ToString("+0.00;-0.00", CultureInfo.InvariantCulture) : "n/a";
+            sb.AppendLine($"  turn {delta:+0;-0} deg | first reaction: head {F(tHead)}  spine {F(tSpine)}  limb L/R asymmetry front {F(tFront)} hind {F(tHind)}  body {F(tBody)} | limb lead {lead}");
+            sb.AppendLine($"  progress: 50% at {F(t50)}  90% at {F(t90)}  overshoot {Mathf.Max(0f, maxProgress - 1f) * Mathf.Abs(delta):F1} deg  " +
+                          $"settled(±{settleToleranceDeg:F0}) {(lastOutside < end - 0.2f ? lastOutside.ToString("F2", CultureInfo.InvariantCulture) : "no")}  peak yaw rate {peakRate:F0} deg/s");
+        }
+
+        private void SpeedMetrics(StringBuilder sb, List<int> idx, float t0)
+        {
+            var ci = CultureInfo.InvariantCulture;
+            float target = samples[idx[idx.Count - 1]].targetSpeed;
+            bool fromRest = Mathf.Abs(samples[idx[0]].speedFwd) < stopSpeed;
+            float? t90 = null, tPush = null;
+            foreach (int i in idx)
+            {
+                if (t90 == null && samples[i].speedFwd >= 0.9f * target) t90 = samples[i].t - t0;
+                if (tPush == null && fromRest && samples[i].speedFwd > 0.3f) tPush = samples[i].t - t0;
+            }
+            float end = samples[idx[idx.Count - 1]].t;
+            var tail = idx.Where(i => samples[i].t >= end - 1f).Select(i => samples[i]).ToList();
+            float mean = tail.Average(s => s.speedFwd);
+            float minS = tail.Min(s => s.speedFwd), maxS = tail.Max(s => s.speedFwd);
+            var kickTimes = idx.Where(i => samples[i].kick).Select(i => samples[i].t).ToList();
+            string interval = kickTimes.Count > 1 ? ((kickTimes[kickTimes.Count - 1] - kickTimes[0]) / (kickTimes.Count - 1)).ToString("F2", ci) + " s" : "n/a";
+            sb.AppendLine($"  speed: target {target:F2} m/s, 90% at {(t90.HasValue ? t90.Value.ToString("F2", ci) : "never")} s" +
+                          (fromRest ? $", first push (>0.3 m/s) at {(tPush.HasValue ? tPush.Value.ToString("F2", ci) : "never")} s" : "") +
+                          $", last 1 s mean {mean:F2} (min {minS:F2}, max {maxS:F2}) m/s, kick interval {interval}");
+        }
+
+        private void StopMetrics(StringBuilder sb, List<int> idx, float t0)
+        {
+            float dist = 0f;
+            float? tStop = null;
+            foreach (int i in idx)
+            {
+                var s = samples[i];
+                if (tStop != null) break;
+                dist += Mathf.Abs(s.speedFwd) * s.dt;
+                if (Mathf.Abs(s.speedFwd) < stopSpeed) tStop = s.t - t0;
+            }
+            sb.AppendLine($"  stop: from {samples[idx[0]].speedFwd:F2} m/s, below {stopSpeed:F2} at {(tStop.HasValue ? tStop.Value.ToString("F2", CultureInfo.InvariantCulture) : "never")} s, coasted {dist:F2} m");
+        }
+    }
+}

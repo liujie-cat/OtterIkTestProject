@@ -142,7 +142,20 @@ public class MovementControllerRB : MonoBehaviour
     [Header("Debug")]
     [SerializeField] private bool drawGizmos = true;
 
+    /// <summary>Stands in for the mouse (scripted playback, tests): button held + screen position in pixels.</summary>
+    public interface IPointerSource
+    {
+        bool Held { get; }
+        Vector2 ScreenPosition { get; }
+    }
+
+    /// <summary>When set, input comes from this pointer instead of the mouse; everything downstream is unchanged.</summary>
+    public IPointerSource PointerOverride { get; set; }
+    public Camera InputCamera => inputCamera;
+    public DualRingUIControllerRB RingUI => ui;
+
     // ---------------- Runtime input ----------------
+    private bool overrideHeld;
     private bool isDragging;
     private Vector2 dirScreenSm;
     private float radiusPxSm;
@@ -233,14 +246,31 @@ public class MovementControllerRB : MonoBehaviour
 
     private void HandleInput()
     {
-        if (Input.GetMouseButtonDown(0))
+        bool down, up;
+        Vector3 pointer;
+        if (PointerOverride != null)
+        {
+            bool held = PointerOverride.Held;
+            down = held && !overrideHeld;
+            up = !held && overrideHeld;
+            overrideHeld = held;
+            pointer = PointerOverride.ScreenPosition;
+        }
+        else
+        {
+            down = Input.GetMouseButtonDown(0);
+            up = Input.GetMouseButtonUp(0);
+            pointer = Input.mousePosition;
+        }
+
+        if (down)
         {
             isDragging = true;
-            Vector2 rawDir = GetDirFromCenter(Input.mousePosition, out float rawR);
+            Vector2 rawDir = GetDirFromCenter(pointer, out float rawR);
             dirScreenSm = rawDir;
             radiusPxSm = rawR;
         }
-        else if (Input.GetMouseButtonUp(0))
+        else if (up)
         {
             bool hadDrag = isDragging;
             isDragging = false;
@@ -256,7 +286,7 @@ public class MovementControllerRB : MonoBehaviour
 
         if (!isDragging) return;
 
-        Vector2 newDir = GetDirFromCenter(Input.mousePosition, out float newR);
+        Vector2 newDir = GetDirFromCenter(pointer, out float newR);
 
         float dt = Time.deltaTime;
         float k = inputSmoothing <= 0f ? 1f : (1f - Mathf.Exp(-inputSmoothing * dt));
