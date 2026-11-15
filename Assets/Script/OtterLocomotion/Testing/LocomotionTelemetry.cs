@@ -56,7 +56,7 @@ namespace OtterLocomotion.Testing
         private struct Sample
         {
             public float t, dt, intentYaw, steerYaw, bodyYaw, yawRate, speedFwd, speedLat, targetSpeed, demand;
-            public float headYaw, chestBend, chestRoll;
+            public float headYaw, chestBend, chestRoll, reach;
             public int seg;
             public bool held, kick;
             public MovementControllerRB.MoveZone zone;
@@ -68,6 +68,10 @@ namespace OtterLocomotion.Testing
             public Vector2[] limbForce;
             public float[] limbYaw;
             public int saturated;
+            public bool rhythm;
+            public float[] phase, drive;
+            public int[] strokes;
+            public int powerMask;
         }
 
         private struct PostureEvent
@@ -100,7 +104,7 @@ namespace OtterLocomotion.Testing
             foreach (var ik in FindObjectsOfType<AdvancedTwoBoneIK>().Where(k => k.isActiveAndEnabled && k.target))
             {
                 if (!OtterRig.TryClassify(ik, out var limb)) continue;
-                var space = Girdle(ik.root.bone);
+                var space = OtterRig.Girdle(ik.root.bone);
                 limbs.Add(new Limb { name = limb.ToString(), target = ik.target, space = space, restLocal = space.InverseTransformPoint(ik.target.position) });
             }
             limbs.Sort((a, b) => string.CompareOrdinal(a.name, b.name));
@@ -145,7 +149,7 @@ namespace OtterLocomotion.Testing
                 intentYaw = Yaw(movement.GetWorldDir()), steerYaw = Yaw(movement.GetSteerDir()),
                 bodyYaw = yaw, yawRate = yawRate,
                 speedFwd = Vector3.Dot(v, fwd), speedLat = Vector3.Dot(v, right),
-                targetSpeed = movement.GetTargetSpeed(), demand = movement.GetDemand01(), kick = kickThisFrame,
+                targetSpeed = movement.GetTargetSpeed(), demand = movement.GetDemand01(), kick = kickThisFrame, reach = movement.GetReach01(),
                 // bones point at their child along local +Y, so .up is the head/chest/hip direction
                 headYaw = head ? Vector3.SignedAngle(fwd, Flat(head.up), Vector3.up) : 0f,
                 chestBend = hip && chest ? Vector3.SignedAngle(Flat(hip.up), Flat(chest.up), Vector3.up) : 0f,
@@ -173,6 +177,13 @@ namespace OtterLocomotion.Testing
                     s.limbForce = a.limbs.Select(l => l.force).ToArray();
                     s.limbYaw = a.limbs.Select(l => l.yawMoment).ToArray();
                     s.saturated = a.SaturatedStrokes;
+                    var r = brain.Rhythm.limbs;
+                    s.rhythm = true;
+                    s.phase = r.Select(x => x.active ? x.phase : -1f).ToArray();
+                    s.drive = r.Select(x => x.drive).ToArray();
+                    s.strokes = r.Select(x => x.strokes).ToArray();
+                    for (int i = 0; i < r.Length; i++)
+                        if (r[i].InPower) s.powerMask |= 1 << i;
                 }
             }
             kickThisFrame = false;
@@ -186,13 +197,6 @@ namespace OtterLocomotion.Testing
             Vector3 dorsal = Vector3.ProjectOnPlane(-chest.forward, axis);
             Vector3 up = Vector3.ProjectOnPlane(body.up, axis);
             return Vector3.SignedAngle(up, dorsal, axis);
-        }
-
-        private static Transform Girdle(Transform limbRoot)
-        {
-            for (var p = limbRoot.parent; p != null; p = p.parent)
-                if (p.name == "spine_03.x" || p.name == "root.x") return p;
-            return limbRoot.parent;
         }
 
         private static Vector3 Flat(Vector3 v)
@@ -221,7 +225,7 @@ namespace OtterLocomotion.Testing
         private string Csv()
         {
             var ci = CultureInfo.InvariantCulture;
-            var sb = new StringBuilder("t,seg,held,zone,intentYaw,steerYaw,bodyYaw,yawRate,speedFwd,speedLat,targetSpeed,kick,demand,headYaw,chestBend,chestRoll");
+            var sb = new StringBuilder("t,seg,held,zone,intentYaw,steerYaw,bodyYaw,yawRate,speedFwd,speedLat,targetSpeed,kick,demand,headYaw,chestBend,chestRoll,reach");
             foreach (var l in limbs) sb.Append(',').Append(l.name).Append("_cm");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedCap,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
@@ -229,6 +233,8 @@ namespace OtterLocomotion.Testing
             {
                 sb.Append(",aSurgeN,aSwayN,aYawNm,saturated");
                 for (int i = 0; i < OtterRig.LimbCount; i++) sb.Append($",{(LimbId)i}_fx,{(LimbId)i}_fy,{(LimbId)i}_mz");
+                // phase -1 = resting; pw 1 = in the power phase
+                for (int i = 0; i < OtterRig.LimbCount; i++) sb.Append($",{(LimbId)i}_ph,{(LimbId)i}_dr,{(LimbId)i}_pw");
             }
             sb.AppendLine();
             float t0 = samples.Count > 0 ? samples[0].t : 0f;
@@ -237,6 +243,7 @@ namespace OtterLocomotion.Testing
                 sb.Append(string.Format(ci, "{0:F4},{1},{2},{3},{4:F2},{5:F2},{6:F2},{7:F1},{8:F3},{9:F3},{10:F2},{11},{12:F2},{13:F2},{14:F2},{15:F2}",
                     s.t - t0, s.seg, s.held ? 1 : 0, s.zone, s.intentYaw, s.steerYaw, s.bodyYaw, s.yawRate, s.speedFwd, s.speedLat,
                     s.targetSpeed, s.kick ? 1 : 0, s.demand, s.headYaw, s.chestBend, s.chestRoll));
+                sb.Append(',').Append(s.reach.ToString("F2", ci));
                 foreach (var x in s.limb) sb.Append(',').Append(x.ToString("F2", ci));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
@@ -249,6 +256,11 @@ namespace OtterLocomotion.Testing
                         Vector2 f = s.allocated ? s.limbForce[i] : Vector2.zero;
                         float mz = s.allocated ? s.limbYaw[i] : 0f;
                         sb.Append(string.Format(ci, ",{0:F2},{1:F2},{2:F3}", f.x, f.y, mz));
+                    }
+                    for (int i = 0; i < OtterRig.LimbCount; i++)
+                    {
+                        if (s.rhythm) sb.Append(string.Format(ci, ",{0:F3},{1:F2},{2}", s.phase[i], s.drive[i], (s.powerMask >> i) & 1));
+                        else sb.Append(",-1,0,0");
                     }
                 }
                 sb.AppendLine();
@@ -268,7 +280,8 @@ namespace OtterLocomotion.Testing
             checkCount = passCount = 0;
             var sb = new StringBuilder();
             sb.AppendLine($"# Locomotion playback '{label}', {samples.Count} frames, limbs: {string.Join(" ", limbs.Select(l => l.name))}");
-            sb.AppendLine("# times in seconds from segment start; 'lead' = body reaction time minus limb reaction time (+ = limbs first)");
+            sb.AppendLine("# times in seconds from segment start; 'lead' = body reaction time minus limb reaction time (+ = limbs first);" +
+                          " with the stroke rhythm the limb time is the first turning power stroke");
             if (brain != null && brain.HasLimbGeometry)
             {
                 var p = brain.Parameters;
@@ -306,6 +319,7 @@ namespace OtterLocomotion.Testing
                     StopMetrics(sb, idx, t0);
                 }
                 if (brain != null) DemandMetrics(sb, idx, seg, t0);
+                RhythmMetrics(sb, idx);
             }
             sb.AppendLine($"\nfeel targets met: {passCount}/{checkCount}");
             return sb.ToString();
@@ -389,11 +403,14 @@ namespace OtterLocomotion.Testing
             }
             float end = samples[idx[idx.Count - 1]].t - t0;
             string F(float? x) => x.HasValue ? x.Value.ToString("F2", CultureInfo.InvariantCulture) : "never";
+            var (tStroke, strokeLimb) = TurningStroke(idx, t0, delta);
             float? tLimb = tFront.HasValue && tHind.HasValue ? Mathf.Min(tFront.Value, tHind.Value) : tFront ?? tHind;
+            if (first.rhythm) tLimb = tStroke;
             float? leadValue = tBody.HasValue && tLimb.HasValue ? tBody.Value - tLimb.Value : (float?)null;
             string lead = leadValue.HasValue ? leadValue.Value.ToString("+0.00;-0.00", CultureInfo.InvariantCulture) : "n/a";
             float overshoot = Mathf.Max(0f, maxProgress - 1f) * Mathf.Abs(delta);
-            sb.AppendLine($"  turn {delta:+0;-0} deg | first reaction: head {F(tHead)}  spine {F(tSpine)}  limb L/R asymmetry front {F(tFront)} hind {F(tHind)}  body {F(tBody)} | limb lead {lead}");
+            string stroke = first.rhythm ? $"  turning stroke {F(tStroke)}{(strokeLimb.HasValue ? $" ({strokeLimb})" : "")}" : "";
+            sb.AppendLine($"  turn {delta:+0;-0} deg | first reaction: head {F(tHead)}  spine {F(tSpine)}  limb L/R asymmetry front {F(tFront)} hind {F(tHind)}{stroke}  body {F(tBody)} | limb lead {lead}");
             sb.AppendLine($"  progress: 50% at {F(t50)}  90% at {F(t90)}  overshoot {overshoot:F1} deg  " +
                           $"settled(±{settleToleranceDeg:F0}) {(lastOutside < end - 0.2f ? lastOutside.ToString("F2", CultureInfo.InvariantCulture) : "no")}  peak yaw rate {peakRate:F0} deg/s");
             float budget = Mathf.Lerp(turn90Budget, turn170Budget, Mathf.InverseLerp(90f, 170f, Mathf.Abs(delta)));
@@ -402,6 +419,54 @@ namespace OtterLocomotion.Testing
                 Check($"limb lead >= +{limbLeadMin:F2}", leadValue.HasValue && leadValue.Value >= limbLeadMin),
                 Check($"90% <= {budget:F2}", t90.HasValue && t90.Value <= budget),
                 Check($"overshoot <= {overshootMaxDeg:F0}", overshoot <= overshootMaxDeg)));
+        }
+
+        // First power stroke begun in the segment whose allocated force yaws the body toward the target, by at least
+        // a tenth of the segment's peak yaw demand: the moment the limbs start doing the turn.
+        private (float?, LimbId?) TurningStroke(List<int> idx, float t0, float delta)
+        {
+            if (!samples[idx[0]].rhythm) return (null, null);
+            float peak = idx.Max(i => Mathf.Abs(samples[i].yawMoment));
+            if (peak < 1e-4f) return (null, null);
+            var before = idx[0] > 0 && samples[idx[0] - 1].rhythm ? samples[idx[0] - 1].strokes : new int[OtterRig.LimbCount];
+            foreach (int i in idx)
+            {
+                var s = samples[i];
+                if (!s.rhythm) continue;
+                for (int k = 0; k < OtterRig.LimbCount; k++)
+                    if (s.strokes[k] > before[k] && s.limbYaw[k] * Mathf.Sign(delta) > 0.1f * peak)
+                        return (s.t - t0, (LimbId)k);
+                before = s.strokes;
+            }
+            return (null, null);
+        }
+
+        // Stroke counts and how the pairs are phased: 0.5 = alternating, 0 = together.
+        private void RhythmMetrics(StringBuilder sb, List<int> idx)
+        {
+            var ci = CultureInfo.InvariantCulture;
+            var seq = idx.Select(i => samples[i]).Where(s => s.rhythm).ToList();
+            if (seq.Count == 0) return;
+            var before = idx[0] > 0 && samples[idx[0] - 1].rhythm ? samples[idx[0] - 1].strokes : new int[OtterRig.LimbCount];
+            var last = seq[seq.Count - 1];
+            string counts = string.Join(" ", Enumerable.Range(0, OtterRig.LimbCount).Select(k => $"{(LimbId)k} {last.strokes[k] - before[k]}"));
+            string PairOffset(LimbId left, LimbId right)
+            {
+                var both = seq.Where(s => s.phase[(int)left] >= 0f && s.phase[(int)right] >= 0f).ToList();
+                if (both.Count < 10) return "-";
+                float c = 0f, sn = 0f;
+                foreach (var s in both)
+                {
+                    float a = 2f * Mathf.PI * (s.phase[(int)left] - s.phase[(int)right]);
+                    c += Mathf.Cos(a);
+                    sn += Mathf.Sin(a);
+                }
+                float mean = Mathf.Repeat(Mathf.Atan2(sn, c) / (2f * Mathf.PI), 1f);
+                float spread = 1f - Mathf.Sqrt(c * c + sn * sn) / both.Count;
+                return $"{mean.ToString("F2", ci)} (spread {spread.ToString("F2", ci)}, {both.Count * 100 / seq.Count}% of frames)";
+            }
+            float idle = seq.Count(s => s.phase.All(p => p < 0f)) / (float)seq.Count;
+            sb.AppendLine($"  rhythm: strokes {counts} | hind L-R phase {PairOffset(LimbId.HL, LimbId.HR)}, fore L-R {PairOffset(LimbId.FL, LimbId.FR)} | all limbs resting {idle.ToString("P0", ci)} of frames");
         }
 
         private void SpeedMetrics(StringBuilder sb, List<int> idx, float t0)

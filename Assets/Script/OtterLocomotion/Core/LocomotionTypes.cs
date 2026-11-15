@@ -19,6 +19,8 @@ namespace OtterLocomotion
         public Vector3 heading;
         /// <summary>Requested forward speed before posture caps (m/s).</summary>
         public float requestedSpeed;
+        /// <summary>How far the player pushes: arrow length as a fraction of the outer ring (0..1), 0 at rest.</summary>
+        public float reach;
 
         public bool Steering => band != SpeedBand.Rest;
     }

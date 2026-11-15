@@ -1,9 +1,11 @@
 using System;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace OtterLocomotion
 {
-    public enum StrokeKind { Thrust, Brake, Scull }
+    /// <summary>Scull out = the paw sweeps away from the body's midline (pushing the body toward it); scull in = across it.</summary>
+    public enum StrokeKind { Thrust, Brake, ScullOut, ScullIn }
 
     /// <summary>Where a limb pushes from, measured on the rig in the prone body frame (x forward, y right, z up).</summary>
     public struct LimbGeometry
@@ -44,12 +46,17 @@ namespace OtterLocomotion
         [Header("Hind feet: main propulsion")]
         public StrokeCapacity hindThrust = new StrokeCapacity(4f, 1f, 1f, 0.7f);
         public StrokeCapacity hindBrake = new StrokeCapacity(2f, 1.5f, 1f, 0.6f);
-        public StrokeCapacity hindScull = new StrokeCapacity(1.5f, 2f, 1f, 0.8f);
+        [FormerlySerializedAs("hindScull")]
+        public StrokeCapacity hindScullOut = new StrokeCapacity(1.5f, 2f, 1f, 0.8f);
+        public StrokeCapacity hindScullIn = new StrokeCapacity(0.6f, 4f, 1f, 0.8f);
 
         [Header("Forepaws: steering and fine sculling, little thrust")]
         public StrokeCapacity foreThrust = new StrokeCapacity(0.5f, 12f, 1f, 0.2f);
         public StrokeCapacity foreBrake = new StrokeCapacity(1.5f, 1.5f, 1f, 0.4f);
-        public StrokeCapacity foreScull = new StrokeCapacity(2f, 0.5f, 1f, 0.6f);
+        [Tooltip("Sweeping out to the side is the strong scull; sweeping in across the chest is weak, so the paw on the outside of a turn sculls.")]
+        [FormerlySerializedAs("foreScull")]
+        public StrokeCapacity foreScullOut = new StrokeCapacity(2f, 0.5f, 1f, 0.6f);
+        public StrokeCapacity foreScullIn = new StrokeCapacity(0.8f, 1.5f, 1f, 0.6f);
 
         [Header("Where the paw works, as a fraction of the limb length from the shoulder / hip")]
         public float hindReach = 0.5f;
@@ -80,7 +87,7 @@ namespace OtterLocomotion
     /// </summary>
     public sealed class ActuatorModel
     {
-        public const int ColumnsPerLimb = 3;
+        public const int ColumnsPerLimb = 4;
 
         public readonly StrokeColumn[] columns = new StrokeColumn[OtterRig.LimbCount * ColumnsPerLimb];
         /// <summary>Stroke centre of each limb in the current (rolled) body frame, metres from the body origin.</summary>
@@ -105,13 +112,16 @@ namespace OtterLocomotion
                 // roll about the forward axis, + = right side down
                 p = new Vector3(p.x, p.y * cos + p.z * sin, -p.y * sin + p.z * cos);
                 points[i] = p + centerOfMass;
+                // the side the limb is on now: belly up, the left limbs are on the right
+                float side = Mathf.Abs(p.y) > 1e-4f ? Mathf.Sign(p.y) : OtterRig.Side(limb);
 
-                SetColumn(i, 0, limb, StrokeKind.Thrust, new Vector3(1f, 0f, -p.y), fore ? s.foreThrust : s.hindThrust, false);
-                SetColumn(i, 1, limb, StrokeKind.Brake, new Vector3(-1f, 0f, p.y), fore ? s.foreBrake : s.hindBrake, false);
-                SetColumn(i, 2, limb, StrokeKind.Scull, new Vector3(0f, 1f, p.x), fore ? s.foreScull : s.hindScull, true);
+                SetColumn(i, 0, limb, StrokeKind.Thrust, new Vector3(1f, 0f, -p.y), fore ? s.foreThrust : s.hindThrust);
+                SetColumn(i, 1, limb, StrokeKind.Brake, new Vector3(-1f, 0f, p.y), fore ? s.foreBrake : s.hindBrake);
+                SetColumn(i, 2, limb, StrokeKind.ScullOut, new Vector3(0f, -side, -side * p.x), fore ? s.foreScullOut : s.hindScullOut);
+                SetColumn(i, 3, limb, StrokeKind.ScullIn, new Vector3(0f, side, side * p.x), fore ? s.foreScullIn : s.hindScullIn);
             }
 
-            void SetColumn(int limbIndex, int k, LimbId limb, StrokeKind kind, Vector3 wrench, StrokeCapacity cap, bool signed)
+            void SetColumn(int limbIndex, int k, LimbId limb, StrokeKind kind, Vector3 wrench, StrokeCapacity cap)
             {
                 float e = present[limbIndex] ? Mathf.Lerp(cap.prone, cap.supine, supineFraction) * rollFactor : 0f;
                 float hi = cap.maxAccel * mass * e;
@@ -120,7 +130,7 @@ namespace OtterLocomotion
                     limb = limb,
                     kind = kind,
                     wrench = wrench,
-                    lo = signed ? -hi : 0f,
+                    lo = 0f,
                     hi = hi,
                     cost = cap.cost / Mathf.Max(0.02f, e),
                     effectiveness = e,

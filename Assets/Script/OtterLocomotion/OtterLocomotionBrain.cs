@@ -8,9 +8,10 @@ namespace OtterLocomotion
 {
     /// <summary>
     /// Runs the locomotion pipeline once per physics step, in causal order:
-    /// intent + measured state -> posture -> demand -> allocation (-> strokes -> forces, in later stages).
-    /// Intent comes from MovementControllerRB's ring input. Nothing here moves the body yet: it only computes and
-    /// draws what the body would need and which limb would supply it, so it can run alongside the existing controller.
+    /// intent + measured state -> posture -> demand -> allocation -> stroke rhythm (-> forces, in a later stage).
+    /// Intent comes from MovementControllerRB's ring input. Nothing here moves the body yet: it computes what the body
+    /// would need, which limb would supply it and each limb's stroke cycle (drawn by LimbStrokeAnimator), so it can
+    /// run alongside the existing controller.
     /// </summary>
     [DefaultExecutionOrder(150)]
     [DisallowMultipleComponent]
@@ -37,6 +38,7 @@ namespace OtterLocomotion
         [Header("Limbs")]
         public ActuatorSettings actuatorSettings = new ActuatorSettings();
         public AllocatorSettings allocatorSettings = new AllocatorSettings();
+        public RhythmSettings rhythmSettings = new RhythmSettings();
 
         [Header("Debug")]
         public bool drawGizmos = true;
@@ -53,6 +55,8 @@ namespace OtterLocomotion
         public BodyParameters Parameters { get; private set; }
         public ActuatorModel Actuators => actuators;
         public ControlAllocator Allocation => allocator;
+        /// <summary>Each limb's stroke cycle, stepped after the allocation every physics step.</summary>
+        public LimbRhythm Rhythm => rhythm;
         public bool HasLimbGeometry { get; private set; }
         /// <summary>Measured nose-to-rump length (m); 0 if the head or tail bone was not found.</summary>
         public float BodyLength { get; private set; }
@@ -64,6 +68,7 @@ namespace OtterLocomotion
         private readonly DemandLayer demandLayer = new DemandLayer();
         private readonly ActuatorModel actuators = new ActuatorModel();
         private readonly ControlAllocator allocator = new ControlAllocator(OtterRig.LimbCount * ActuatorModel.ColumnsPerLimb);
+        private readonly LimbRhythm rhythm = new LimbRhythm();
         private readonly LimbGeometry[] geometry = new LimbGeometry[OtterRig.LimbCount];
         private Vector3 centerOfMass;
         private bool toggleRequested;
@@ -92,6 +97,7 @@ namespace OtterLocomotion
             postureMachine.Reset(postureSettings);
             demandLayer.Reset(estimator.State);
             allocator.Reset();
+            rhythm.Reset();
         }
 
         // Body frame: x forward, y right, z up, metres from the rigidbody origin.
@@ -108,28 +114,28 @@ namespace OtterLocomotion
         {
             int found = 0;
             Vector3 sum = Vector3.zero;
-            foreach (var ik in FindObjectsByType<AdvancedTwoBoneIK>(FindObjectsSortMode.None))
+            var chains = OtterRig.FindLimbChains(transform);
+            for (int i = 0; i < OtterRig.LimbCount; i++)
             {
-                if (!ik.isActiveAndEnabled || ik.root?.bone == null || !ik.root.bone.IsChildOf(transform)) continue;
-                if (ik.mid == null || ik.mid.bone == null || ik.end == null || ik.end.bone == null) continue;
-                if (!OtterRig.TryClassify(ik, out var limb)) continue;
+                var ik = chains[i];
+                if (ik == null) continue;
                 Vector3 a = ik.root.bone.position, b = ik.mid.bone.position, c = ik.end.bone.position;
-                geometry[(int)limb] = new LimbGeometry
+                geometry[i] = new LimbGeometry
                 {
                     valid = true,
                     anchor = ToBody(a),
                     length = Vector3.Distance(a, b) + Vector3.Distance(b, c),
                 };
-                sum += geometry[(int)limb].anchor;
+                sum += geometry[i].anchor;
                 found++;
             }
             HasLimbGeometry = found > 0;
             centerOfMass = found > 0 ? new Vector3(sum.x / found, 0f, sum.z / found) : Vector3.zero;
             if (found == 0)
             {
-                var chains = FindObjectsByType<AdvancedTwoBoneIK>(FindObjectsSortMode.None)
+                var all = FindObjectsByType<AdvancedTwoBoneIK>(FindObjectsSortMode.None)
                     .Select(k => $"{k.name} (root bone {(k.root?.bone ? k.root.bone.name + " under " + k.root.bone.root.name : "none")}, active {k.isActiveAndEnabled})");
-                Debug.LogWarning($"[OtterLocomotion] No limb IK chains under '{name}'; allocation disabled. Chains in scene: {string.Join("; ", chains)}", this);
+                Debug.LogWarning($"[OtterLocomotion] No limb IK chains under '{name}'; allocation disabled. Chains in scene: {string.Join("; ", all)}", this);
             }
 
             var head = OtterRig.FindActiveBone(transform, OtterRig.Head);
@@ -160,6 +166,7 @@ namespace OtterLocomotion
             if (!HasLimbGeometry) return;
             actuators.Build(actuatorSettings, geometry, centerOfMass, postureMachine.RollDeg, postureMachine.SupineFraction, Parameters.mass);
             allocator.Solve(allocatorSettings, actuators, demand, Parameters);
+            rhythm.Step(rhythmSettings, allocator, actuators, Intent.band, dt);
         }
 
         private LocomotionIntent ReadIntent()
@@ -180,6 +187,7 @@ namespace OtterLocomotion
                 band = band,
                 heading = dir.sqrMagnitude > 1e-8f ? dir.normalized : estimator.State.forward,
                 requestedSpeed = intentSource.GetTargetSpeed(),
+                reach = intentSource.GetReach01(),
             };
         }
 

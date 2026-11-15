@@ -10,7 +10,7 @@ namespace OtterLocomotion.EditorTools
     /// <summary>One place to bring the test scene up to date, see what is off, and run the scripted playbacks.</summary>
     public class OtterTestScenePanel : EditorWindow
     {
-        const string ResetBrainPref = "OtterLocomotion.TestScene.ResetBrain";
+        const string ResetSettingsPref = "OtterLocomotion.TestScene.ResetSettings";
         const string SavePref = "OtterLocomotion.TestScene.Save";
         static readonly (string label, string title)[] Playbacks = { ("baseline", "基线回放"), ("posture", "姿态回放") };
 
@@ -23,7 +23,7 @@ namespace OtterLocomotion.EditorTools
         [MenuItem("Tools/Otter Locomotion/Test Scene Panel", priority = 0)]
         static void Open() => GetWindow<OtterTestScenePanel>("Otter 测试场景");
 
-        static bool ResetBrain { get => EditorPrefs.GetBool(ResetBrainPref, true); set => EditorPrefs.SetBool(ResetBrainPref, value); }
+        static bool ResetSettings { get => EditorPrefs.GetBool(ResetSettingsPref, true); set => EditorPrefs.SetBool(ResetSettingsPref, value); }
         static bool Save { get => EditorPrefs.GetBool(SavePref, true); set => EditorPrefs.SetBool(SavePref, value); }
 
         void OnEnable()
@@ -59,7 +59,7 @@ namespace OtterLocomotion.EditorTools
             // recompute only on Layout, so Layout and Repaint draw the same rows; not in Play, where the runner swaps the brain
             if (stale && !playing && Event.current.type == EventType.Layout)
             {
-                checks = OtterTestSceneSetup.Inspect(ResetBrain, Save);
+                checks = OtterTestSceneSetup.Inspect(ResetSettings, Save);
                 stale = false;
             }
             detailStyle ??= new GUIStyle(EditorStyles.label) { wordWrap = true };
@@ -74,8 +74,8 @@ namespace OtterLocomotion.EditorTools
             foreach (var c in checks) DrawCheck(c);
 
             EditorGUILayout.Space();
-            ResetBrain = EditorGUILayout.ToggleLeft(new GUIContent("大脑参数恢复为代码默认值",
-                "关掉则保留 Inspector 里对 OtterLocomotionBrain 的调参。回放测试总是用代码默认值。"), ResetBrain);
+            ResetSettings = EditorGUILayout.ToggleLeft(new GUIContent("运动组件参数恢复为代码默认值",
+                "关掉则保留 Inspector 里对运动大脑、四肢划水、翻身同步的调参。回放测试总是用代码默认值。"), ResetSettings);
             Save = EditorGUILayout.ToggleLeft(new GUIContent("刷新后保存场景", "包括刷新前已有的未保存改动。"), Save);
 
             using (new EditorGUI.DisabledScope(playing))
@@ -83,7 +83,7 @@ namespace OtterLocomotion.EditorTools
                 bool allOk = checks.Count > 0 && checks.All(c => c.level == OtterTestSceneSetup.Level.Ok);
                 if (GUILayout.Button(allOk ? "一键刷新测试场景（已是最新）" : "一键刷新测试场景", GUILayout.Height(34)))
                 {
-                    lastLog = OtterTestSceneSetup.Refresh(ResetBrain, Save);
+                    lastLog = OtterTestSceneSetup.Refresh(ResetSettings, Save);
                     MarkStale();
                     GUIUtility.ExitGUI();
                 }

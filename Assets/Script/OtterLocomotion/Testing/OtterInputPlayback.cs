@@ -26,14 +26,17 @@ namespace OtterLocomotion.Testing
             public float headingDeg;
             [Tooltip("Press the posture toggle as the segment starts.")]
             public bool pressFlip;
+            [Tooltip("Arrow length as a fraction of the outer ring's radius; 0 = the middle of the zone.")]
+            public float reach;
 
-            public Segment(string name, float duration, Zone zone, float headingDeg, bool pressFlip = false)
+            public Segment(string name, float duration, Zone zone, float headingDeg, bool pressFlip = false, float reach = 0f)
             {
                 this.name = name;
                 this.duration = duration;
                 this.zone = zone;
                 this.headingDeg = headingDeg;
                 this.pressFlip = pressFlip;
+                this.reach = reach;
             }
         }
 
@@ -69,16 +72,18 @@ namespace OtterLocomotion.Testing
             new Segment("release", 1.5f, Zone.Release, 90f),
         };
 
-        /// <summary>Exercises every posture rule: band edges both ways, manual toggles while swimming and at rest.</summary>
+        /// <summary>Exercises every posture rule: the arrow crossing both thresholds, manual toggles while swimming and at rest.</summary>
         public static List<Segment> PostureScript() => new List<Segment>
         {
             new Segment("rest (expect supine)", 1.5f, Zone.Release, 0f),
-            new Segment("swim: band edge -> prone", 3.0f, Zone.Swim, 0f),
-            new Segment("F while swimming -> supine, ease to cap", 3.5f, Zone.Swim, 0f, pressFlip: true),
-            new Segment("sprint: band edge -> prone", 2.5f, Zone.Sprint, 0f),
+            new Segment("swim mid-ring: stays supine, eases to cap", 3.0f, Zone.Swim, 0f),
+            new Segment("arrow out to 95%: prone", 2.5f, Zone.Swim, 0f, reach: 0.95f),
+            new Segment("arrow back to 78%: supine", 3.0f, Zone.Swim, 0f, reach: 0.78f),
+            new Segment("F while swimming -> prone, held", 2.5f, Zone.Swim, 0f, pressFlip: true, reach: 0.78f),
+            new Segment("sprint: already prone", 2.5f, Zone.Sprint, 0f),
             new Segment("release: glide, then supine", 3.0f, Zone.Release, 0f),
             new Segment("F at rest -> prone", 1.5f, Zone.Release, 0f, pressFlip: true),
-            new Segment("aim pivot left 90: band edge -> supine once slow", 2.5f, Zone.Aim, -90f),
+            new Segment("aim pivot left 90: supine once slow", 2.5f, Zone.Aim, -90f),
             new Segment("release", 1.0f, Zone.Release, -90f),
         };
 
@@ -128,7 +133,7 @@ namespace OtterLocomotion.Testing
             }
             var s = segments[index];
             Held = s.zone != Zone.Release;
-            if (Held) ScreenPosition = ToScreen(TargetYaw(index), s.zone);
+            if (Held) ScreenPosition = ToScreen(TargetYaw(index), s.zone, s.reach);
         }
 
         private void OnDisable()
@@ -138,8 +143,8 @@ namespace OtterLocomotion.Testing
         }
 
         // Inverse of MovementControllerRB.ScreenDirToWorldXZ: the screen direction whose flattened camera-space image
-        // points along the world yaw, at the radius that lands in the requested ring zone.
-        private Vector2 ToScreen(float yawDeg, Zone zone)
+        // points along the world yaw, at the requested reach or else the middle of the requested ring zone.
+        private Vector2 ToScreen(float yawDeg, Zone zone, float reach)
         {
             var ui = movement.RingUI;
             var cam = movement.InputCamera != null ? movement.InputCamera : Camera.main;
@@ -154,7 +159,7 @@ namespace OtterLocomotion.Testing
             }
             float inner = ui != null ? ui.InnerRadiusPx : 120f;
             float outer = ui != null ? ui.OuterRadiusPx : 260f;
-            float radius = zone switch
+            float radius = reach > 0f ? outer * reach : zone switch
             {
                 Zone.Aim => inner * 0.5f,
                 Zone.Swim => (inner + outer) * 0.5f,

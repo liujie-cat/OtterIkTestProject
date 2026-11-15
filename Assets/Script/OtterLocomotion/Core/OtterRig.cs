@@ -32,5 +32,26 @@ namespace OtterLocomotion
 
         public static Transform FindActiveBone(Transform root, string name) =>
             root.GetComponentsInChildren<Transform>().FirstOrDefault(t => t.name == name && t.gameObject.activeInHierarchy);
+
+        /// <summary>The spine bone a limb hangs from (chest for forelimbs, hip for hind limbs); limb motion is measured in its space.</summary>
+        public static Transform Girdle(Transform limbRoot)
+        {
+            for (var p = limbRoot.parent; p != null; p = p.parent)
+                if (p.name == Chest || p.name == Hip) return p;
+            return limbRoot.parent;
+        }
+
+        /// <summary>The otter's limb IK chains under a body, by limb; only active chains with all three bones set.</summary>
+        public static AdvancedTwoBoneIK[] FindLimbChains(Transform body)
+        {
+            var chains = new AdvancedTwoBoneIK[LimbCount];
+            foreach (var ik in Object.FindObjectsByType<AdvancedTwoBoneIK>(FindObjectsSortMode.None))
+            {
+                if (!ik.isActiveAndEnabled || ik.root?.bone == null || !ik.root.bone.IsChildOf(body)) continue;
+                if (ik.mid == null || ik.mid.bone == null || ik.end == null || ik.end.bone == null) continue;
+                if (TryClassify(ik, out var limb)) chains[(int)limb] = ik;
+            }
+            return chains;
+        }
     }
 }

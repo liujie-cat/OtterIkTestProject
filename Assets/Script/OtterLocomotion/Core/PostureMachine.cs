@@ -9,9 +9,14 @@ namespace OtterLocomotion
         public Posture initial = Posture.Supine;
         [Tooltip("Top speed on the back (m/s). After rolling onto the back the speed target eases down to this.")]
         public float supineMaxSpeed = 1.2f;
-        [Tooltip("Switch posture automatically when the requested speed band changes. Manual toggles always work.")]
+        [Tooltip("Switch posture automatically from how far the arrow is pulled. Manual toggles always work.")]
         public bool autoSwitch = true;
-        [Tooltip("After the player stops asking for speed, a prone otter rolls onto its back once slower than this (m/s)...")]
+        [Tooltip("Arrow length, as a fraction of the outer ring's radius, that rolls the otter onto its belly to swim fast.")]
+        [Range(0f, 1f)] public float proneReach = 0.9f;
+        [Tooltip("Pulling the arrow back below this rolls it onto its back again. The gap to proneReach keeps it from " +
+                 "flipping back and forth; inside the gap the otter keeps its posture.")]
+        [Range(0f, 1f)] public float supineReach = 0.8f;
+        [Tooltip("After letting go, or when starting to aim inside supineReach, a prone otter rolls onto its back once slower than this (m/s)...")]
         public float supineEnterSpeed = 0.5f;
         [Tooltip("...for this long (s).")]
         public float supineSettleTime = 0.5f;
@@ -20,8 +25,9 @@ namespace OtterLocomotion
     }
 
     /// <summary>
-    /// Prone/supine posture. Automatic switches fire only on speed band edges (Rest/Aim -> Swim/Sprint rolls prone,
-    /// Swim/Sprint -> Rest/Aim rolls supine once slow), so a manual toggle holds until the player changes band.
+    /// Prone/supine posture, from how far the player pulls the arrow. Automatic switches fire only when the arrow
+    /// crosses a threshold: out past proneReach rolls prone, back inside supineReach rolls supine; letting go, or
+    /// starting to aim inside supineReach, rolls supine once slow. A manual toggle holds until the next crossing.
     /// The speed cap follows the roll progress, and the demand layer eases the speed target down to it.
     /// </summary>
     public sealed class PostureMachine
@@ -51,8 +57,9 @@ namespace OtterLocomotion
         /// <summary>(new posture, reason) whenever a roll starts.</summary>
         public event Action<Posture, string> Changed;
 
-        private SpeedBand previousBand;
-        private bool hasPreviousBand;
+        private float previousReach;
+        private bool previousSteering;
+        private bool hasPrevious;
         private bool pendingSupine;
         private float slowTimer;
 
@@ -62,13 +69,14 @@ namespace OtterLocomotion
             FlipProgress = 1f;
             RollSide = 1;
             LastReason = "initial";
-            hasPreviousBand = false;
+            hasPrevious = false;
             pendingSupine = false;
             slowTimer = 0f;
         }
 
         public void Step(PostureSettings s, in LocomotionIntent intent, in BodyState body, bool togglePressed, float yawRateDemand, float dt)
         {
+            float reach = intent.Steering ? intent.reach : 0f;
             if (togglePressed)
             {
                 pendingSupine = false;
@@ -76,16 +84,22 @@ namespace OtterLocomotion
             }
             else if (s.autoSwitch)
             {
-                if (hasPreviousBand && intent.band != previousBand)
+                int percent = Mathf.RoundToInt(reach * 100f);
+                if (hasPrevious)
                 {
-                    bool fast = intent.band >= SpeedBand.Swim && intent.requestedSpeed > s.supineMaxSpeed + 1e-3f;
-                    if (fast)
+                    if (reach >= s.proneReach && previousReach < s.proneReach)
                     {
                         pendingSupine = false;
-                        Begin(Posture.Prone, $"{previousBand} -> {intent.band}", yawRateDemand);
+                        Begin(Posture.Prone, $"arrow out to {percent}% of the outer ring", yawRateDemand);
                     }
-                    else if (intent.band <= SpeedBand.Aim)
+                    else if (intent.Steering && previousSteering && reach < s.supineReach && previousReach >= s.supineReach)
                     {
+                        pendingSupine = false;
+                        Begin(Posture.Supine, $"arrow back to {percent}%", yawRateDemand);
+                    }
+                    else if (intent.Steering != previousSteering && reach < s.supineReach)
+                    {
+                        // let go, or started aiming close in: roll over once the body has slowed
                         pendingSupine = Current == Posture.Prone;
                         slowTimer = 0f;
                     }
@@ -100,8 +114,9 @@ namespace OtterLocomotion
                     }
                 }
             }
-            previousBand = intent.band;
-            hasPreviousBand = true;
+            previousReach = reach;
+            previousSteering = intent.Steering;
+            hasPrevious = true;
             if (FlipProgress < 1f) FlipProgress = Mathf.Min(1f, FlipProgress + dt / Mathf.Max(0.05f, s.flipDuration));
         }
 

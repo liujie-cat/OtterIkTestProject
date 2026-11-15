@@ -7,8 +7,8 @@ namespace OtterLocomotion.EditorTools
 {
     /// <summary>
     /// Enters Play, drives the active otter with a scripted input (OtterInputPlayback) while LocomotionTelemetry
-    /// records, writes Logs/Locomotion_&lt;label&gt;_summary.txt + CSV, then leaves Play. The otter gets a fresh
-    /// OtterLocomotionBrain for the run (code defaults, replacing the scene's for this Play only), so runs compare.
+    /// records, writes Logs/Locomotion_&lt;label&gt;_summary.txt + CSV, then leaves Play. The otter gets fresh locomotion
+    /// components for the run (code defaults, replacing the scene's for this Play only), so runs compare.
     /// The scene is never modified.
     /// </summary>
     [InitializeOnLoad]
@@ -57,10 +57,14 @@ namespace OtterLocomotion.EditorTools
                     Stop();
                     return;
                 }
-                // always the code defaults, so runs compare; a brain saved in the scene is swapped out for this Play only
-                var sceneBrain = movement.GetComponent<OtterLocomotionBrain>();
-                if (sceneBrain != null) Object.DestroyImmediate(sceneBrain);
-                movement.gameObject.AddComponent<OtterLocomotionBrain>();
+                // always the code defaults, so runs compare; the scene's locomotion components are swapped out for this Play only
+                var managed = OtterTestSceneSetup.Managed;
+                for (int i = managed.Length - 1; i >= 0; i--)
+                {
+                    var saved = movement.GetComponent(managed[i].type);
+                    if (saved != null) Object.DestroyImmediate(saved);
+                }
+                foreach (var (type, _) in managed) movement.gameObject.AddComponent(type);
                 var host = new GameObject("LocomotionPlayback (runtime)");
                 playback = host.AddComponent<OtterInputPlayback>();
                 playback.movement = movement;

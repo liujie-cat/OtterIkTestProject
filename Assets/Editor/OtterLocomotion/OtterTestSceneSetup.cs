@@ -1,24 +1,35 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using OtterIK.EditorTools;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using Object = UnityEngine.Object;
 
 namespace OtterLocomotion.EditorTools
 {
     /// <summary>
     /// Brings the test scene to what the current code expects: the sea otter rig in place of the cat, IK targets on
-    /// the rest pose, and the locomotion brain on the swimming body with its references and code-default settings.
-    /// Every step checks first and changes only what is off, so it can be run at any time. One Undo step.
+    /// the rest pose, and the locomotion components on the swimming body with their references and code-default
+    /// settings. Every step checks first and changes only what is off, so it can be run at any time. One Undo step.
     /// </summary>
     static class OtterTestSceneSetup
     {
         internal const string ScenePath = "Assets/Scenes/TestLimbIK/TestAdvancedSpineSystem.unity";
         const string LogFile = "OtterTestScene_Refresh.txt";
+
+        /// <summary>Components the new locomotion needs on the body, in the order they are added.</summary>
+        internal static readonly (Type type, string title)[] Managed =
+        {
+            (typeof(OtterLocomotionBrain), "运动大脑"),
+            (typeof(LimbStrokeAnimator), "四肢划水"),
+            (typeof(PostureFlipSync), "翻身同步"),
+        };
 
         internal enum Level { Ok, Fix, Blocked }
 
@@ -31,12 +42,12 @@ namespace OtterLocomotion.EditorTools
         }
 
         [MenuItem("Tools/Otter Locomotion/Refresh Test Scene (no save)")]
-        static void RefreshMenu() => Refresh(resetBrain: true, save: false);
+        static void RefreshMenu() => Refresh(resetSettings: true, save: false);
 
         [MenuItem("Tools/Otter Locomotion/Report Test Scene")]
         static void ReportMenu()
         {
-            var lines = Inspect(resetBrain: true, save: false).Select(c => $"{c.level,-7} {c.title}: {c.detail}");
+            var lines = Inspect(resetSettings: true, save: false).Select(c => $"{c.level,-7} {c.title}: {c.detail}");
             Directory.CreateDirectory("Logs");
             File.WriteAllLines(Path.Combine("Logs", "OtterTestScene_Report.txt"), lines);
         }
@@ -50,7 +61,7 @@ namespace OtterLocomotion.EditorTools
 
         static bool IsTestSceneOpen => SceneManager.GetActiveScene().path == ScenePath;
 
-        internal static List<Check> Inspect(bool resetBrain, bool save)
+        internal static List<Check> Inspect(bool resetSettings, bool save)
         {
             var checks = new List<Check>();
             var scene = SceneManager.GetActiveScene();
@@ -77,23 +88,25 @@ namespace OtterLocomotion.EditorTools
             }
 
             var body = FindBody();
-            if (body == null) checks.Add(new Check("运动大脑", Level.Blocked, "没有激活的 MovementControllerRB"));
-            else
+            foreach (var (type, title) in Managed)
             {
-                var brain = body.GetComponent<OtterLocomotionBrain>();
-                if (brain == null) checks.Add(new Check("运动大脑", Level.Fix, $"'{body.name}' 上还没有，刷新时添加"));
-                else
+                if (body == null) { checks.Add(new Check(title, Level.Blocked, "没有激活的 MovementControllerRB")); continue; }
+                var component = body.GetComponent(type);
+                if (component == null) { checks.Add(new Check(title, Level.Fix, $"'{body.name}' 上还没有，刷新时添加")); continue; }
+                if (component is Behaviour b && !b.enabled)
                 {
-                    var missing = MissingReferences(brain, body);
-                    var diffs = BrainDifferences(brain, apply: false);
-                    var problems = new List<string>();
-                    if (missing.Count > 0) problems.Add("引用未连: " + string.Join(", ", missing));
-                    if (diffs.Count > 0 && resetBrain) problems.Add("与代码默认值不同: " + string.Join(", ", diffs));
-                    string kept = diffs.Count > 0 && !resetBrain ? $"（保留场景调参: {string.Join(", ", diffs)}）" : "";
-                    checks.Add(problems.Count > 0
-                        ? new Check("运动大脑", Level.Fix, string.Join("；", problems))
-                        : new Check("运动大脑", Level.Ok, $"在 '{body.name}' 上{kept}"));
+                    checks.Add(new Check(title, Level.Ok, $"在 '{body.name}' 上，已关闭（对比旧系统时用；刷新不会打开它）"));
+                    continue;
                 }
+                var missing = References(component, body, apply: false);
+                var diffs = Differences(component, apply: false);
+                var problems = new List<string>();
+                if (missing.Count > 0) problems.Add("引用未连: " + string.Join(", ", missing));
+                if (diffs.Count > 0 && resetSettings) problems.Add("与代码默认值不同: " + string.Join(", ", diffs));
+                string kept = diffs.Count > 0 && !resetSettings ? $"（保留场景调参: {string.Join(", ", diffs)}）" : "";
+                checks.Add(problems.Count > 0
+                    ? new Check(title, Level.Fix, string.Join("；", problems))
+                    : new Check(title, Level.Ok, $"在 '{body.name}' 上{kept}"));
             }
 
             if (scene.isDirty)
@@ -103,7 +116,7 @@ namespace OtterLocomotion.EditorTools
             return checks;
         }
 
-        internal static string Refresh(bool resetBrain, bool save)
+        internal static string Refresh(bool resetSettings, bool save)
         {
             if (EditorApplication.isPlayingOrWillChangePlaymode) return "Play 模式下不能刷新。";
             var log = new StringBuilder();
@@ -141,29 +154,24 @@ namespace OtterLocomotion.EditorTools
             }
 
             var body = FindBody();
-            if (body == null) log.AppendLine("!! 没有激活的 MovementControllerRB，跳过运动大脑");
+            if (body == null) log.AppendLine("!! 没有激活的 MovementControllerRB，跳过运动组件");
             else
             {
-                var brain = body.GetComponent<OtterLocomotionBrain>();
-                if (brain == null)
+                foreach (var (type, title) in Managed)
                 {
-                    brain = Undo.AddComponent<OtterLocomotionBrain>(body.gameObject);
-                    log.AppendLine($"运动大脑: 添加到 '{body.name}'");
-                }
-                var missing = MissingReferences(brain, body);
-                if (missing.Count > 0)
-                {
-                    var so = new SerializedObject(brain);
-                    SetIfEmpty(so, nameof(OtterLocomotionBrain.body), body.GetComponent<Rigidbody>());
-                    SetIfEmpty(so, nameof(OtterLocomotionBrain.intentSource), body);
-                    SetIfEmpty(so, nameof(OtterLocomotionBrain.waterDrag), body.GetComponent<WaterDrag>());
-                    so.ApplyModifiedProperties();
-                    log.AppendLine("运动大脑: 连接引用 " + string.Join(", ", missing));
-                }
-                if (resetBrain)
-                {
-                    var diffs = BrainDifferences(brain, apply: true);
-                    log.AppendLine(diffs.Count > 0 ? "运动大脑: 恢复代码默认值 " + string.Join(", ", diffs) : "运动大脑: 参数已是代码默认值");
+                    var component = body.GetComponent(type);
+                    if (component == null)
+                    {
+                        component = Undo.AddComponent(body.gameObject, type);
+                        log.AppendLine($"{title}: 添加到 '{body.name}'");
+                    }
+                    var wired = References(component, body, apply: true);
+                    if (wired.Count > 0) log.AppendLine($"{title}: 连接引用 " + string.Join(", ", wired));
+                    if (resetSettings)
+                    {
+                        var diffs = Differences(component, apply: true);
+                        log.AppendLine(diffs.Count > 0 ? $"{title}: 恢复代码默认值 " + string.Join(", ", diffs) : $"{title}: 参数已是代码默认值");
+                    }
                 }
             }
 
@@ -180,44 +188,62 @@ namespace OtterLocomotion.EditorTools
             return log.ToString();
         }
 
-        static void SetIfEmpty(SerializedObject so, string path, Object value)
+        /// <summary>
+        /// Empty component references that can be filled: from the body, its children, or the only active one in the
+        /// scene. Returns the field names; with <paramref name="apply"/> also fills them.
+        /// </summary>
+        static List<string> References(Component component, MovementControllerRB body, bool apply)
         {
-            var p = so.FindProperty(path);
-            if (p.objectReferenceValue == null && value != null) p.objectReferenceValue = value;
+            var names = new List<string>();
+            var so = new SerializedObject(component);
+            var it = so.GetIterator();
+            for (bool enter = true; it.NextVisible(enter); enter = false)
+            {
+                if (it.propertyType != SerializedPropertyType.ObjectReference || it.name == "m_Script" || it.objectReferenceValue != null) continue;
+                var field = component.GetType().GetField(it.name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                // a Transform would always resolve to the body's own; those are bones and set by hand
+                if (field == null || !typeof(Component).IsAssignableFrom(field.FieldType) || typeof(Transform).IsAssignableFrom(field.FieldType)) continue;
+                var found = body.GetComponent(field.FieldType);
+                if (found == null) found = body.GetComponentInChildren(field.FieldType);
+                if (found == null)
+                    found = Object.FindObjectsByType(field.FieldType, FindObjectsSortMode.None).OfType<Component>().FirstOrDefault(c => c.gameObject.activeInHierarchy);
+                if (found == null) continue;
+                names.Add(it.name);
+                if (apply) it.objectReferenceValue = found;
+            }
+            if (apply && names.Count > 0) so.ApplyModifiedProperties();
+            return names;
         }
 
-        static List<string> MissingReferences(OtterLocomotionBrain brain, MovementControllerRB body)
-        {
-            var missing = new List<string>();
-            if (brain.body == null && body.GetComponent<Rigidbody>() != null) missing.Add(nameof(brain.body));
-            if (brain.intentSource == null) missing.Add(nameof(brain.intentSource));
-            if (brain.waterDrag == null && body.GetComponent<WaterDrag>() != null) missing.Add(nameof(brain.waterDrag));
-            return missing;
-        }
+        static readonly Dictionary<Type, Component> defaults = new Dictionary<Type, Component>();
 
-        static OtterLocomotionBrain defaults;
-
-        // A hidden, inactive instance holds the code defaults (field initializers), compared property by property.
-        static OtterLocomotionBrain Defaults()
+        // Hidden, inactive instances hold the code defaults (field initializers), compared property by property.
+        static Component Defaults(Type type)
         {
-            if (defaults != null) return defaults;
-            var go = EditorUtility.CreateGameObjectWithHideFlags("OtterLocomotionBrain defaults", HideFlags.HideAndDontSave, typeof(OtterLocomotionBrain));
+            if (defaults.TryGetValue(type, out var c) && c != null) return c;
+            var go = EditorUtility.CreateGameObjectWithHideFlags($"{type.Name} defaults", HideFlags.HideAndDontSave, type);
             go.SetActive(false);
-            defaults = go.GetComponent<OtterLocomotionBrain>();
-            AssemblyReloadEvents.beforeAssemblyReload += () => { if (defaults != null) Object.DestroyImmediate(defaults.gameObject); };
-            return defaults;
+            c = go.GetComponent(type);
+            if (defaults.Count == 0)
+                AssemblyReloadEvents.beforeAssemblyReload += () =>
+                {
+                    foreach (var d in defaults.Values.Where(d => d != null)) Object.DestroyImmediate(d.gameObject);
+                    defaults.Clear();
+                };
+            defaults[type] = c;
+            return c;
         }
 
-        /// <summary>Top-level brain fields whose value differs from the code default (references excluded); optionally copies the defaults in.</summary>
-        static List<string> BrainDifferences(OtterLocomotionBrain brain, bool apply)
+        /// <summary>Top-level fields whose value differs from the code default (references excluded); optionally copies the defaults in.</summary>
+        static List<string> Differences(Component component, bool apply)
         {
-            var src = new SerializedObject(Defaults());
-            var dst = new SerializedObject(brain);
+            var src = new SerializedObject(Defaults(component.GetType()));
+            var dst = new SerializedObject(component);
             var diffs = new List<string>();
             var it = src.GetIterator();
             for (bool enter = true; it.NextVisible(enter); enter = false)
             {
-                if (it.propertyType == SerializedPropertyType.ObjectReference) continue;
+                if (it.propertyType == SerializedPropertyType.ObjectReference || it.name == "m_Enabled") continue;
                 var current = dst.FindProperty(it.propertyPath);
                 if (current != null && SerializedProperty.DataEquals(it, current)) continue;
                 diffs.Add(it.name);

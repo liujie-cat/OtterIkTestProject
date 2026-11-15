@@ -764,6 +764,14 @@ public class MovementControllerRB : MonoBehaviour
     public bool IsDragging() => isDragging;
     public MoveZone GetZone() => zone;
 
+    /// <summary>Arrow length as a fraction of the outer ring's radius: 0 when not dragging, 1 at the ring and beyond.</summary>
+    public float GetReach01()
+    {
+        if (!isDragging) return 0f;
+        float outerPx = (ui != null) ? ui.OuterRadiusPx : 260f;
+        return Mathf.Clamp01(radiusPxSm / Mathf.Max(1f, outerPx));
+    }
+
     public Vector3 GetCarrotWorld() => carrotWorld;
     public Vector3 GetWorldDir() => worldDir;
     public Vector3 GetSteerDir() => steerDir;
