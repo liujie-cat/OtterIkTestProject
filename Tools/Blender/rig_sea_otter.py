@@ -11,8 +11,8 @@ mirror plane, scaled so shoulders and hips land near the cat's, and the tail is 
 line. Bones are placed on that standing anatomy and skinned with Blender's bone heat (the eyes ride
 rigidly on the head); then the skeleton is re-proportioned (longer back, stubby legs) and posed into a
 relaxed float (straight level spine, neck reaching forward, hind legs trailing with the feet pointed back,
-forelegs hanging loose, tail straight), the mesh is carried along, and that float becomes the bind pose
-with fresh weights.
+forepaws tucked on the chest, tail straight), the mesh is carried along, and that float becomes the bind
+pose with fresh weights.
 
 The rest pose matters at runtime: the IK leaves feet, paws and toes at their rest angle to the shin and
 forearm, the hind knee limits are centred on the rest knee, and the spine and neck controllers treat the
@@ -118,11 +118,12 @@ RELAXED = {
     "leg_stretch":   _deg(76, 0.12),
     "foot":          _deg(83, 0.12),
     "toes_01":       _deg(87, 0.10),
-    # fore: hanging loose, swept back under the chest, paw curled back toward the palm
-    "thigh_stretch_dupli_001": _deg(40, 0.08),
-    "leg_stretch_dupli_001":   _deg(20, -0.03),
-    "foot_dupli_001":          _deg(55),
-    "toes_01_dupli_001":       _deg(70),
+    # fore: tucked against the chest like a floating sea otter - upper arm back along the ribs, elbow
+    # folded, forearm across the chest toward the midline, paws meeting under the throat, toes curled
+    "thigh_stretch_dupli_001": (-0.05, 0.75, -0.66),
+    "leg_stretch_dupli_001":   (-0.70, -0.62, -0.36),
+    "foot_dupli_001":          (-0.45, -0.85, -0.20),
+    "toes_01_dupli_001":       (-0.15, -0.55, -0.82),
 }
 
 # Tail unbending: the tail is everything behind TAIL_START_Y; its centre line is straightened into
