@@ -1,3 +1,4 @@
+using System.Linq;
 using UnityEngine;
 #if UNITY_EDITOR
 using UnityEditor;
@@ -7,9 +8,9 @@ namespace OtterLocomotion
 {
     /// <summary>
     /// Runs the locomotion pipeline once per physics step, in causal order:
-    /// intent + measured state -> posture -> demand (-> allocation -> strokes -> forces, in later stages).
+    /// intent + measured state -> posture -> demand -> allocation (-> strokes -> forces, in later stages).
     /// Intent comes from MovementControllerRB's ring input. Nothing here moves the body yet: it only computes and
-    /// draws what the body would need, so it can run alongside the existing controller.
+    /// draws what the body would need and which limb would supply it, so it can run alongside the existing controller.
     /// </summary>
     [DefaultExecutionOrder(150)]
     [DisallowMultipleComponent]
@@ -26,8 +27,16 @@ namespace OtterLocomotion
 
         [Header("Demand")]
         public DemandSettings demandSettings = new DemandSettings();
-        [Tooltip("Yaw inertia (kg m^2); 0 = the rigidbody's.")]
+        [Tooltip("Yaw inertia (kg m^2); 0 = estimated from the measured body length as a uniform rod, m L^2 / 12.")]
         public float yawInertiaOverride = 0f;
+        [Tooltip("Nose-to-rump length as a multiple of the head-joint-to-tail-root distance.")]
+        public float headLengthRatio = 1.4f;
+        [Tooltip("Time for the water alone to slow a spin to 1/e (s); sets the yaw damping from the yaw inertia.")]
+        public float yawDampingTime = 0.4f;
+
+        [Header("Limbs")]
+        public ActuatorSettings actuatorSettings = new ActuatorSettings();
+        public AllocatorSettings allocatorSettings = new AllocatorSettings();
 
         [Header("Debug")]
         public bool drawGizmos = true;
@@ -35,17 +44,28 @@ namespace OtterLocomotion
         [Tooltip("Gizmo arrow length per newton (m/N).")]
         public float forceGizmoScale = 0.05f;
         [Tooltip("Gizmo arc degrees per N·m.")]
-        public float momentGizmoScale = 60f;
+        public float momentGizmoScale = 300f;
 
         public LocomotionIntent Intent { get; private set; }
         public BodyState State => estimator.State;
         public LocomotionDemand Demand => demandLayer.Current;
         public PostureMachine Posture => postureMachine;
         public BodyParameters Parameters { get; private set; }
+        public ActuatorModel Actuators => actuators;
+        public ControlAllocator Allocation => allocator;
+        public bool HasLimbGeometry { get; private set; }
+        /// <summary>Measured nose-to-rump length (m); 0 if the head or tail bone was not found.</summary>
+        public float BodyLength { get; private set; }
+        public LimbGeometry[] Geometry => geometry;
+        public Vector3 CenterOfMass => centerOfMass;
 
         private readonly BodyStateEstimator estimator = new BodyStateEstimator();
         private readonly PostureMachine postureMachine = new PostureMachine();
         private readonly DemandLayer demandLayer = new DemandLayer();
+        private readonly ActuatorModel actuators = new ActuatorModel();
+        private readonly ControlAllocator allocator = new ControlAllocator(OtterRig.LimbCount * ActuatorModel.ColumnsPerLimb);
+        private readonly LimbGeometry[] geometry = new LimbGeometry[OtterRig.LimbCount];
+        private Vector3 centerOfMass;
         private bool toggleRequested;
 
         /// <summary>Same as pressing the posture key; for scripted input.</summary>
@@ -59,12 +79,62 @@ namespace OtterLocomotion
             postureMachine.Changed += OnPostureChanged;
         }
 
+        // On Start rather than OnEnable: when added while the scene is still loading, the IK chains are not enabled yet.
+        private void Start()
+        {
+            if (body != null) CaptureGeometry();
+        }
+
         private void OnEnable()
         {
             if (body == null) return;
             estimator.Reset(body);
             postureMachine.Reset(postureSettings);
             demandLayer.Reset(estimator.State);
+            allocator.Reset();
+        }
+
+        // Body frame: x forward, y right, z up, metres from the rigidbody origin.
+        private Vector3 ToBody(Vector3 world)
+        {
+            Vector3 l = Quaternion.Inverse(body.rotation) * (world - body.position);
+            return new Vector3(l.z, l.x, l.y);
+        }
+
+        private Vector3 ToWorld(Vector3 b) => body.position + body.rotation * new Vector3(b.y, b.z, b.x);
+
+        /// <summary>Shoulders, hips and limb lengths from the IK chains, and body length from head to tail root, as rigged (prone).</summary>
+        private void CaptureGeometry()
+        {
+            int found = 0;
+            Vector3 sum = Vector3.zero;
+            foreach (var ik in FindObjectsByType<AdvancedTwoBoneIK>(FindObjectsSortMode.None))
+            {
+                if (!ik.isActiveAndEnabled || ik.root?.bone == null || !ik.root.bone.IsChildOf(transform)) continue;
+                if (ik.mid == null || ik.mid.bone == null || ik.end == null || ik.end.bone == null) continue;
+                if (!OtterRig.TryClassify(ik, out var limb)) continue;
+                Vector3 a = ik.root.bone.position, b = ik.mid.bone.position, c = ik.end.bone.position;
+                geometry[(int)limb] = new LimbGeometry
+                {
+                    valid = true,
+                    anchor = ToBody(a),
+                    length = Vector3.Distance(a, b) + Vector3.Distance(b, c),
+                };
+                sum += geometry[(int)limb].anchor;
+                found++;
+            }
+            HasLimbGeometry = found > 0;
+            centerOfMass = found > 0 ? new Vector3(sum.x / found, 0f, sum.z / found) : Vector3.zero;
+            if (found == 0)
+            {
+                var chains = FindObjectsByType<AdvancedTwoBoneIK>(FindObjectsSortMode.None)
+                    .Select(k => $"{k.name} (root bone {(k.root?.bone ? k.root.bone.name + " under " + k.root.bone.root.name : "none")}, active {k.isActiveAndEnabled})");
+                Debug.LogWarning($"[OtterLocomotion] No limb IK chains under '{name}'; allocation disabled. Chains in scene: {string.Join("; ", chains)}", this);
+            }
+
+            var head = OtterRig.FindActiveBone(transform, OtterRig.Head);
+            var tail = OtterRig.FindActiveBone(transform, OtterRig.TailRoot);
+            BodyLength = head != null && tail != null ? Vector3.Distance(head.position, tail.position) * headLengthRatio : 0f;
         }
 
         private void Update()
@@ -85,7 +155,11 @@ namespace OtterLocomotion
 
             float supineCapped = Mathf.Min(Intent.requestedSpeed, postureSettings.supineMaxSpeed);
             float speedCap = Mathf.Lerp(Intent.requestedSpeed, supineCapped, postureMachine.SupineFraction);
-            demandLayer.Step(demandSettings, Intent, state, Parameters, speedCap, dt);
+            var demand = demandLayer.Step(demandSettings, Intent, state, Parameters, speedCap, dt);
+
+            if (!HasLimbGeometry) return;
+            actuators.Build(actuatorSettings, geometry, centerOfMass, postureMachine.RollDeg, postureMachine.SupineFraction, Parameters.mass);
+            allocator.Solve(allocatorSettings, actuators, demand, Parameters);
         }
 
         private LocomotionIntent ReadIntent()
@@ -109,14 +183,20 @@ namespace OtterLocomotion
             };
         }
 
-        private BodyParameters ReadParameters() => new BodyParameters
+        private BodyParameters ReadParameters()
         {
-            mass = body.mass,
-            yawInertia = yawInertiaOverride > 0f ? yawInertiaOverride : body.inertiaTensor.y,
-            linearDrag = waterDrag != null ? waterDrag.Linear : 0f,
-            quadraticDrag = waterDrag != null ? waterDrag.Quadratic : 0f,
-            angularLinearDrag = waterDrag != null ? waterDrag.AngularLinear : 0f,
-        };
+            float inertia = yawInertiaOverride > 0f ? yawInertiaOverride
+                          : BodyLength > 0f ? body.mass * BodyLength * BodyLength / 12f
+                          : body.inertiaTensor.y;
+            return new BodyParameters
+            {
+                mass = body.mass,
+                yawInertia = inertia,
+                linearDrag = waterDrag != null ? waterDrag.Linear : 0f,
+                quadraticDrag = waterDrag != null ? waterDrag.Quadratic : 0f,
+                angularLinearDrag = inertia / Mathf.Max(0.05f, yawDampingTime),
+            };
+        }
 
         private void OnPostureChanged(Posture posture, string reason)
         {
@@ -150,12 +230,30 @@ namespace OtterLocomotion
             Handles.color = new Color(1f, 0.55f, 0.1f);
             Handles.DrawLine(o - bar * 0.3f, o + bar * 0.3f, 3f);
 
+            string allocation = "";
+            if (HasLimbGeometry)
+            {
+                for (int i = 0; i < OtterRig.LimbCount; i++)
+                {
+                    if (!actuators.present[i]) continue;
+                    var lf = allocator.limbs[i];
+                    Vector3 p = ToWorld(actuators.points[i]);
+                    Vector3 f = s.forward * lf.force.x + s.right * lf.force.y;
+                    Handles.color = lf.saturated ? Color.red : OtterRig.IsFore((LimbId)i) ? new Color(0.45f, 0.8f, 1f) : new Color(1f, 0.7f, 0.3f);
+                    Handles.DrawWireDisc(p, Vector3.up, 0.015f);
+                    Handles.DrawLine(p, p + f * forceGizmoScale, 3f);
+                }
+                Vector3 a = allocator.Achieved;
+                allocation = $"\nallocated Fx {a.x:F1}  Fy {a.y:F1}  Mz {a.z:F2}  ({allocator.SaturatedStrokes} strokes at limit)";
+            }
+
             string flip = postureMachine.IsFlipping ? $" rolling {postureMachine.FlipProgress:P0}" : "";
             Handles.Label(o + Vector3.up * 0.3f,
                 $"{postureMachine.Current}{flip}  roll {postureMachine.RollDeg:F0}\n" +
                 $"{Intent.band}  u {s.surge:F2} -> {d.speedTarget:F2} (cap {d.speedCap:F2})\n" +
                 $"heading err {d.headingErrorDeg:F0}  r {s.yawRate:F0} -> {d.yawRateTarget:F0} (lim {d.yawRateLimit:F0})\n" +
-                $"Fx {d.surgeForce:F1} N  Fy {d.swayForce:F1} N  Mz {d.yawMoment:F2} N·m  bank {d.bankTargetDeg:F0}");
+                $"demand  Fx {d.surgeForce:F1} N  Fy {d.swayForce:F1} N  Mz {d.yawMoment:F2} N·m  bank {d.bankTargetDeg:F0}" +
+                allocation);
         }
 #endif
     }

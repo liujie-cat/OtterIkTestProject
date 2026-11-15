@@ -35,6 +35,18 @@ namespace OtterLocomotion.EditorTools
         [MenuItem("Tools/Otter Locomotion/Add Locomotion Brain To Otter", true)]
         static bool CanRun() => !EditorApplication.isPlayingOrWillChangePlaymode;
 
+        [MenuItem("Tools/Otter Locomotion/Debug/Report Brain Settings")]
+        static void ReportBrain()
+        {
+            var brains = Object.FindObjectsByType<OtterLocomotionBrain>(FindObjectsSortMode.None);
+            var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+            var lines = new System.Collections.Generic.List<string> { $"scene {scene.name} dirty={scene.isDirty} playing={EditorApplication.isPlaying} brains={brains.Length}" };
+            foreach (var b in brains)
+                lines.Add($"{b.name}: swayPriority={b.allocatorSettings.swayPriority} foreThrust(max={b.actuatorSettings.foreThrust.maxAccel}, cost={b.actuatorSettings.foreThrust.cost}) " +
+                          $"yawDampingTime={b.yawDampingTime} headLengthRatio={b.headLengthRatio}");
+            System.IO.File.WriteAllLines(System.IO.Path.Combine("Logs", "LocomotionBrainReport.txt"), lines);
+        }
+
         /// <summary>Puts the (compute-only) brain on the otter so its gizmos show during manual Play. Undoable; not saved.</summary>
         [MenuItem("Tools/Otter Locomotion/Add Locomotion Brain To Otter")]
         static void AddBrain()
@@ -71,7 +83,10 @@ namespace OtterLocomotion.EditorTools
                     Stop();
                     return;
                 }
-                if (movement.GetComponent<OtterLocomotionBrain>() == null) movement.gameObject.AddComponent<OtterLocomotionBrain>();
+                // always the code defaults, so runs compare; a brain saved in the scene is swapped out for this Play only
+                var sceneBrain = movement.GetComponent<OtterLocomotionBrain>();
+                if (sceneBrain != null) Object.DestroyImmediate(sceneBrain);
+                movement.gameObject.AddComponent<OtterLocomotionBrain>();
                 var host = new GameObject("LocomotionPlayback (runtime)");
                 playback = host.AddComponent<OtterInputPlayback>();
                 playback.movement = movement;

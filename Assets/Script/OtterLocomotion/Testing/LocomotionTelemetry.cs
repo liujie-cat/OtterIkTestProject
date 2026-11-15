@@ -63,6 +63,11 @@ namespace OtterLocomotion.Testing
             public float[] limb;
             public Posture posture;
             public float supine, roll, speedTarget, speedCap, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
+            public bool allocated;
+            public Vector3 achieved;
+            public Vector2[] limbForce;
+            public float[] limbYaw;
+            public int saturated;
         }
 
         private struct PostureEvent
@@ -92,18 +97,16 @@ namespace OtterLocomotion.Testing
                 enabled = false;
                 return;
             }
-            foreach (var ik in FindObjectsOfType<AdvancedTwoBoneIK>().Where(k => k.isActiveAndEnabled && k.target && k.root?.bone))
+            foreach (var ik in FindObjectsOfType<AdvancedTwoBoneIK>().Where(k => k.isActiveAndEnabled && k.target))
             {
-                string bone = ik.root.bone.name;
-                string name = (bone.Contains("dupli") ? "F" : "H") + (bone.EndsWith(".r") ? "R" : "L");
+                if (!OtterRig.TryClassify(ik, out var limb)) continue;
                 var space = Girdle(ik.root.bone);
-                limbs.Add(new Limb { name = name, target = ik.target, space = space, restLocal = space.InverseTransformPoint(ik.target.position) });
+                limbs.Add(new Limb { name = limb.ToString(), target = ik.target, space = space, restLocal = space.InverseTransformPoint(ik.target.position) });
             }
             limbs.Sort((a, b) => string.CompareOrdinal(a.name, b.name));
-            var bones = movement.GetComponentsInChildren<Transform>().Where(t => t.gameObject.activeInHierarchy).ToList();
-            hip = bones.FirstOrDefault(t => t.name == "root.x");
-            chest = bones.FirstOrDefault(t => t.name == "spine_03.x");
-            head = bones.FirstOrDefault(t => t.name == "head.x");
+            hip = OtterRig.FindActiveBone(movement.transform, OtterRig.Hip);
+            chest = OtterRig.FindActiveBone(movement.transform, OtterRig.Chest);
+            head = OtterRig.FindActiveBone(movement.transform, OtterRig.Head);
             movement.OnKickCycleStart += OnKick;
             if (brain == null) brain = movement.GetComponent<OtterLocomotionBrain>();
             if (brain != null) brain.Posture.Changed += OnPosture;
@@ -162,6 +165,15 @@ namespace OtterLocomotion.Testing
                 s.swayForce = d.swayForce;
                 s.yawMoment = d.yawMoment;
                 s.bank = d.bankTargetDeg;
+                if (brain.HasLimbGeometry)
+                {
+                    var a = brain.Allocation;
+                    s.allocated = true;
+                    s.achieved = a.Achieved;
+                    s.limbForce = a.limbs.Select(l => l.force).ToArray();
+                    s.limbYaw = a.limbs.Select(l => l.yawMoment).ToArray();
+                    s.saturated = a.SaturatedStrokes;
+                }
             }
             kickThisFrame = false;
             samples.Add(s);
@@ -212,6 +224,12 @@ namespace OtterLocomotion.Testing
             var sb = new StringBuilder("t,seg,held,zone,intentYaw,steerYaw,bodyYaw,yawRate,speedFwd,speedLat,targetSpeed,kick,demand,headYaw,chestBend,chestRoll");
             foreach (var l in limbs) sb.Append(',').Append(l.name).Append("_cm");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedCap,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
+            bool allocated = brain != null && brain.HasLimbGeometry;
+            if (allocated)
+            {
+                sb.Append(",aSurgeN,aSwayN,aYawNm,saturated");
+                for (int i = 0; i < OtterRig.LimbCount; i++) sb.Append($",{(LimbId)i}_fx,{(LimbId)i}_fy,{(LimbId)i}_mz");
+            }
             sb.AppendLine();
             float t0 = samples.Count > 0 ? samples[0].t : 0f;
             foreach (var s in samples)
@@ -223,6 +241,16 @@ namespace OtterLocomotion.Testing
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.speedCap, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
+                if (allocated)
+                {
+                    sb.Append(string.Format(ci, ",{0:F2},{1:F2},{2:F3},{3}", s.achieved.x, s.achieved.y, s.achieved.z, s.saturated));
+                    for (int i = 0; i < OtterRig.LimbCount; i++)
+                    {
+                        Vector2 f = s.allocated ? s.limbForce[i] : Vector2.zero;
+                        float mz = s.allocated ? s.limbYaw[i] : 0f;
+                        sb.Append(string.Format(ci, ",{0:F2},{1:F2},{2:F3}", f.x, f.y, mz));
+                    }
+                }
                 sb.AppendLine();
             }
             return sb.ToString();
@@ -241,6 +269,21 @@ namespace OtterLocomotion.Testing
             var sb = new StringBuilder();
             sb.AppendLine($"# Locomotion playback '{label}', {samples.Count} frames, limbs: {string.Join(" ", limbs.Select(l => l.name))}");
             sb.AppendLine("# times in seconds from segment start; 'lead' = body reaction time minus limb reaction time (+ = limbs first)");
+            if (brain != null && brain.HasLimbGeometry)
+            {
+                var p = brain.Parameters;
+                var al = brain.allocatorSettings;
+                sb.AppendLine($"# allocator priorities surge {al.surgePriority} sway {al.swayPriority} yaw {al.yawPriority}, effort {al.effortWeight}, change {al.changeWeight}");
+                sb.AppendLine($"# body: length {brain.BodyLength * 100f:F1} cm, mass {p.mass:F2} kg, yaw inertia {p.yawInertia:F4} kg m^2, " +
+                              $"drag {p.linearDrag:F2} + {p.quadraticDrag:F2}|v|, angular drag {p.angularLinearDrag:F2}");
+                for (int i = 0; i < OtterRig.LimbCount; i++)
+                {
+                    var g = brain.Geometry[i];
+                    if (!g.valid) continue;
+                    Vector3 a = (g.anchor - brain.CenterOfMass) * 100f;
+                    sb.AppendLine($"#   {(LimbId)i}: joint from centre (fwd {a.x:F1}, right {a.y:F1}, up {a.z:F1}) cm, limb {g.length * 100f:F1} cm");
+                }
+            }
             for (int seg = 0; seg < playback.segments.Count; seg++)
             {
                 var idx = Enumerable.Range(0, samples.Count).Where(i => samples[i].seg == seg).ToList();
@@ -283,8 +326,31 @@ namespace OtterLocomotion.Testing
             var yPeak = PeakBy(x => x.swayForce);
             var bPeak = PeakBy(x => x.bank);
             sb.AppendLine($"  demand: end {last.posture} (supine {last.supine:F2}), speed target {last.speedTarget:F2} cap {last.speedCap:F2}; " +
-                          $"peak r* {rPeak.yawRateTarget:F0} deg/s, Mz {mPeak.yawMoment:F2} N·m, Fx {fPeak.surgeForce:F1} N (mean {seq.Average(x => x.surgeForce):F1}), " +
+                          $"peak r* {rPeak.yawRateTarget:F0} deg/s, Mz {mPeak.yawMoment:F3} N·m, Fx {fPeak.surgeForce:F1} N (mean {seq.Average(x => x.surgeForce):F1}), " +
                           $"Fy {yPeak.swayForce:F1} N, bank {bPeak.bank:F0} deg at {(bPeak.t - t0).ToString("F2", ci)} s");
+
+            var alloc = seq.Where(x => x.allocated).ToList();
+            if (alloc.Count == 0) return;
+            string Tracking(System.Func<Sample, float> demanded, System.Func<Sample, float> achieved)
+            {
+                float total = alloc.Sum(x => Mathf.Abs(demanded(x)));
+                if (total < 1e-3f * alloc.Count) return "-";
+                return (1f - alloc.Sum(x => Mathf.Abs(demanded(x) - achieved(x))) / total).ToString("P0", ci);
+            }
+            float yawPeak = alloc.Max(x => Mathf.Abs(x.yawMoment));
+            var turning = alloc.Where(x => Mathf.Abs(x.yawMoment) > 0.1f * yawPeak && yawPeak > 1e-3f).ToList();
+            // each limb's share of the moment actually produced, signed along that frame's total
+            float foreYaw = turning.Sum(x => (x.limbYaw[(int)LimbId.FL] + x.limbYaw[(int)LimbId.FR]) * Mathf.Sign(x.achieved.z));
+            float allYaw = turning.Sum(x => Mathf.Abs(x.achieved.z));
+            float hindThrust = alloc.Sum(x => Mathf.Max(0f, x.limbForce[(int)LimbId.HL].x) + Mathf.Max(0f, x.limbForce[(int)LimbId.HR].x));
+            float allThrust = alloc.Sum(x => x.limbForce.Sum(f => Mathf.Max(0f, f.x)));
+            float peakLimb = alloc.Max(x => x.limbForce.Max(f => f.magnitude));
+            float saturatedShare = alloc.Count(x => x.saturated > 0) / (float)alloc.Count;
+            string Share(float part, float whole) => whole > 1e-4f ? (part / whole).ToString("P0", ci) : "-";
+            sb.AppendLine($"  allocation: met yaw {Tracking(x => x.yawMoment, x => x.achieved.z)}, surge {Tracking(x => x.surgeForce, x => x.achieved.x)}, " +
+                          $"sway {Tracking(x => x.swayForce, x => x.achieved.y)} | yaw from forepaws {Share(foreYaw, allYaw)}, thrust from hind {Share(hindThrust, allThrust)}, " +
+                          $"braking {alloc.Average(x => x.limbForce.Sum(f => Mathf.Max(0f, -f.x))):F2} N avg | " +
+                          $"peak limb {peakLimb:F1} N, limits hit {saturatedShare.ToString("P0", ci)} of frames");
         }
 
         // Left-minus-right IK target offset of a limb pair; symmetric cruise strokes cancel, steering strokes don't.
