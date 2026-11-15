@@ -18,6 +18,8 @@ namespace OtterLocomotion.Testing
     {
         public OtterInputPlayback playback;
         public MovementControllerRB movement;
+        [Tooltip("Optional: also records posture and the demand layer's output.")]
+        public OtterLocomotionBrain brain;
         public string label = "baseline";
 
         [Header("Reaction thresholds")]
@@ -28,6 +30,21 @@ namespace OtterLocomotion.Testing
         public float turnMinDeg = 15f;
         public float settleToleranceDeg = 5f;
         public float stopSpeed = 0.1f;
+
+        [Header("Feel targets (checked per segment in the summary)")]
+        public float headReactionMax = 0.10f;
+        public float limbLeadMin = 0.10f;
+        [Tooltip("Time to 90% of a 90 degree turn; scales linearly to turn170Budget for a 170 degree turn.")]
+        public float turn90Budget = 1.0f;
+        public float turn170Budget = 1.5f;
+        public float overshootMaxDeg = 8f;
+        [Tooltip("Mean forward speed over the last second within this fraction of the target.")]
+        public float speedMeanTolerance = 0.10f;
+        [Tooltip("(max - min) / (2 * mean) over the last second.")]
+        public float speedRippleMax = 0.25f;
+        [Tooltip("Coasting from >= 1 m/s after release should take this long to drop below stopSpeed.")]
+        public float stopTimeMin = 0.8f;
+        public float stopTimeMax = 1.5f;
 
         private struct Limb
         {
@@ -44,8 +61,20 @@ namespace OtterLocomotion.Testing
             public bool held, kick;
             public MovementControllerRB.MoveZone zone;
             public float[] limb;
+            public Posture posture;
+            public float supine, roll, speedTarget, speedCap, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
         }
 
+        private struct PostureEvent
+        {
+            public float t;
+            public int seg;
+            public Posture posture;
+            public string reason;
+        }
+
+        private int checkCount, passCount;
+        private readonly List<PostureEvent> postureEvents = new List<PostureEvent>();
         private readonly List<Limb> limbs = new List<Limb>();
         private readonly List<Sample> samples = new List<Sample>();
         private Transform hip, chest, head;
@@ -76,11 +105,20 @@ namespace OtterLocomotion.Testing
             chest = bones.FirstOrDefault(t => t.name == "spine_03.x");
             head = bones.FirstOrDefault(t => t.name == "head.x");
             movement.OnKickCycleStart += OnKick;
+            if (brain == null) brain = movement.GetComponent<OtterLocomotionBrain>();
+            if (brain != null) brain.Posture.Changed += OnPosture;
         }
 
         private void OnDestroy()
         {
             if (movement != null) movement.OnKickCycleStart -= OnKick;
+            if (brain != null) brain.Posture.Changed -= OnPosture;
+        }
+
+        private void OnPosture(Posture posture, string reason)
+        {
+            if (playback != null && playback.SegmentIndex >= 0 && !playback.Finished)
+                postureEvents.Add(new PostureEvent { t = Time.time, seg = playback.SegmentIndex, posture = posture, reason = reason });
         }
 
         private void OnKick(MovementControllerRB.KickCycleEvent e) => kickThisFrame = true;
@@ -111,6 +149,20 @@ namespace OtterLocomotion.Testing
                 chestRoll = chest ? ChestRoll(body) : 0f,
                 limb = limbs.Select(l => l.space.TransformVector(l.space.InverseTransformPoint(l.target.position) - l.restLocal).magnitude * 100f).ToArray(),
             };
+            if (brain != null)
+            {
+                var d = brain.Demand;
+                s.posture = brain.Posture.Current;
+                s.supine = brain.Posture.SupineFraction;
+                s.roll = brain.Posture.RollDeg;
+                s.speedTarget = d.speedTarget;
+                s.speedCap = d.speedCap;
+                s.yawRateTarget = d.yawRateTarget;
+                s.surgeForce = d.surgeForce;
+                s.swayForce = d.swayForce;
+                s.yawMoment = d.yawMoment;
+                s.bank = d.bankTargetDeg;
+            }
             kickThisFrame = false;
             samples.Add(s);
         }
@@ -159,6 +211,7 @@ namespace OtterLocomotion.Testing
             var ci = CultureInfo.InvariantCulture;
             var sb = new StringBuilder("t,seg,held,zone,intentYaw,steerYaw,bodyYaw,yawRate,speedFwd,speedLat,targetSpeed,kick,demand,headYaw,chestBend,chestRoll");
             foreach (var l in limbs) sb.Append(',').Append(l.name).Append("_cm");
+            if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedCap,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             sb.AppendLine();
             float t0 = samples.Count > 0 ? samples[0].t : 0f;
             foreach (var s in samples)
@@ -167,13 +220,24 @@ namespace OtterLocomotion.Testing
                     s.t - t0, s.seg, s.held ? 1 : 0, s.zone, s.intentYaw, s.steerYaw, s.bodyYaw, s.yawRate, s.speedFwd, s.speedLat,
                     s.targetSpeed, s.kick ? 1 : 0, s.demand, s.headYaw, s.chestBend, s.chestRoll));
                 foreach (var x in s.limb) sb.Append(',').Append(x.ToString("F2", ci));
+                if (brain != null)
+                    sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
+                        s.posture, s.supine, s.roll, s.speedTarget, s.speedCap, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
                 sb.AppendLine();
             }
             return sb.ToString();
         }
 
+        private string Check(string name, bool ok)
+        {
+            checkCount++;
+            if (ok) passCount++;
+            return (ok ? "ok " : "MISS ") + name;
+        }
+
         private string Summary()
         {
+            checkCount = passCount = 0;
             var sb = new StringBuilder();
             sb.AppendLine($"# Locomotion playback '{label}', {samples.Count} frames, limbs: {string.Join(" ", limbs.Select(l => l.name))}");
             sb.AppendLine("# times in seconds from segment start; 'lead' = body reaction time minus limb reaction time (+ = limbs first)");
@@ -198,8 +262,29 @@ namespace OtterLocomotion.Testing
                 {
                     StopMetrics(sb, idx, t0);
                 }
+                if (brain != null) DemandMetrics(sb, idx, seg, t0);
             }
+            sb.AppendLine($"\nfeel targets met: {passCount}/{checkCount}");
             return sb.ToString();
+        }
+
+        // What the demand layer asked for over the segment, next to what the body actually did.
+        private void DemandMetrics(StringBuilder sb, List<int> idx, int seg, float t0)
+        {
+            var ci = CultureInfo.InvariantCulture;
+            var seq = idx.Select(i => samples[i]).ToList();
+            var last = seq[seq.Count - 1];
+            foreach (var e in postureEvents.Where(e => e.seg == seg))
+                sb.AppendLine($"  posture -> {e.posture} at {(e.t - t0).ToString("F2", ci)} s ({e.reason})");
+            Sample PeakBy(System.Func<Sample, float> f) => seq.OrderByDescending(x => Mathf.Abs(f(x))).First();
+            var rPeak = PeakBy(x => x.yawRateTarget);
+            var mPeak = PeakBy(x => x.yawMoment);
+            var fPeak = PeakBy(x => x.surgeForce);
+            var yPeak = PeakBy(x => x.swayForce);
+            var bPeak = PeakBy(x => x.bank);
+            sb.AppendLine($"  demand: end {last.posture} (supine {last.supine:F2}), speed target {last.speedTarget:F2} cap {last.speedCap:F2}; " +
+                          $"peak r* {rPeak.yawRateTarget:F0} deg/s, Mz {mPeak.yawMoment:F2} N·m, Fx {fPeak.surgeForce:F1} N (mean {seq.Average(x => x.surgeForce):F1}), " +
+                          $"Fy {yPeak.swayForce:F1} N, bank {bPeak.bank:F0} deg at {(bPeak.t - t0).ToString("F2", ci)} s");
         }
 
         // Left-minus-right IK target offset of a limb pair; symmetric cruise strokes cancel, steering strokes don't.
@@ -239,10 +324,18 @@ namespace OtterLocomotion.Testing
             float end = samples[idx[idx.Count - 1]].t - t0;
             string F(float? x) => x.HasValue ? x.Value.ToString("F2", CultureInfo.InvariantCulture) : "never";
             float? tLimb = tFront.HasValue && tHind.HasValue ? Mathf.Min(tFront.Value, tHind.Value) : tFront ?? tHind;
-            string lead = tBody.HasValue && tLimb.HasValue ? (tBody.Value - tLimb.Value).ToString("+0.00;-0.00", CultureInfo.InvariantCulture) : "n/a";
+            float? leadValue = tBody.HasValue && tLimb.HasValue ? tBody.Value - tLimb.Value : (float?)null;
+            string lead = leadValue.HasValue ? leadValue.Value.ToString("+0.00;-0.00", CultureInfo.InvariantCulture) : "n/a";
+            float overshoot = Mathf.Max(0f, maxProgress - 1f) * Mathf.Abs(delta);
             sb.AppendLine($"  turn {delta:+0;-0} deg | first reaction: head {F(tHead)}  spine {F(tSpine)}  limb L/R asymmetry front {F(tFront)} hind {F(tHind)}  body {F(tBody)} | limb lead {lead}");
-            sb.AppendLine($"  progress: 50% at {F(t50)}  90% at {F(t90)}  overshoot {Mathf.Max(0f, maxProgress - 1f) * Mathf.Abs(delta):F1} deg  " +
+            sb.AppendLine($"  progress: 50% at {F(t50)}  90% at {F(t90)}  overshoot {overshoot:F1} deg  " +
                           $"settled(±{settleToleranceDeg:F0}) {(lastOutside < end - 0.2f ? lastOutside.ToString("F2", CultureInfo.InvariantCulture) : "no")}  peak yaw rate {peakRate:F0} deg/s");
+            float budget = Mathf.Lerp(turn90Budget, turn170Budget, Mathf.InverseLerp(90f, 170f, Mathf.Abs(delta)));
+            sb.AppendLine("  targets: " + string.Join(" | ",
+                Check($"head <= {headReactionMax:F2}", tHead.HasValue && tHead.Value <= headReactionMax),
+                Check($"limb lead >= +{limbLeadMin:F2}", leadValue.HasValue && leadValue.Value >= limbLeadMin),
+                Check($"90% <= {budget:F2}", t90.HasValue && t90.Value <= budget),
+                Check($"overshoot <= {overshootMaxDeg:F0}", overshoot <= overshootMaxDeg)));
         }
 
         private void SpeedMetrics(StringBuilder sb, List<int> idx, float t0)
@@ -265,6 +358,10 @@ namespace OtterLocomotion.Testing
             sb.AppendLine($"  speed: target {target:F2} m/s, 90% at {(t90.HasValue ? t90.Value.ToString("F2", ci) : "never")} s" +
                           (fromRest ? $", first push (>0.3 m/s) at {(tPush.HasValue ? tPush.Value.ToString("F2", ci) : "never")} s" : "") +
                           $", last 1 s mean {mean:F2} (min {minS:F2}, max {maxS:F2}) m/s, kick interval {interval}");
+            float ripple = mean > 1e-3f ? (maxS - minS) / (2f * mean) : float.PositiveInfinity;
+            sb.AppendLine("  targets: " + string.Join(" | ",
+                Check($"mean within ±{speedMeanTolerance:P0} of target ({mean / Mathf.Max(target, 1e-3f):P0})", Mathf.Abs(mean - target) <= speedMeanTolerance * target),
+                Check($"ripple <= ±{speedRippleMax:P0} (±{ripple:P0})", ripple <= speedRippleMax)));
         }
 
         private void StopMetrics(StringBuilder sb, List<int> idx, float t0)
@@ -279,6 +376,8 @@ namespace OtterLocomotion.Testing
                 if (Mathf.Abs(s.speedFwd) < stopSpeed) tStop = s.t - t0;
             }
             sb.AppendLine($"  stop: from {samples[idx[0]].speedFwd:F2} m/s, below {stopSpeed:F2} at {(tStop.HasValue ? tStop.Value.ToString("F2", CultureInfo.InvariantCulture) : "never")} s, coasted {dist:F2} m");
+            if (samples[idx[0]].speedFwd >= 1f)
+                sb.AppendLine("  targets: " + Check($"glide {stopTimeMin:F1}-{stopTimeMax:F1} s", tStop.HasValue && tStop.Value >= stopTimeMin && tStop.Value <= stopTimeMax));
         }
     }
 }

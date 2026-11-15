@@ -80,4 +80,5 @@ public class WaterDrag : MonoBehaviour
 
     public float Linear => linear;
     public float Quadratic => quadratic;
+    public float AngularLinear => angularLinear;
 }

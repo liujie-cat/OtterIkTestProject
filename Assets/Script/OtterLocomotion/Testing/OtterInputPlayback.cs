@@ -24,13 +24,16 @@ namespace OtterLocomotion.Testing
             public Zone zone;
             [Tooltip("Heading relative to the otter's facing at playback start (degrees, + = right).")]
             public float headingDeg;
+            [Tooltip("Press the posture toggle as the segment starts.")]
+            public bool pressFlip;
 
-            public Segment(string name, float duration, Zone zone, float headingDeg)
+            public Segment(string name, float duration, Zone zone, float headingDeg, bool pressFlip = false)
             {
                 this.name = name;
                 this.duration = duration;
                 this.zone = zone;
                 this.headingDeg = headingDeg;
+                this.pressFlip = pressFlip;
             }
         }
 
@@ -64,6 +67,19 @@ namespace OtterLocomotion.Testing
             new Segment("release, coast to stop", 2.5f, Zone.Release, 0f),
             new Segment("aim pivot right 90", 2.5f, Zone.Aim, 90f),
             new Segment("release", 1.5f, Zone.Release, 90f),
+        };
+
+        /// <summary>Exercises every posture rule: band edges both ways, manual toggles while swimming and at rest.</summary>
+        public static List<Segment> PostureScript() => new List<Segment>
+        {
+            new Segment("rest (expect supine)", 1.5f, Zone.Release, 0f),
+            new Segment("swim: band edge -> prone", 3.0f, Zone.Swim, 0f),
+            new Segment("F while swimming -> supine, ease to cap", 3.5f, Zone.Swim, 0f, pressFlip: true),
+            new Segment("sprint: band edge -> prone", 2.5f, Zone.Sprint, 0f),
+            new Segment("release: glide, then supine", 3.0f, Zone.Release, 0f),
+            new Segment("F at rest -> prone", 1.5f, Zone.Release, 0f, pressFlip: true),
+            new Segment("aim pivot left 90: band edge -> supine once slow", 2.5f, Zone.Aim, -90f),
+            new Segment("release", 1.0f, Zone.Release, -90f),
         };
 
         private void Start()
@@ -104,6 +120,11 @@ namespace OtterLocomotion.Testing
             {
                 SegmentIndex = index;
                 SegmentStartTime = Time.time;
+                if (segments[index].pressFlip)
+                {
+                    var brain = movement.GetComponent<OtterLocomotionBrain>();
+                    if (brain != null) brain.RequestPostureToggle();
+                }
             }
             var s = segments[index];
             Held = s.zone != Zone.Release;
