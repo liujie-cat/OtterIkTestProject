@@ -99,6 +99,8 @@ namespace OtterLocomotion.Testing
             /// <summary>LimbStrokeAnimator's fluke (0..1) and its beat (cycles); the hip and chest bones' pitch (deg, + = front up); per hind foot the ankle's height over the hip joint (cm, world up).</summary>
             public float fluke, flukePhase, hipPitch, chestPitch;
             public float[] footHeave;
+            /// <summary>SpineKickWave sent a wave packet down the spine this frame.</summary>
+            public bool pulse;
             public Posture posture;
             public float supine, roll, speedTarget, speedCap, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
             public bool allocated;
@@ -127,8 +129,9 @@ namespace OtterLocomotion.Testing
         private readonly List<Sample> samples = new List<Sample>();
         private Transform hip, chest, head;
         private LimbStrokeAnimator animator;
+        private SpineKickWave spineWave;
         private string footInfo = "";
-        private bool kickThisFrame;
+        private bool kickThisFrame, pulseThisFrame;
         private float prevYaw;
         private bool hasPrevYaw;
 
@@ -177,6 +180,8 @@ namespace OtterLocomotion.Testing
             movement.OnKickCycleStart += OnKick;
             if (brain == null) brain = movement.GetComponent<OtterLocomotionBrain>();
             animator = movement.GetComponent<LimbStrokeAnimator>();
+            spineWave = movement.GetComponent<SpineKickWave>();
+            if (spineWave != null) spineWave.Pulsed += OnPulse;
             if (brain != null) brain.Posture.Changed += OnPosture;
         }
 
@@ -211,6 +216,7 @@ namespace OtterLocomotion.Testing
                     Destroy(f.trail.gameObject);
                 }
             if (movement != null) movement.OnKickCycleStart -= OnKick;
+            if (spineWave != null) spineWave.Pulsed -= OnPulse;
             if (brain != null) brain.Posture.Changed -= OnPosture;
         }
 
@@ -221,6 +227,7 @@ namespace OtterLocomotion.Testing
         }
 
         private void OnKick(MovementControllerRB.KickCycleEvent e) => kickThisFrame = true;
+        private void OnPulse() => pulseThisFrame = true;
 
         private void LateUpdate()
         {
@@ -293,6 +300,7 @@ namespace OtterLocomotion.Testing
             s.hipPitch = hip != null ? Mathf.Asin(Mathf.Clamp(Vector3.Dot(hip.up, Vector3.up), -1f, 1f)) * Mathf.Rad2Deg : 0f;
             s.chestPitch = chest != null ? Mathf.Asin(Mathf.Clamp(Vector3.Dot(chest.up, Vector3.up), -1f, 1f)) * Mathf.Rad2Deg : 0f;
             s.footHeave = feet.Select(f => (f.ankle.position.y - f.hipJoint.position.y) * 100f).ToArray();
+            s.pulse = pulseThisFrame;
             if (brain != null)
             {
                 var d = brain.Demand;
@@ -325,6 +333,7 @@ namespace OtterLocomotion.Testing
                 }
             }
             kickThisFrame = false;
+            pulseThisFrame = false;
             samples.Add(s);
         }
 
@@ -383,6 +392,8 @@ namespace OtterLocomotion.Testing
             // the fluke: how far in (0..1), its beat (cycles), the hip bone's pitch (deg) and each ankle's height over its hip joint (cm)
             sb.Append(",fluke,flukePh,hipPitch,chestPitch");
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_heave");
+            // 1 = SpineKickWave sent a wave packet down the spine
+            sb.Append(",pulse");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedCap,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -413,6 +424,7 @@ namespace OtterLocomotion.Testing
                 foreach (var y in s.kickYaw) sb.Append(',').Append(y.ToString("F1", ci));
                 sb.Append(string.Format(ci, ",{0:F2},{1:F3},{2:F1},{3:F1}", s.fluke, s.flukePhase, s.hipPitch, s.chestPitch));
                 foreach (var h in s.footHeave) sb.Append(',').Append(h.ToString("F2", ci));
+                sb.Append(',').Append(s.pulse ? 1 : 0);
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.speedCap, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));

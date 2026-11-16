@@ -32,8 +32,8 @@ namespace OtterLocomotion
         [Tooltip("Hind feet kicking together: big, slower kicks when swimming fast.")]
         [FormerlySerializedAs("hind")]
         public RhythmProfile hindTogether = new RhythmProfile(1.1f, 1.5f, 0.3f, 3f);
-        [Tooltip("Hind feet taking turns: small, quicker kicks at low speed (turning on the spot, swimming on the back).")]
-        public RhythmProfile hindAlternate = new RhythmProfile(1.6f, 2.2f, 0.35f, 3f);
+        [Tooltip("Hind feet taking turns: smaller kicks at low speed (turning on the spot, swimming on the back).")]
+        public RhythmProfile hindAlternate = new RhythmProfile(1.1f, 1.6f, 0.4f, 3f);
         public RhythmProfile fore = new RhythmProfile(1.6f, 3.2f, 0.4f, 1.5f);
         [Tooltip("Hind feet kick together once the speed target (m/s) reaches this, and take turns again below hindApartSpeed; in between they keep their gait.")]
         public float hindTogetherSpeed = 1.6f;
