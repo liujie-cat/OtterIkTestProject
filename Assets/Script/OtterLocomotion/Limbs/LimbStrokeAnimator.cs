@@ -157,6 +157,30 @@ namespace OtterLocomotion
     }
 
     /// <summary>
+    /// Turning, the hind feet kick in different directions: each kick loop swings about the hip's dorso-ventral axis,
+    /// the foot on the outside of the turn kicking out wide and the inside one in toward the tail. Turning on the spot,
+    /// the inside foot's kick swings round toward the middle of the turn, sculling the hindquarters around. A braking
+    /// kick runs its loop backward, so it swings the other way to push the same way round.
+    /// </summary>
+    [Serializable]
+    public class HindTurn
+    {
+        [Tooltip("Yaw rate target (deg/s) that counts as a full turn.")]
+        public float fullTurnRate = 90f;
+        [Tooltip("Speed target (m/s) from which the otter swims through its turns rather than turning on the spot.")]
+        public float travelSpeed = 0.5f;
+        [Tooltip("How far the outside foot's kick swings out, and the inside one's in, at a full turn (deg).")]
+        public float outerYaw = 45f;
+        public float innerYaw = 15f;
+        [Tooltip("Turning on the spot, how far round toward the middle of the turn (90 deg out) the inside foot's kick swings at a full turn.")]
+        [Range(0f, 1f)] public float innerSteer = 0.75f;
+        [Tooltip("Most a braking kick swings (deg); swung far in, its stretched end would cross under the other leg.")]
+        public float maxBrakeYaw = 40f;
+        [Tooltip("Time constant of the kicks following the turn (s).")]
+        public float response = 0.15f;
+    }
+
+    /// <summary>
     /// Turns the hind flippers at the ankle and toes, on top of the IK: through the push the web turns square to its sweep
     /// and spreads, so it shoves water; drawing forward it folds and turns edge-on so it slips through. The web is a flat
     /// fan, so either face can meet the sweep: each push holds the one the ankle could reach at the last push's fastest
@@ -190,7 +214,7 @@ namespace OtterLocomotion
     /// <summary>
     /// Moves the limb IK targets along stroke paths from OtterLocomotionBrain's rhythm: phase and strength per limb,
     /// so the limbs show what the allocation asks of them. Hind feet draw in and kick out on a loop about the hip joint
-    /// (HindKick), run backward to brake; forepaws sweep along the allocated
+    /// (HindKick), run backward to brake, and part ways in a turn (HindTurn); forepaws sweep along the allocated
     /// force direction, and rest folded on the chest when they have nothing to do, as on the back. Paths hang off the
     /// chest / hip bone, so they follow the spine's bend and roll. After the IK solve the hind flippers are turned at
     /// the ankle and toes (FlipperPose) to push square through the power stroke and slip edge-on through the recovery.
@@ -204,6 +228,7 @@ namespace OtterLocomotion
         [Tooltip("Found on this object when empty.")]
         public OtterLocomotionBrain brain;
         public HindKick hindKick = new HindKick();
+        public HindTurn hindTurn = new HindTurn();
         public FlipperPose flipper = new FlipperPose();
         public StrokeShape foreStroke = new StrokeShape();
         [Tooltip("Time constant of a stroke growing in when a limb starts and fading out when it rests (s).")]
@@ -222,6 +247,8 @@ namespace OtterLocomotion
             public float length;
             /// <summary>Current stroke size: metres for a forepaw, a fraction of the full kick loop for a hind foot.</summary>
             public float size;
+            /// <summary>Hind foot: how far its kick loop swings about the hip's dorso-ventral axis (deg, + = out).</summary>
+            public float yaw;
             public AdvancedTwoBoneIK ik;
             /// <summary>Whether the scene limits the chain's mid joint (knee / elbow) about its rest pose.</summary>
             public bool kneeLimited;
@@ -258,8 +285,13 @@ namespace OtterLocomotion
         private readonly List<Behaviour> suspended = new List<Behaviour>();
         private AfterLimbIK afterIK;
         private bool started;
+        /// <summary>The turn the hind kicks follow, -1..1 of a full turn, + = right.</summary>
+        private float turn;
 
         public bool HasLimbs => limbs.Any(l => l.valid);
+
+        /// <summary>How far a hind foot's kick loop swings out for the turn (deg); 0 for a forepaw.</summary>
+        public float KickYaw(LimbId limb) => limbs[(int)limb].yaw;
 
         /// <summary>A hind flipper's ankle turn from rest (deg), whether it is set to push, its web width, and the turn its goal
         /// asks for (deg); zeros for a forepaw.</summary>
@@ -405,12 +437,17 @@ namespace OtterLocomotion
             float ahead = Time.time - Time.fixedTime;
             float blend = 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, targetSmoothing));
             float grow = 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, sizeTime));
+            var demand = brain.Demand;
+            float turnGoal = Mathf.Clamp(demand.yawRateTarget / Mathf.Max(1f, hindTurn.fullTurnRate), -1f, 1f);
+            turn = Mathf.Lerp(turn, turnGoal, 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, hindTurn.response)));
+            float travel = Mathf.Clamp01(demand.speedTarget / Mathf.Max(1e-3f, hindTurn.travelSpeed));
             for (int i = 0; i < OtterRig.LimbCount; i++)
             {
                 ref var l = ref limbs[i];
                 if (!l.valid) continue;
                 var st = brain.Rhythm.limbs[i];
                 l.size = Mathf.Lerp(l.size, TargetSize(i, l, st), grow);
+                if (!OtterRig.IsFore((LimbId)i)) l.yaw = KickYaw(l, st, travel);
                 float phase = st.active ? Mathf.Repeat(st.phase + st.rate * ahead, 1f) : 0f;
                 Vector3 goal = l.restLocal + l.girdle.InverseTransformVector(StrokeOffset(i, l, st, phase));
                 l.currentLocal = Vector3.Lerp(l.currentLocal, goal, blend);
@@ -575,12 +612,28 @@ namespace OtterLocomotion
             // a braking kick pushes forward: the loop runs backward
             if (st.direction.x > 0f) s = Mathf.Repeat(0.5f - s, 1f);
             Vector3 p = hindKick.Point(s, Mathf.Max(l.size, hindKick.lightAmplitude));
-            Vector3 ankle = joint + l.length * (back * p.x + outward * p.y + belly * p.z);
+            float yaw = l.yaw * Mathf.Deg2Rad, cos = Mathf.Cos(yaw), sin = Mathf.Sin(yaw);
+            Vector3 swungBack = back * cos + outward * sin, swungOut = outward * cos - back * sin;
+            Vector3 ankle = joint + l.length * (swungBack * p.x + swungOut * p.y + belly * p.z);
             Vector3 offset = (ankle - rest) * hindKick.Engagement(l.size);
             float reach = Mathf.Abs(Vector3.Dot(rest - l.girdle.position, outward)) * hindKick.midlineReach;
             float inward = -Vector3.Dot(offset, outward);
             if (inward > 0f && reach > 1e-4f) offset += outward * (inward - reach * (1f - Mathf.Exp(-inward / reach)));
             return offset;
+        }
+
+        // How far a hind foot's kick loop swings for the turn (HindTurn), from the side of the turn the leg is on now
+        // (on the back the left leg is on the right), and whether the otter is swimming through the turn or turning on the spot.
+        private float KickYaw(in Limb l, in LimbStroke st, float travel)
+        {
+            var t = hindTurn;
+            float amount = Mathf.Abs(turn);
+            if (amount < 1e-3f) return 0f;
+            float side = Vector3.Dot(l.girdle.TransformPoint(l.jointLocal) - l.girdle.position, brain.State.right) >= 0f ? 1f : -1f;
+            float yaw = side != Mathf.Sign(turn)
+                ? t.outerYaw * amount
+                : Mathf.Lerp(-t.innerYaw * amount, 90f, amount * (1f - travel) * t.innerSteer);
+            return st.direction.x > 0f ? Mathf.Clamp(-yaw, -t.maxBrakeYaw, t.maxBrakeYaw) : yaw;
         }
 
         /// <summary>A hind kick's frame on the hip (world): the hip joint, back along the body, out toward the leg's side, and toward the belly.</summary>

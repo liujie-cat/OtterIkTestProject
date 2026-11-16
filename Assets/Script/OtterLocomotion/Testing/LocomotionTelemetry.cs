@@ -94,6 +94,8 @@ namespace OtterLocomotion.Testing
             public float[] footReach;
             /// <summary>Per hind foot, from LimbStrokeAnimator: ankle turn from rest (deg), push flag, web width, turn the goal asks for (deg).</summary>
             public Vector4[] flipperPose;
+            /// <summary>Per hind foot, from LimbStrokeAnimator: how far its kick loop swings out for the turn (deg).</summary>
+            public float[] kickYaw;
             public Posture posture;
             public float supine, roll, speedTarget, speedCap, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
             public bool allocated;
@@ -282,6 +284,7 @@ namespace OtterLocomotion.Testing
                 s.footNormalFwd[k] = Vector3.Dot(normal, fwd);
             }
             s.flipperPose = feet.Select(f => animator != null && System.Enum.TryParse<LimbId>(f.name, out var id) ? animator.FlipperState(id) : Vector4.zero).ToArray();
+            s.kickYaw = feet.Select(f => animator != null && System.Enum.TryParse<LimbId>(f.name, out var id) ? animator.KickYaw(id) : 0f).ToArray();
             if (brain != null)
             {
                 var d = brain.Demand;
@@ -367,6 +370,8 @@ namespace OtterLocomotion.Testing
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_turn,").Append(f.name).Append("_push,").Append(f.name).Append("_width,").Append(f.name).Append("_need");
             // ankle from the hip joint in the hip's axes, cm (forward, outward, ventral), and over the leg's length
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_pf,").Append(f.name).Append("_po,").Append(f.name).Append("_pv,").Append(f.name).Append("_reach");
+            // how far each kick loop swings out for the turn (deg)
+            foreach (var f in feet) sb.Append(',').Append(f.name).Append("_kyaw");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedCap,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -394,6 +399,7 @@ namespace OtterLocomotion.Testing
                     sb.Append(string.Format(ci, ",{0:F1},{1:F0},{2:F2},{3:F0}", p.x, p.y, p.z, p.w));
                 for (int k = 0; k < feet.Count; k++)
                     sb.Append(string.Format(ci, ",{0:F2},{1:F2},{2:F2},{3:F3}", s.footPath[k].x, s.footPath[k].y, s.footPath[k].z, s.footReach[k]));
+                foreach (var y in s.kickYaw) sb.Append(',').Append(y.ToString("F1", ci));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.speedCap, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
@@ -527,7 +533,7 @@ namespace OtterLocomotion.Testing
                 if (seq.Count < 8) continue;
                 var reach = seq.Select(s => s.footReach[k]).OrderBy(r => r).ToList();
                 float lo = reach[(int)(0.05f * (reach.Count - 1))], hi = reach[(int)(0.95f * (reach.Count - 1))];
-                Vector3 travel = Vector3.zero, mean = Vector3.zero;
+                Vector3 travel = Vector3.zero, mean = Vector3.zero, pushed = Vector3.zero;
                 var moved = new float[seq.Count];
                 float length = 0f;
                 for (int i = 1; i < seq.Count; i++)
@@ -536,7 +542,11 @@ namespace OtterLocomotion.Testing
                     travel += new Vector3(Mathf.Abs(d.x), Mathf.Abs(d.y), Mathf.Abs(d.z));
                     moved[i] = d.magnitude;
                     length += moved[i];
+                    if (seq[i].flipperPose != null && seq[i].flipperPose[k].y > 0.5f && seq[i - 1].flipperPose[k].y > 0.5f) pushed += d;
                 }
+                // which way the pushes sweep the foot seen from the back: 0 = straight back, + = out, +-180 = forward
+                string heading = pushed.sqrMagnitude > 1e-4f ? $"{Mathf.Atan2(pushed.y, -pushed.x) * Mathf.Rad2Deg:F0}" : "-";
+                float yaw = seq.Where(s => s.kickYaw != null).Select(s => s.kickYaw[k]).DefaultIfEmpty(0f).Average();
                 if (length < 1e-3f) length = moved[0] = 1f;
                 for (int i = 0; i < seq.Count; i++) mean += seq[i].footPath[k] * (moved[i] / length);
                 var c = new float[3, 3];
@@ -556,9 +566,10 @@ namespace OtterLocomotion.Testing
                           $" travel fwd/out/vent {100f * travel.x / total:F0}/{100f * travel.y / total:F0}/{100f * travel.z / total:F0}%" +
                           $" loop {Span(0).ToString("F1", ci)}x{Span(1).ToString("F1", ci)}x{Span(2).ToString("F1", ci)} cm" +
                           $" flat {(Span(1) > 1e-3f ? Span(2) / Span(1) : 0f).ToString("F2", ci)}" +
-                          $" main ({Mathf.Abs(main.x).ToString("F2", ci)},{Mathf.Abs(main.y).ToString("F2", ci)},{Mathf.Abs(main.z).ToString("F2", ci)})");
+                          $" main ({Mathf.Abs(main.x).ToString("F2", ci)},{Mathf.Abs(main.y).ToString("F2", ci)},{Mathf.Abs(main.z).ToString("F2", ci)})" +
+                          $" push {heading} deg, loop swung {yaw.ToString("F0", ci)} deg");
             }
-            sb.AppendLine($"  hind paths (ankle from hip joint; travel and main axis in fwd/out/vent): {string.Join(" | ", parts)}");
+            sb.AppendLine($"  hind paths (ankle from hip joint; travel and main axis in fwd/out/vent; push heading from straight back, + = out): {string.Join(" | ", parts)}");
         }
 
         // What the demand layer asked for over the segment, next to what the body actually did.
