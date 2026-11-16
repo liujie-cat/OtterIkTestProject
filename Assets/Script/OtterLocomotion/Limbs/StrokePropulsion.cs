@@ -7,7 +7,8 @@ namespace OtterLocomotion
     /// OtterLocomotionBrain's rhythm instead of its own kick timer, so the otter surges as the feet kick and the paws
     /// stroke and coasts between, and it swings round mostly while the strokes that turn it push. The average thrust
     /// is unchanged (each stroke's share is weighted by its forward force), so the speeds stay as tuned. Nothing pushes
-    /// before a limb does.
+    /// before a limb does. With WebThrust on, the webs push the body through the water instead and the movement
+    /// controller is asked for no thrust; the turning still follows the strokes.
     /// </summary>
     [DefaultExecutionOrder(180)]
     [DisallowMultipleComponent]
@@ -16,6 +17,7 @@ namespace OtterLocomotion
         [Tooltip("Found on this object when empty.")]
         public OtterLocomotionBrain brain;
         public MovementControllerRB movement;
+        public WebThrust webs;
         [Tooltip("How sharply each push peaks in the middle of its power stroke (2 = a rounded surge; higher = a shorter, harder shove).")]
         [Range(1f, 6f)] public float sharpness = 2f;
         [Tooltip("How much of the body's turning waits for the strokes that turn it (0 = it turns steadily, 1 = only while they push).")]
@@ -30,6 +32,7 @@ namespace OtterLocomotion
         {
             if (brain == null) brain = GetComponent<OtterLocomotionBrain>();
             if (movement == null) movement = GetComponent<MovementControllerRB>();
+            if (webs == null) webs = GetComponent<WebThrust>();
         }
 
         private void OnEnable()
@@ -68,7 +71,7 @@ namespace OtterLocomotion
                 turn += yaw * pulse;
                 turnWeight += yaw;
             }
-            Thrust = pushWeight > 1e-4f ? push / pushWeight : 0f;
+            Thrust = webs != null && webs.isActiveAndEnabled && webs.HasWebs ? 0f : pushWeight > 1e-4f ? push / pushWeight : 0f;
             Turn = turnWeight > 1e-5f ? Mathf.Lerp(1f, turn / turnWeight, turnPulse) : 1f;
         }
 

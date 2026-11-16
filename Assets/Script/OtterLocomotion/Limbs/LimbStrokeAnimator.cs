@@ -185,10 +185,13 @@ namespace OtterLocomotion
         public float outward = -0.15f;
         [Header("Wave")]
         [Tooltip("How far the legs swing up and down about the hips on top of the hips' own pitch (deg), and how far behind the spine wave's beat they run (cycles).")]
-        public float sweep = 12f;
+        public float sweep = 30f;
         [Range(0f, 1f)] public float lag = 0.75f;
-        [Tooltip("Web pitch into the water it meets (deg): its trailing edge rises as it sweeps down and drops as it sweeps up.")]
-        public float attack = 20f;
+        [Tooltip("Web pitch into the water it meets: its trailing edge rises as it sweeps down and drops as it sweeps up, by this share of the angle its path through the water makes with the heading (a flat plate drives hardest at about 0.37), at most attack (deg).")]
+        public float feather = 0.37f;
+        public float attack = 35f;
+        [Tooltip("Time constant of the pitch following the web's path (s).")]
+        public float pitchTime = 0.02f;
         [Tooltip("Web width as a multiple of its rest width.")]
         public float width = 1.15f;
         [Tooltip("Spine pitch asked for at full drive (deg; the hips 1.5 times this, the chest 0.4), and how far the wave runs behind from chest to hips (rad per joint). The harmonizer's chain stiffness and damping take off about three quarters.")]
@@ -297,6 +300,11 @@ namespace OtterLocomotion
             public float face, peakFace, peakSpeed;
             public Vector3 lastSweepLocal;
             public bool pushing, hasPeak;
+            /// <summary>The web's middle in the world last frame where the leg carried it, before its turn, and the fluke's
+            /// pitch of the web into that path (deg).</summary>
+            public Vector3 lastCarried;
+            public bool hasLastCarried;
+            public float flukePitch;
         }
 
         private readonly Limb[] limbs = new Limb[OtterRig.LimbCount];
@@ -538,6 +546,13 @@ namespace OtterLocomotion
                 Vector3 swung = l.hasLastCenter ? l.girdle.TransformVector(center - l.lastCenter) / Mathf.Max(1e-4f, Time.deltaTime) : Vector3.zero;
                 l.lastCenter = center;
                 l.hasLastCenter = true;
+                // the web's path through still water as the leg carries it, before its own turn (which would feed back),
+                // for the fluke to pitch it into
+                Vector3 carried = l.web.TransformPoint(l.centerLocal);
+                Vector3 water = l.hasLastCarried ? (carried - l.lastCarried) / Mathf.Max(1e-4f, Time.deltaTime) : Vector3.zero;
+                l.lastCarried = carried;
+                l.hasLastCarried = true;
+                FlukePitch(ref l, water);
                 bool swinging = swung.magnitude > f.followSpeed;
                 Vector3 motion = swinging ? swung.normalized : l.girdle.TransformDirection(l.motionLocal);
                 // where the web should face, within reach of its rest on the shin
@@ -625,6 +640,8 @@ namespace OtterLocomotion
                 l.hasLastCenter = false;
                 l.pushing = false;
                 l.hasPeak = false;
+                l.hasLastCarried = false;
+                l.flukePitch = 0f;
             }
         }
 
@@ -679,12 +696,24 @@ namespace OtterLocomotion
             return joint + l.length * (f.reach * (back * Mathf.Cos(a) + belly * Mathf.Sin(a)) + outward * f.outward);
         }
 
-        // The fluke's web normal: flat to the hips, pitched into the water it meets. Sweeping toward the belly its
-        // trailing edge rises, so the dorsal face tips forward. Signed to the face nearer the web's rest.
+        // The fluke pitches the web into the water it meets, from the way it actually moves through it: the hips' own
+        // heave and pitch carry the foot as much as the leg's sweep does, and the web whips behind the ankle, so a beat
+        // timed from the rhythm alone would pitch it out of step with its path and push as much back as on
+        private void FlukePitch(ref Limb l, Vector3 water)
+        {
+            KickAxes(l, out _, out var back, out _, out var belly);
+            float ahead = -Vector3.Dot(water, back), down = Vector3.Dot(water, belly);
+            float path = Mathf.Atan2(down, Mathf.Max(ahead, 0.02f)) * Mathf.Rad2Deg;
+            float goal = Mathf.Clamp(fluke.feather * path, -fluke.attack, fluke.attack);
+            l.flukePitch = Mathf.Lerp(l.flukePitch, goal, 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, fluke.pitchTime)));
+        }
+
+        // The fluke's web normal: flat to the hips, pitched into its path. Sweeping toward the belly its trailing edge
+        // rises, so the dorsal face tips forward. Signed to the face nearer the web's rest.
         private Vector3 FlukeNormal(in Limb l, Vector3 rest)
         {
             KickAxes(l, out _, out var back, out _, out var belly);
-            float pitch = fluke.attack * FlukeDrive * Mathf.Sin(2f * Mathf.PI * (FlukePhase - fluke.lag)) * Mathf.Deg2Rad;
+            float pitch = l.flukePitch * Mathf.Deg2Rad;
             Vector3 n = -belly * Mathf.Cos(pitch) - back * Mathf.Sin(pitch);
             return Vector3.Dot(rest, n) >= 0f ? n : -n;
         }

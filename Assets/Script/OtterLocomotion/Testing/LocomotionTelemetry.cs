@@ -104,11 +104,15 @@ namespace OtterLocomotion.Testing
             public bool pulse;
             /// <summary>Per hind foot: the web's fore-aft speed through the water (m/s, world, + = forward); a push that holds its water keeps it near 0 or below.</summary>
             public float[] footWorldFwd;
+            /// <summary>Per hind foot: the web middle's speed up through the water (m/s) and its normal's up component.</summary>
+            public float[] footWorldUp, footNormalUp;
             /// <summary>TailRudder: the tip's bend from the hips' line (deg, + = right), NaN without one.</summary>
             public float tailBend;
             /// <summary>Side bend at the waist, the hips' heading to the chest's seen from above (deg, + = curled to the right), and
             /// the hind pushes' bend that SpineKickSway puts on the spine (-1..1, NaN without one).</summary>
             public float waist, swayBend;
+            /// <summary>Per hind foot: WebThrust's push on the body along its heading (N, + = forward), 0 without it.</summary>
+            public float[] webPush;
             public Posture posture;
             public float supine, roll, speedTarget, speedCap, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
             public bool allocated;
@@ -140,6 +144,7 @@ namespace OtterLocomotion.Testing
         private SpineKickWave spineWave;
         private TailRudder tail;
         private SpineKickSway sway;
+        private WebThrust webThrust;
         private string footInfo = "";
         private bool kickThisFrame, pulseThisFrame;
         private float prevYaw;
@@ -193,6 +198,7 @@ namespace OtterLocomotion.Testing
             spineWave = movement.GetComponent<SpineKickWave>();
             tail = movement.GetComponent<TailRudder>();
             sway = movement.GetComponent<SpineKickSway>();
+            webThrust = movement.GetComponent<WebThrust>();
             if (spineWave != null) spineWave.Pulsed += OnPulse;
             if (brain != null) brain.Posture.Changed += OnPosture;
         }
@@ -292,6 +298,8 @@ namespace OtterLocomotion.Testing
                 ? Vector3.Distance(feet[0].bone.TransformPoint(feet[0].centerLocal), feet[1].bone.TransformPoint(feet[1].centerLocal)) * 100f
                 : -1f;
             s.footWorldFwd = new float[feet.Count];
+            s.footWorldUp = new float[feet.Count];
+            s.footNormalUp = new float[feet.Count];
             for (int k = 0; k < feet.Count && hip != null; k++)
             {
                 var f = feet[k];
@@ -299,6 +307,7 @@ namespace OtterLocomotion.Testing
                 Vector3 p = hip.InverseTransformPoint(world);
                 Vector3 velocity = f.hasPrevious ? hip.TransformVector(p - f.previous) / dt : Vector3.zero;
                 s.footWorldFwd[k] = f.hasPrevious ? Vector3.Dot(world - f.previousWorld, fwd) / dt : 0f;
+                s.footWorldUp[k] = f.hasPrevious ? (world.y - f.previousWorld.y) / dt : 0f;
                 f.previous = p;
                 f.previousWorld = world;
                 f.hasPrevious = true;
@@ -308,6 +317,7 @@ namespace OtterLocomotion.Testing
                 s.footFwd[k] = Vector3.Dot(velocity, fwd);
                 s.footSpeed[k] = speed;
                 s.footNormalFwd[k] = Vector3.Dot(normal, fwd);
+                s.footNormalUp[k] = normal.y;
             }
             s.flipperPose = feet.Select(f => animator != null && System.Enum.TryParse<LimbId>(f.name, out var id) ? animator.FlipperState(id) : Vector4.zero).ToArray();
             s.kickYaw = feet.Select(f => animator != null && System.Enum.TryParse<LimbId>(f.name, out var id) ? animator.KickYaw(id) : 0f).ToArray();
@@ -319,6 +329,7 @@ namespace OtterLocomotion.Testing
             s.pulse = pulseThisFrame;
             s.tailBend = tail != null && tail.isActiveAndEnabled ? tail.TipBend : float.NaN;
             s.swayBend = sway != null && sway.isActiveAndEnabled ? sway.Bend : float.NaN;
+            s.webPush = feet.Select(f => webThrust != null && webThrust.isActiveAndEnabled && System.Enum.TryParse<LimbId>(f.name, out var id) ? webThrust.Push(id) : 0f).ToArray();
             // spine bones point +Y toward the head
             s.waist = hip != null && chest != null
                 ? Vector3.SignedAngle(Vector3.ProjectOnPlane(hip.up, Vector3.up), Vector3.ProjectOnPlane(chest.up, Vector3.up), Vector3.up)
@@ -421,6 +432,10 @@ namespace OtterLocomotion.Testing
             // the tail tip's bend from the hips' line, deg, + = right; the waist's side bend, deg, + = curled right; the
             // hind pushes' bend on the spine, -1..1
             sb.Append(",tail,waist,bend");
+            // each web's push on the body along its heading, N
+            foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wpush");
+            // the web middle's speed up through the water (m/s) and its normal's up component
+            foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wup,").Append(f.name).Append("_nup");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedCap,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -456,6 +471,8 @@ namespace OtterLocomotion.Testing
                 sb.Append(',').Append(float.IsNaN(s.tailBend) ? "" : s.tailBend.ToString("F1", ci));
                 sb.Append(',').Append(s.waist.ToString("F1", ci));
                 sb.Append(',').Append(float.IsNaN(s.swayBend) ? "" : s.swayBend.ToString("F2", ci));
+                foreach (var w in s.webPush) sb.Append(',').Append(w.ToString("F3", ci));
+                for (int k = 0; k < s.footWorldUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footWorldUp[k], s.footNormalUp[k]));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.speedCap, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
@@ -509,6 +526,9 @@ namespace OtterLocomotion.Testing
                     sb.AppendLine($"#   {(LimbId)i}: joint from centre (fwd {a.x:F1}, right {a.y:F1}, up {a.z:F1}) cm, limb {g.length * 100f:F1} cm");
                 }
             }
+            if (webThrust != null && webThrust.isActiveAndEnabled)
+                sb.AppendLine($"# web thrust: water push {webThrust.waterPush:F0} face-on, {webThrust.slicePush:F0} slicing N/(m^2 (m/s)^2), area x{webThrust.areaScale:F2}, " +
+                              $"HL {webThrust.Area(LimbId.HL) * 1e4f:F1} cm^2, HR {webThrust.Area(LimbId.HR) * 1e4f:F1} cm^2");
             for (int seg = 0; seg < playback.segments.Count; seg++)
             {
                 var idx = Enumerable.Range(0, samples.Count).Where(i => samples[i].seg == seg).ToList();
@@ -600,6 +620,9 @@ namespace OtterLocomotion.Testing
                 string water = pushing.Count > 0
                     ? $", pushing web {pushing.Average(i => samples[i].footWorldFwd[k]).ToString("F2", ci)} vs body {pushing.Average(i => samples[i].speedFwd).ToString("F2", ci)} m/s"
                     : "";
+                if (webThrust != null && idx.Count > 0)
+                    water += $", web push {idx.Average(i => samples[i].webPush[k]).ToString("F3", ci)} N avg" +
+                             (pushing.Count > 0 ? $" ({pushing.Average(i => samples[i].webPush[k]).ToString("F3", ci)} pushing)" : "");
                 parts.Add($"{feet[k].name} back {Mean(backFace, backWeight)} fwd {Mean(forwardFace, forwardWeight)} peak {peak.ToString("F2", ci)} m/s{water}");
             }
             var gaps = idx.Select(i => samples[i].feetGap).Where(g => g >= 0f).ToList();
