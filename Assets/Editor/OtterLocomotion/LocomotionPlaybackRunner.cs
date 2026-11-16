@@ -7,7 +7,8 @@ namespace OtterLocomotion.EditorTools
 {
     /// <summary>
     /// Enters Play, drives the active otter with a scripted input (OtterInputPlayback) while LocomotionTelemetry
-    /// records, writes Logs/Locomotion_&lt;label&gt;_summary.txt + CSV, then leaves Play. The otter gets fresh locomotion
+    /// records, writes Logs/Locomotion_&lt;label&gt;_summary.txt + CSV and pictures at set moments (LocomotionSnapshots),
+    /// then leaves Play. The otter gets fresh locomotion
     /// components for the run (code defaults, replacing the scene's for this Play only), so runs compare.
     /// The scene is never modified.
     /// </summary>
@@ -22,6 +23,8 @@ namespace OtterLocomotion.EditorTools
         static OtterInputPlayback playback;
         static LocomotionTelemetry telemetry;
         static double deadline;
+        static LocomotionSnapshots.Shot[] shots = new LocomotionSnapshots.Shot[0];
+        static int nextShot;
 
         static LocomotionPlaybackRunner() => EditorApplication.update += Tick;
 
@@ -75,6 +78,8 @@ namespace OtterLocomotion.EditorTools
                 telemetry.playback = playback;
                 telemetry.movement = movement;
                 telemetry.label = SessionState.GetString(LabelKey, "baseline");
+                shots = LocomotionSnapshots.For(SessionState.GetString(ScriptKey, "baseline"));
+                nextShot = 0;
                 deadline = EditorApplication.timeSinceStartup + TimeoutSeconds;
                 SessionState.SetInt(StateKey, 2);
                 return;
@@ -86,6 +91,14 @@ namespace OtterLocomotion.EditorTools
                 Stop();
                 return;
             }
+            while (nextShot < shots.Length && playback.SegmentIndex > shots[nextShot].segment) nextShot++;
+            if (nextShot < shots.Length && playback.SegmentIndex == shots[nextShot].segment &&
+                Time.time - playback.SegmentStartTime >= shots[nextShot].time)
+            {
+                LocomotionSnapshots.Take(telemetry.movement.transform, telemetry.label, shots[nextShot].name);
+                nextShot++;
+            }
+
             bool timedOut = EditorApplication.timeSinceStartup > deadline;
             if (!playback.Finished && !timedOut) return;
             if (timedOut) Debug.LogWarning("[LocomotionPlaybackRunner] Timed out; writing what was recorded.");

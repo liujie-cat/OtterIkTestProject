@@ -50,13 +50,13 @@ namespace OtterLocomotion
         public StrokeCapacity hindScullOut = new StrokeCapacity(1.5f, 2f, 1f, 0.8f);
         public StrokeCapacity hindScullIn = new StrokeCapacity(0.6f, 4f, 1f, 0.8f);
 
-        [Header("Forepaws: steering and fine sculling, little thrust")]
-        public StrokeCapacity foreThrust = new StrokeCapacity(0.5f, 12f, 1f, 0.2f);
-        public StrokeCapacity foreBrake = new StrokeCapacity(1.5f, 1.5f, 1f, 0.4f);
+        [Header("Forepaws: steering and fine sculling when prone, little thrust; held on the chest out of the water on the back")]
+        public StrokeCapacity foreThrust = new StrokeCapacity(0.5f, 12f, 1f, 0f);
+        public StrokeCapacity foreBrake = new StrokeCapacity(1.5f, 1.5f, 1f, 0f);
         [Tooltip("Sweeping out to the side is the strong scull; sweeping in across the chest is weak, so the paw on the outside of a turn sculls.")]
         [FormerlySerializedAs("foreScull")]
-        public StrokeCapacity foreScullOut = new StrokeCapacity(2f, 0.5f, 1f, 0.6f);
-        public StrokeCapacity foreScullIn = new StrokeCapacity(0.8f, 1.5f, 1f, 0.6f);
+        public StrokeCapacity foreScullOut = new StrokeCapacity(2f, 0.5f, 1f, 0f);
+        public StrokeCapacity foreScullIn = new StrokeCapacity(0.8f, 1.5f, 1f, 0f);
 
         [Header("Where the paw works, as a fraction of the limb length from the shoulder / hip")]
         public float hindReach = 0.5f;

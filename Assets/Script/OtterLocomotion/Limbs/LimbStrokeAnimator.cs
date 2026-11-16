@@ -53,8 +53,9 @@ namespace OtterLocomotion
 
     /// <summary>
     /// Hind foot kick, the loop of HindPaddleTrajectoryRB with its tuning: a long thin ellipse along the kick
-    /// direction, its width tilted out of the horizontal, swept backward on the outer side (power) and forward on the
-    /// inner side (recovery). In a turn the back end of each leg's loop swings outward, the inner leg's most.
+    /// direction, its width tilted out of the horizontal, swept along the stroke on the outer side (power) and back on
+    /// the inner side (recovery). The kick follows the allocated stroke: backward to push, forward to brake, leaning
+    /// out or in as the stroke sculls.
     /// </summary>
     [Serializable]
     public class KickEllipse
@@ -69,8 +70,12 @@ namespace OtterLocomotion
         [Range(0f, 360f)] public float restAngleDeg = 285f;
         [Tooltip("Tilts the loop's width about the kick direction, mirrored per leg (negative = the power side goes deeper).")]
         [Range(-90f, 90f)] public float trajectoryTiltDeg = -45.1f;
-        [Header("Turning")]
-        [Tooltip("How far the back end of the kick swings outward in a full turn (deg), times each leg's amplifier.")]
+        [Header("Direction")]
+        [Tooltip("Exaggerates how far the kick leans out of the fore-aft line, relative to the allocated stroke's lean, so the two legs' different strokes read.")]
+        public float leanGain = 2f;
+        public float maxLeanDeg = 70f;
+        [Header("Turning while prone: the feet push flat out, so the allocation keeps them nearly straight")]
+        [Tooltip("How far the back end of the kick swings outward in a full turn (deg), times each leg's amplifier; fades out on the back.")]
         public float turnKickYawDeg = 30.3f;
         public float innerYawAmplifier = 1.5f;
         public float outerYawAmplifier = 0f;
@@ -96,9 +101,10 @@ namespace OtterLocomotion
 
     /// <summary>
     /// Moves the limb IK targets along stroke paths from OtterLocomotionBrain's rhythm: phase and strength per limb,
-    /// so the limbs show what the allocation asks of them. Hind feet kick along HindPaddleTrajectoryRB's loop, splayed
-    /// by the turn the brain asks for; forepaws sweep along the allocated force direction. Paths hang off the chest /
-    /// hip bone, so they follow the spine's bend and roll.
+    /// so the limbs show what the allocation asks of them. Hind feet kick along HindPaddleTrajectoryRB's loop, aimed by
+    /// the allocated force (and, prone, splayed by the turn the brain asks for); forepaws sweep along the allocated
+    /// force direction, and rest folded on the chest when they have nothing to do, as on the back. Paths hang off the
+    /// chest / hip bone, so they follow the spine's bend and roll.
     /// Runs after the spine and before the IK solve. While enabled it switches off the older limb drivers that write
     /// the same targets (HindPaddleDriverRB, IKStrokeController), and switches them back on when disabled.
     /// </summary>
@@ -221,7 +227,8 @@ namespace OtterLocomotion
 
         private float TargetSize(int i, in Limb l, in LimbStroke st)
         {
-            if (!st.active) return 0f;
+            // a limb with nothing left to do shrinks back to rest while its cycle runs out, e.g. forepaws folding as the otter rolls onto its back
+            if (!st.active || st.parking) return 0f;
             return OtterRig.IsFore((LimbId)i) ? foreStroke.Length(l.length, st.drive) : hindKick.Scale(st.drive);
         }
 
@@ -241,15 +248,20 @@ namespace OtterLocomotion
             }
 
             var k = hindKick;
+            // + lean = the foot sweeps out away from the midline
+            Vector2 d = st.direction;
+            float back = d.x <= 0f ? 1f : -1f;
+            float lean = Mathf.Clamp(Mathf.Atan2(d.y * side, Mathf.Abs(d.x)) * Mathf.Rad2Deg * k.leanGain, -k.maxLeanDeg, k.maxLeanDeg);
             float turnRate = brain.Demand.yawRateTarget;
             float turn01 = Mathf.Clamp01(Mathf.Abs(turnRate) / Mathf.Max(1f, k.fullTurnRate));
             bool inner = Mathf.Sign(turnRate) == side;
-            float yaw = k.turnKickYawDeg * turn01 * (inner ? k.innerYawAmplifier : k.outerYawAmplifier);
-            Vector3 kickForward = Quaternion.AngleAxis(-yaw * side, up) * forward;
+            lean += k.turnKickYawDeg * turn01 * (inner ? k.innerYawAmplifier : k.outerYawAmplifier) * (1f - brain.Posture.SupineFraction);
+            // the loop's long axis, front end forward; a braking kick runs it back to front
+            Vector3 axis = Quaternion.AngleAxis(-lean * side * back, up) * forward;
             // the loop's tilt follows the body: on the back the power side goes toward the belly, now facing up
             float bodyUp = Vector3.Dot(l.girdle.TransformDirection(l.upLocal), up) >= 0f ? 1f : -1f;
-            Vector3 outward = Quaternion.AngleAxis(k.trajectoryTiltDeg * side * bodyUp, kickForward) * (Vector3.Cross(up, kickForward) * side);
-            return k.Offset(phase, st.powerFraction, kickForward, outward, l.size);
+            Vector3 outward = Quaternion.AngleAxis(k.trajectoryTiltDeg * side * bodyUp, axis) * (Vector3.Cross(up, axis) * side);
+            return k.Offset(phase, st.powerFraction, axis * back, outward, l.size);
         }
 
 #if UNITY_EDITOR
