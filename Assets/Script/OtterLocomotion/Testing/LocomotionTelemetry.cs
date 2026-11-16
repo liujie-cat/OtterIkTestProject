@@ -104,6 +104,8 @@ namespace OtterLocomotion.Testing
             public bool pulse;
             /// <summary>Per hind foot: the web's fore-aft speed through the water (m/s, world, + = forward); a push that holds its water keeps it near 0 or below.</summary>
             public float[] footWorldFwd;
+            /// <summary>TailRudder: the tip's bend from the hips' line (deg, + = right), NaN without one.</summary>
+            public float tailBend;
             public Posture posture;
             public float supine, roll, speedTarget, speedCap, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
             public bool allocated;
@@ -133,6 +135,7 @@ namespace OtterLocomotion.Testing
         private Transform hip, chest, head;
         private LimbStrokeAnimator animator;
         private SpineKickWave spineWave;
+        private TailRudder tail;
         private string footInfo = "";
         private bool kickThisFrame, pulseThisFrame;
         private float prevYaw;
@@ -184,6 +187,7 @@ namespace OtterLocomotion.Testing
             if (brain == null) brain = movement.GetComponent<OtterLocomotionBrain>();
             animator = movement.GetComponent<LimbStrokeAnimator>();
             spineWave = movement.GetComponent<SpineKickWave>();
+            tail = movement.GetComponent<TailRudder>();
             if (spineWave != null) spineWave.Pulsed += OnPulse;
             if (brain != null) brain.Posture.Changed += OnPosture;
         }
@@ -308,6 +312,7 @@ namespace OtterLocomotion.Testing
             s.chestPitch = chest != null ? Mathf.Asin(Mathf.Clamp(Vector3.Dot(chest.up, Vector3.up), -1f, 1f)) * Mathf.Rad2Deg : 0f;
             s.footHeave = feet.Select(f => (f.ankle.position.y - f.hipJoint.position.y) * 100f).ToArray();
             s.pulse = pulseThisFrame;
+            s.tailBend = tail != null && tail.isActiveAndEnabled ? tail.TipBend : float.NaN;
             if (brain != null)
             {
                 var d = brain.Demand;
@@ -403,6 +408,8 @@ namespace OtterLocomotion.Testing
             sb.Append(",pulse");
             // each web's fore-aft speed through the water, m/s
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wfwd");
+            // the tail tip's bend from the hips' line, deg, + = right
+            sb.Append(",tail");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedCap,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -435,6 +442,7 @@ namespace OtterLocomotion.Testing
                 foreach (var h in s.footHeave) sb.Append(',').Append(h.ToString("F2", ci));
                 sb.Append(',').Append(s.pulse ? 1 : 0);
                 foreach (var w in s.footWorldFwd) sb.Append(',').Append(w.ToString("F2", ci));
+                sb.Append(',').Append(float.IsNaN(s.tailBend) ? "" : s.tailBend.ToString("F1", ci));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.speedCap, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
@@ -748,6 +756,14 @@ namespace OtterLocomotion.Testing
             sb.AppendLine($"  turn {delta:+0;-0} deg | first reaction: head {F(tHead)}  spine {F(tSpine)}  limb L/R asymmetry front {F(tFront)} hind {F(tHind)}{stroke}  body {F(tBody)} | limb lead {lead}");
             sb.AppendLine($"  progress: 50% at {F(t50)}  90% at {F(t90)}  overshoot {overshoot:F1} deg  " +
                           $"settled(±{settleToleranceDeg:F0}) {(lastOutside < end - 0.2f ? lastOutside.ToString("F2", CultureInfo.InvariantCulture) : "no")}  peak yaw rate {peakRate:F0} deg/s");
+            var bends = idx.Select(i => samples[i]).Where(s => !float.IsNaN(s.tailBend)).ToList();
+            if (bends.Count > 0)
+            {
+                // toward the turn = + ; the swing back the other way after it
+                var toward = bends.Select(s => s.tailBend * Mathf.Sign(delta)).ToList();
+                var peakAt = bends[toward.IndexOf(toward.Max())];
+                sb.AppendLine($"  tail: bend toward the turn peak {toward.Max():F0} deg at {F(peakAt.t - t0)}, mean {toward.Average():F0} deg, swing back {Mathf.Max(0f, -toward.Min()):F0} deg");
+            }
             float budget = Mathf.Lerp(turn90Budget, turn170Budget, Mathf.InverseLerp(90f, 170f, Mathf.Abs(delta)));
             sb.AppendLine("  targets: " + string.Join(" | ",
                 Check($"head <= {headReactionMax:F2}", tHead.HasValue && tHead.Value <= headReactionMax),
