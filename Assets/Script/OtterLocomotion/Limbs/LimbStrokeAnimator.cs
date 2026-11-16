@@ -65,10 +65,10 @@ namespace OtterLocomotion
         [Header("Shape: ankle from the hip joint, in leg lengths; angles from straight back toward the belly")]
         [Tooltip("Tucked pose at the start of the push: hip joint to ankle over the leg's length, and its angle (deg). The foot stays behind the hip so the thigh never folds into the belly.")]
         public float tuckedReach = 0.66f;
-        public float tuckedAngle = 62f;
-        [Tooltip("Stretched pose at the end of the push.")]
+        public float tuckedAngle = 72f;
+        [Tooltip("Stretched pose at the end of the push; a negative angle carries the foot past the hips' line toward the back, so each kick beats up and down through the water.")]
         public float stretchedReach = 0.96f;
-        public float stretchedAngle = 20f;
+        public float stretchedAngle = -5f;
         [Tooltip("Out from the hip joint (leg lengths) when tucked, the knee opening outward, and when stretched, the foot in beside the tail.")]
         public float tuckedOut = 0.3f;
         public float stretchedOut = 0.1f;
@@ -77,7 +77,7 @@ namespace OtterLocomotion
         [Tooltip("How far the knee folds the foot in toward the hip midway through the draw, as a fraction of its distance.")]
         [Range(0f, 0.6f)] public float drawFold = 0.25f;
         [Tooltip("Loop size at the lightest drive that kicks, as a fraction of the full loop.")]
-        [Range(0.1f, 1f)] public float lightAmplitude = 0.75f;
+        [Range(0.1f, 1f)] public float lightAmplitude = 0.85f;
         [Header("Timing")]
         [Tooltip("How fast the foot rounds the turnovers at the ends of the loop, as a share of its average pace over the cycle (0 = it stops there, 1 = it barely slows).")]
         [Range(0f, 1f)] public float turnover = 0.5f;
