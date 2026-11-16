@@ -106,6 +106,9 @@ namespace OtterLocomotion.Testing
             public float[] footWorldFwd;
             /// <summary>TailRudder: the tip's bend from the hips' line (deg, + = right), NaN without one.</summary>
             public float tailBend;
+            /// <summary>Side bend at the waist, the hips' heading to the chest's seen from above (deg, + = curled to the right), and
+            /// the hind pushes' bend that SpineKickSway puts on the spine (-1..1, NaN without one).</summary>
+            public float waist, swayBend;
             public Posture posture;
             public float supine, roll, speedTarget, speedCap, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
             public bool allocated;
@@ -136,6 +139,7 @@ namespace OtterLocomotion.Testing
         private LimbStrokeAnimator animator;
         private SpineKickWave spineWave;
         private TailRudder tail;
+        private SpineKickSway sway;
         private string footInfo = "";
         private bool kickThisFrame, pulseThisFrame;
         private float prevYaw;
@@ -188,6 +192,7 @@ namespace OtterLocomotion.Testing
             animator = movement.GetComponent<LimbStrokeAnimator>();
             spineWave = movement.GetComponent<SpineKickWave>();
             tail = movement.GetComponent<TailRudder>();
+            sway = movement.GetComponent<SpineKickSway>();
             if (spineWave != null) spineWave.Pulsed += OnPulse;
             if (brain != null) brain.Posture.Changed += OnPosture;
         }
@@ -313,6 +318,11 @@ namespace OtterLocomotion.Testing
             s.footHeave = feet.Select(f => (f.ankle.position.y - f.hipJoint.position.y) * 100f).ToArray();
             s.pulse = pulseThisFrame;
             s.tailBend = tail != null && tail.isActiveAndEnabled ? tail.TipBend : float.NaN;
+            s.swayBend = sway != null && sway.isActiveAndEnabled ? sway.Bend : float.NaN;
+            // spine bones point +Y toward the head
+            s.waist = hip != null && chest != null
+                ? Vector3.SignedAngle(Vector3.ProjectOnPlane(hip.up, Vector3.up), Vector3.ProjectOnPlane(chest.up, Vector3.up), Vector3.up)
+                : 0f;
             if (brain != null)
             {
                 var d = brain.Demand;
@@ -408,8 +418,9 @@ namespace OtterLocomotion.Testing
             sb.Append(",pulse");
             // each web's fore-aft speed through the water, m/s
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wfwd");
-            // the tail tip's bend from the hips' line, deg, + = right
-            sb.Append(",tail");
+            // the tail tip's bend from the hips' line, deg, + = right; the waist's side bend, deg, + = curled right; the
+            // hind pushes' bend on the spine, -1..1
+            sb.Append(",tail,waist,bend");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedCap,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -443,6 +454,8 @@ namespace OtterLocomotion.Testing
                 sb.Append(',').Append(s.pulse ? 1 : 0);
                 foreach (var w in s.footWorldFwd) sb.Append(',').Append(w.ToString("F2", ci));
                 sb.Append(',').Append(float.IsNaN(s.tailBend) ? "" : s.tailBend.ToString("F1", ci));
+                sb.Append(',').Append(s.waist.ToString("F1", ci));
+                sb.Append(',').Append(float.IsNaN(s.swayBend) ? "" : s.swayBend.ToString("F2", ci));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.speedCap, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
@@ -522,9 +535,34 @@ namespace OtterLocomotion.Testing
                 FootMetrics(sb, idx);
                 PathMetrics(sb, idx);
                 FlukeMetrics(sb, idx);
+                BodyMetrics(sb, idx);
             }
             sb.AppendLine($"\nfeel targets met: {passCount}/{checkCount}");
             return sb.ToString();
+        }
+
+        // How the trunk and tail bend side to side: the waist's range and its swing about its own mean (half the 5th..95th
+        // percentile spread), the same for the tail tip, and how closely the waist follows the hind pushes' bend.
+        private void BodyMetrics(StringBuilder sb, List<int> idx)
+        {
+            var ci = CultureInfo.InvariantCulture;
+            var waist = idx.Select(i => samples[i].waist).OrderBy(x => x).ToList();
+            var tails = idx.Select(i => samples[i].tailBend).Where(x => !float.IsNaN(x)).OrderBy(x => x).ToList();
+            float P(List<float> v, float q) => v[Mathf.Clamp(Mathf.RoundToInt(q * (v.Count - 1)), 0, v.Count - 1)];
+            string Range(List<float> v) => v.Count > 0
+                ? $"{P(v, 0.05f).ToString("F1", ci)}..{P(v, 0.95f).ToString("F1", ci)} deg (swing ±{(0.5f * (P(v, 0.95f) - P(v, 0.05f))).ToString("F1", ci)})"
+                : "-";
+            var pairs = idx.Select(i => samples[i]).Where(s => !float.IsNaN(s.swayBend)).ToList();
+            string follow = "";
+            if (pairs.Count > 2)
+            {
+                float mw = pairs.Average(s => s.waist), mb = pairs.Average(s => s.swayBend);
+                float cov = pairs.Sum(s => (s.waist - mw) * (s.swayBend - mb));
+                float vw = Mathf.Sqrt(pairs.Sum(s => (s.waist - mw) * (s.waist - mw)));
+                float vb = Mathf.Sqrt(pairs.Sum(s => (s.swayBend - mb) * (s.swayBend - mb)));
+                if (vw > 1e-4f && vb > 1e-4f) follow = $" | waist follows the pushes' bend: corr {(cov / (vw * vb)).ToString("+0.00;-0.00", ci)}";
+            }
+            sb.AppendLine($"  body (seen from above, + = curled right): waist {Range(waist)} | tail tip {Range(tails)}{follow}");
         }
 
         // Whether the hind feet push water: how squarely the web faces its motion relative to the hip, weighted by the

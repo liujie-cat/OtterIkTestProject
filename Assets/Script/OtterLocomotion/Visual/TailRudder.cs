@@ -8,7 +8,7 @@ namespace OtterLocomotion
     /// water behind the hips and held to the tail's shape by a spring that softens toward the tip, so the tail trails
     /// the path, lags the hips' swings and whips back after them, and the spine's fluke wave runs on down it. As a
     /// rudder it bends toward the side the otter turns to, following the brain's turn rate so it leads the body, and it
-    /// sways toward each hind foot as that foot pushes.
+    /// swings away from each hind foot as that foot pushes, with the curl of the body (HindBend).
     /// </summary>
     [DefaultExecutionOrder(320)]
     [DisallowMultipleComponent]
@@ -30,8 +30,10 @@ namespace OtterLocomotion
         public float fullTurnRate = 180f;
         [Tooltip("How quickly the rudder follows the turn (s).")]
         public float rudderTime = 0.12f;
-        [Tooltip("Sway toward a hind foot through its push, over the whole tail (deg).")]
+        [Tooltip("Sway with the hind pushes, over the whole tail (deg): each push curls the body away from the pushing foot (HindBend), and the tail tip goes with the curl.")]
         public float kickSway = 22f;
+        [Tooltip("Yaw moment of a push (N·m) that sways the tail most of the way.")]
+        public float fullMoment = 0.05f;
 
         private readonly List<Transform> bones = new List<Transform>();
         private Quaternion[] rest;
@@ -102,7 +104,7 @@ namespace OtterLocomotion
             float turnGoal = brain != null ? Mathf.Clamp(brain.Demand.yawRateTarget / Mathf.Max(1f, fullTurnRate), -1f, 1f) : 0f;
             turn = Mathf.Lerp(turn, turnGoal, 1f - Mathf.Exp(-dt / Mathf.Max(1e-3f, rudderTime)));
             // turning about world up by a negative angle swings what trails behind to the right
-            Shape(-(rudder * turn + kickSway * HindSway()) / n);
+            Shape(-(rudder * turn + kickSway * HindBend.Now(brain, fullMoment)) / n);
 
             if (!settled || (goal[n] - point[n]).sqrMagnitude > 1f)
             {
@@ -167,24 +169,5 @@ namespace OtterLocomotion
             goal[n] = bones[n - 1].TransformPoint(tipLocal);
         }
 
-        // -1..1: the right hind foot's push less the left's, each a bump over its power stroke
-        private float HindSway()
-        {
-            if (brain == null || !brain.HasLimbGeometry) return 0f;
-            var rhythm = brain.Rhythm.limbs;
-            float ahead = Time.time - Time.fixedTime;
-            return Push(rhythm[(int)LimbId.HR], ahead) - Push(rhythm[(int)LimbId.HL], ahead);
-        }
-
-        private static float Push(in LimbStroke st, float ahead)
-        {
-            if (!st.active || st.parking || st.drive <= 0f) return 0f;
-            float phase = st.phase + st.rate * ahead;
-            if (phase >= st.powerFraction) return 0f;
-            return Mathf.Sin(Mathf.PI * phase / Mathf.Max(1e-3f, st.powerFraction)) * Mathf.Lerp(LightSway, 1f, st.drive);
-        }
-
-        // a light cruising kick still sways the tail this much of a full one's
-        private const float LightSway = 0.6f;
     }
 }
