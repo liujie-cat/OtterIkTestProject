@@ -33,6 +33,9 @@ namespace OtterLocomotion.Testing
         [Tooltip("Hind foot speed relative to the hip (m/s) below which its web direction is not judged, and above which it counts as sweeping back or forward.")]
         public float footStillSpeed = 0.05f;
         public float footSweepSpeed = 0.1f;
+        [Tooltip("Draw each hind ankle's recent path relative to the hip (left orange, right cyan), seen in the playback snapshots.")]
+        public bool drawFootTrails = true;
+        public float trailSeconds = 1f;
 
         [Header("Feel targets (checked per segment in the summary)")]
         public float headReactionMax = 0.10f;
@@ -64,6 +67,11 @@ namespace OtterLocomotion.Testing
             public Vector3 normalLocal, lengthLocal, centerLocal;
             public Vector3 previous;
             public bool hasPrevious;
+            /// <summary>The leg's IK chain, for the ankle's path relative to the hip joint in the hip's axes; side = +1 when the leg is on the hip's +X.</summary>
+            public Transform hipJoint, ankle, girdle;
+            public float legLength, side;
+            public LineRenderer trail;
+            public readonly List<(float t, Vector3 p)> path = new List<(float t, Vector3 p)>();
         }
 
         private struct Sample
@@ -81,6 +89,9 @@ namespace OtterLocomotion.Testing
             public float[] footSpeed, footNormalFwd;
             /// <summary>Distance between the two hind webs' centres (cm), -1 without two feet.</summary>
             public float feetGap;
+            /// <summary>Per hind foot: ankle from the hip joint in the hip's axes (cm: forward, outward, ventral), and its distance over the leg's length.</summary>
+            public Vector3[] footPath;
+            public float[] footReach;
             /// <summary>Per hind foot, from LimbStrokeAnimator: ankle turn from rest (deg), push flag, web width, turn the goal asks for (deg).</summary>
             public Vector4[] flipperPose;
             public Posture posture;
@@ -133,7 +144,18 @@ namespace OtterLocomotion.Testing
                 limbs.Add(new Limb { name = limb.ToString(), target = ik.target, space = space, restLocal = space.InverseTransformPoint(ik.target.position) });
                 var flipper = OtterRig.IsFore(limb) ? null : OtterRig.Flipper(ik.end.bone);
                 if (flipper != null && OtterRig.TryFootPlane(flipper, out var normal, out var length, out var center, out _))
-                    feet.Add(new Foot { name = limb.ToString(), bone = flipper, normalLocal = normal, lengthLocal = length, centerLocal = center });
+                {
+                    Transform a = ik.root.bone, b = ik.mid.bone, c = ik.end.bone;
+                    var foot = new Foot
+                    {
+                        name = limb.ToString(), bone = flipper, normalLocal = normal, lengthLocal = length, centerLocal = center,
+                        hipJoint = a, ankle = c, girdle = space,
+                        legLength = Vector3.Distance(a.position, b.position) + Vector3.Distance(b.position, c.position),
+                        side = space.InverseTransformPoint(a.position).x >= 0f ? 1f : -1f,
+                    };
+                    if (drawFootTrails) foot.trail = MakeTrail(space, limb == LimbId.HL ? new Color(1f, 0.55f, 0.1f) : new Color(0.1f, 0.85f, 1f));
+                    feet.Add(foot);
+                }
             }
             limbs.Sort((a, b) => string.CompareOrdinal(a.name, b.name));
             feet.Sort((a, b) => string.CompareOrdinal(a.name, b.name));
@@ -153,8 +175,36 @@ namespace OtterLocomotion.Testing
             if (brain != null) brain.Posture.Changed += OnPosture;
         }
 
+        private static LineRenderer MakeTrail(Transform girdle, Color color)
+        {
+            var go = new GameObject("FootTrail") { hideFlags = HideFlags.DontSave };
+            go.transform.SetParent(girdle, false);
+            var line = go.AddComponent<LineRenderer>();
+            line.useWorldSpace = false;
+            line.widthMultiplier = 0.0025f;
+            line.numCapVertices = 2;
+            line.positionCount = 0;
+            line.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            line.receiveShadows = false;
+            // drawn over the meshes: the ankle sits inside the leg
+            var material = new Material(Shader.Find("Hidden/Internal-Colored")) { hideFlags = HideFlags.DontSave, renderQueue = 4000 };
+            material.SetInt("_ZTest", (int)UnityEngine.Rendering.CompareFunction.Always);
+            material.SetInt("_ZWrite", 0);
+            material.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Off);
+            line.sharedMaterial = material;
+            line.startColor = new Color(color.r, color.g, color.b, 0.15f);
+            line.endColor = color;
+            return line;
+        }
+
         private void OnDestroy()
         {
+            foreach (var f in feet)
+                if (f.trail != null)
+                {
+                    Destroy(f.trail.sharedMaterial);
+                    Destroy(f.trail.gameObject);
+                }
             if (movement != null) movement.OnKickCycleStart -= OnKick;
             if (brain != null) brain.Posture.Changed -= OnPosture;
         }
@@ -199,6 +249,21 @@ namespace OtterLocomotion.Testing
             s.footFwd = new float[feet.Count];
             s.footSpeed = new float[feet.Count];
             s.footNormalFwd = new float[feet.Count];
+            s.footPath = new Vector3[feet.Count];
+            s.footReach = new float[feet.Count];
+            for (int k = 0; k < feet.Count; k++)
+            {
+                var f = feet[k];
+                Vector3 rel = Quaternion.Inverse(f.girdle.rotation) * (f.ankle.position - f.hipJoint.position);
+                // hip bone axes: +Y toward the head, +Z ventral
+                s.footPath[k] = new Vector3(rel.y, rel.x * f.side, rel.z) * 100f;
+                s.footReach[k] = rel.magnitude / Mathf.Max(f.legLength, 1e-4f);
+                if (f.trail == null) continue;
+                f.path.Add((Time.time, f.girdle.InverseTransformPoint(f.ankle.position)));
+                f.path.RemoveAll(e => Time.time - e.t > trailSeconds);
+                f.trail.positionCount = f.path.Count;
+                for (int i = 0; i < f.path.Count; i++) f.trail.SetPosition(i, f.path[i].p);
+            }
             s.feetGap = feet.Count == 2
                 ? Vector3.Distance(feet[0].bone.TransformPoint(feet[0].centerLocal), feet[1].bone.TransformPoint(feet[1].centerLocal)) * 100f
                 : -1f;
@@ -300,6 +365,8 @@ namespace OtterLocomotion.Testing
             sb.Append(",feetGap");
             // LimbStrokeAnimator's flipper pass: ankle turn from rest (deg), push flag, web width, turn the goal asks for (deg)
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_turn,").Append(f.name).Append("_push,").Append(f.name).Append("_width,").Append(f.name).Append("_need");
+            // ankle from the hip joint in the hip's axes, cm (forward, outward, ventral), and over the leg's length
+            foreach (var f in feet) sb.Append(',').Append(f.name).Append("_pf,").Append(f.name).Append("_po,").Append(f.name).Append("_pv,").Append(f.name).Append("_reach");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedCap,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -325,6 +392,8 @@ namespace OtterLocomotion.Testing
                 sb.Append(',').Append(s.feetGap.ToString("F2", ci));
                 foreach (var p in s.flipperPose)
                     sb.Append(string.Format(ci, ",{0:F1},{1:F0},{2:F2},{3:F0}", p.x, p.y, p.z, p.w));
+                for (int k = 0; k < feet.Count; k++)
+                    sb.Append(string.Format(ci, ",{0:F2},{1:F2},{2:F2},{3:F3}", s.footPath[k].x, s.footPath[k].y, s.footPath[k].z, s.footReach[k]));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.speedCap, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
@@ -402,6 +471,7 @@ namespace OtterLocomotion.Testing
                 if (brain != null) DemandMetrics(sb, idx, seg, t0);
                 RhythmMetrics(sb, idx);
                 FootMetrics(sb, idx);
+                PathMetrics(sb, idx);
             }
             sb.AppendLine($"\nfeel targets met: {passCount}/{checkCount}");
             return sb.ToString();
@@ -440,6 +510,55 @@ namespace OtterLocomotion.Testing
             var gaps = idx.Select(i => samples[i].feetGap).Where(g => g >= 0f).ToList();
             string closest = gaps.Count > 0 ? $" | webs closest {gaps.Min().ToString("F1", ci)} cm" : "";
             sb.AppendLine($"  feet (web facing its motion, 1 = flat-on push, 0 = edge-on): {string.Join(" | ", parts)}{closest}");
+        }
+
+        // The shape of each ankle's path relative to the hip: how far the leg draws in and stretches out (reach over the
+        // leg's length, 5th..95th percentile), how its travel splits between fore-aft, outward and dorso-ventral, and the
+        // loop's size along its principal axes (peak to peak) with flat = thinnest / middle (0 = stuck in one plane).
+        // The axes weigh each sample by the distance moved, so the path's shape counts, not where the foot lingers.
+        private void PathMetrics(StringBuilder sb, List<int> idx)
+        {
+            if (feet.Count == 0) return;
+            var ci = CultureInfo.InvariantCulture;
+            var parts = new List<string>();
+            for (int k = 0; k < feet.Count; k++)
+            {
+                var seq = idx.Select(i => samples[i]).Where(s => s.footPath != null && k < s.footPath.Length).ToList();
+                if (seq.Count < 8) continue;
+                var reach = seq.Select(s => s.footReach[k]).OrderBy(r => r).ToList();
+                float lo = reach[(int)(0.05f * (reach.Count - 1))], hi = reach[(int)(0.95f * (reach.Count - 1))];
+                Vector3 travel = Vector3.zero, mean = Vector3.zero;
+                var moved = new float[seq.Count];
+                float length = 0f;
+                for (int i = 1; i < seq.Count; i++)
+                {
+                    Vector3 d = seq[i].footPath[k] - seq[i - 1].footPath[k];
+                    travel += new Vector3(Mathf.Abs(d.x), Mathf.Abs(d.y), Mathf.Abs(d.z));
+                    moved[i] = d.magnitude;
+                    length += moved[i];
+                }
+                if (length < 1e-3f) length = moved[0] = 1f;
+                for (int i = 0; i < seq.Count; i++) mean += seq[i].footPath[k] * (moved[i] / length);
+                var c = new float[3, 3];
+                for (int i = 0; i < seq.Count; i++)
+                {
+                    Vector3 d = seq[i].footPath[k] - mean;
+                    for (int a = 0; a < 3; a++)
+                        for (int b = 0; b < 3; b++)
+                            c[a, b] += d[a] * d[b] * moved[i] / length;
+                }
+                OtterRig.SymmetricEigen(c, out var values, out var vectors);
+                var order = Enumerable.Range(0, 3).OrderByDescending(i => values[i]).ToArray();
+                float Span(int i) => 2f * Mathf.Sqrt(2f * Mathf.Max(0f, values[order[i]]));
+                Vector3 main = vectors[order[0]].normalized;
+                float total = Mathf.Max(travel.x + travel.y + travel.z, 1e-4f);
+                parts.Add($"{feet[k].name} reach {lo.ToString("F2", ci)}-{hi.ToString("F2", ci)}" +
+                          $" travel fwd/out/vent {100f * travel.x / total:F0}/{100f * travel.y / total:F0}/{100f * travel.z / total:F0}%" +
+                          $" loop {Span(0).ToString("F1", ci)}x{Span(1).ToString("F1", ci)}x{Span(2).ToString("F1", ci)} cm" +
+                          $" flat {(Span(1) > 1e-3f ? Span(2) / Span(1) : 0f).ToString("F2", ci)}" +
+                          $" main ({Mathf.Abs(main.x).ToString("F2", ci)},{Mathf.Abs(main.y).ToString("F2", ci)},{Mathf.Abs(main.z).ToString("F2", ci)})");
+            }
+            sb.AppendLine($"  hind paths (ankle from hip joint; travel and main axis in fwd/out/vent): {string.Join(" | ", parts)}");
         }
 
         // What the demand layer asked for over the segment, next to what the body actually did.

@@ -76,6 +76,8 @@ namespace OtterLocomotion.EditorTools
             forward.y = 0f;
             forward = forward.sqrMagnitude > 1e-6f ? forward.normalized : Vector3.forward;
             Vector3 right = Vector3.Cross(Vector3.up, forward);
+            // the telemetry's hind ankle trails ride along under the hip
+            var drawn = meshes.Cast<Renderer>().Concat(otter.GetComponentsInChildren<LineRenderer>().Where(l => l.enabled && l.positionCount > 1)).ToArray();
             string dir = Path.Combine("Logs", "Snapshots");
             Directory.CreateDirectory(dir);
 
@@ -86,7 +88,7 @@ namespace OtterLocomotion.EditorTools
                     ("top", Vector3.up, forward),
                     ("left", -right, Vector3.up),
                 };
-                Render(meshes, bounds.center, extent * 0.8f, extent, 1000, 800, views,
+                Render(drawn, bounds.center, extent * 0.8f, extent, 1000, 800, views,
                     (v, tex) => File.WriteAllBytes(Path.Combine(dir, $"{label}_{shot.name}_{views[v].view}.png"), tex.EncodeToPNG()));
                 return;
             }
@@ -111,7 +113,7 @@ namespace OtterLocomotion.EditorTools
             }
             if (sheets == null) return;
             int column = frame % Columns, row = frame / Columns, rowCount = sheets[0].height / CellHeight;
-            Render(meshes, hip.TransformPoint(stripCenterLocal), extent * 0.3f, extent, CellWidth, CellHeight, strip,
+            Render(drawn, hip.TransformPoint(stripCenterLocal), extent * 0.3f, extent, CellWidth, CellHeight, strip,
                 (v, tex) => sheets[v].SetPixels(column * CellWidth, (rowCount - 1 - row) * CellHeight, CellWidth, CellHeight, tex.GetPixels()));
             if (frame < shot.frames - 1) return;
             for (int v = 0; v < strip.Length; v++)
@@ -127,7 +129,7 @@ namespace OtterLocomotion.EditorTools
             sheets = null;
         }
 
-        static void Render(SkinnedMeshRenderer[] meshes, Vector3 center, float size, float extent, int width, int height,
+        static void Render(Renderer[] meshes, Vector3 center, float size, float extent, int width, int height,
             (string view, Vector3 from, Vector3 up)[] views, System.Action<int, Texture2D> use)
         {
             var layers = meshes.Select(m => m.gameObject.layer).ToArray();

@@ -52,21 +52,34 @@ namespace OtterLocomotion
     }
 
     /// <summary>
-    /// Hind foot kick, the loop of HindPaddleTrajectoryRB with its tuning: a long thin ellipse along the kick
-    /// direction, its width tilted out of the horizontal, swept along the stroke on the outer side (power) and back on
-    /// the inner side (recovery). The kick follows the allocated stroke: backward to push, forward to brake, leaning
-    /// out or in as the stroke sculls. In time it is a kick and glide: the push snaps off fast and eases as the leg
-    /// straightens, the foot holds out behind for a moment, then draws forward to cock for the next push.
+    /// Hind foot kick, drawn in and kicked out like pedalling. In the hip's frame the ankle runs a closed loop around the
+    /// hip joint between a tucked pose (knee bent, foot drawn up toward the belly) and a stretched one (leg straight out
+    /// behind). The push sweeps it back along the far side of the loop, the leg straightening early, a little out from
+    /// the body; the draw brings it forward along the near side, the knee bending first so the foot comes in close before
+    /// it swings up, a little in toward the midline. Lighter kicks run a smaller loop about the same middle; a braking
+    /// kick runs the loop backward. The loop rides on the hip bone, so it pitches and rolls with the spine. In time it is
+    /// a kick and glide: the push snaps off fast and eases as the leg straightens, the foot holds out behind for a moment,
+    /// then draws in to cock for the next push.
     /// </summary>
     [Serializable]
-    public class KickEllipse
+    public class HindKick
     {
-        [Tooltip("Half the kick's length along its direction and half its width across (m).")]
-        public float forwardRadius = 0.05f;
-        public float sideRadius = 0.01f;
-        [Tooltip("Size at the lightest drive that kicks and at full drive, as multiples of the radii.")]
-        public float lightScale = 1f;
-        public float fullScale = 1.9f;
+        [Header("Shape: ankle from the hip joint, in leg lengths; angles from straight back toward the belly")]
+        [Tooltip("Tucked pose at the start of the push: hip joint to ankle over the leg's length, and its angle (deg).")]
+        public float tuckedReach = 0.58f;
+        public float tuckedAngle = 72f;
+        [Tooltip("Stretched pose at the end of the push.")]
+        public float stretchedReach = 0.97f;
+        public float stretchedAngle = 18f;
+        [Tooltip("Out from the hip joint (leg lengths) when tucked, the knee opening outward, and when stretched, the foot in beside the tail.")]
+        public float tuckedOut = 0.28f;
+        public float stretchedOut = 0.08f;
+        [Tooltip("How far the push sweeps out wide of the straight line from tucked to stretched (leg lengths).")]
+        public float pushBow = 0.25f;
+        [Tooltip("How far the knee folds the foot in toward the hip midway through the draw, as a fraction of its distance.")]
+        [Range(0f, 0.6f)] public float drawFold = 0.35f;
+        [Tooltip("Loop size at the lightest drive that kicks, as a fraction of the full loop.")]
+        [Range(0.1f, 1f)] public float lightAmplitude = 0.75f;
         [Header("Timing")]
         [Tooltip("How sharp the push is: it peaks 1/snap of the way through the power stroke and eases out as the leg straightens (2 = an even surge).")]
         public float snap = 4f;
@@ -79,47 +92,66 @@ namespace OtterLocomotion
 
         /// <summary>Whether a phase is in the cocked hold at the end of the recovery.</summary>
         public bool Cocked(float phase, float powerFraction) => phase >= powerFraction + (1f - powerFraction) * (1f - cock);
-        [Tooltip("Where the foot rests on the loop: degrees from the front end, 90 = the outer side.")]
-        [Range(0f, 360f)] public float restAngleDeg = 285f;
-        [Tooltip("Tilts the loop's width about the kick direction, mirrored per leg (negative = the power side goes deeper).")]
-        [Range(-90f, 90f)] public float trajectoryTiltDeg = -45.1f;
-        [Header("Direction")]
-        [Tooltip("Exaggerates how far the kick leans out of the fore-aft line, relative to the allocated stroke's lean, so the two legs' different strokes read.")]
-        public float leanGain = 2f;
-        public float maxLeanDeg = 70f;
+        [Header("Limits")]
         [Tooltip("How far toward the midline a foot may swing, as a fraction of its rest distance from it; held off softly so the feet never cross.")]
         [Range(0f, 1f)] public float midlineReach = 0.6f;
-        [Header("Turning while prone: the feet push flat out, so the allocation keeps them nearly straight")]
-        [Tooltip("How far the back end of the kick swings outward in a full turn (deg), times each leg's amplifier; fades out on the back.")]
-        public float turnKickYawDeg = 30.3f;
-        public float innerYawAmplifier = 1.5f;
-        public float outerYawAmplifier = 0f;
-        [Tooltip("Turn rate demand (deg/s) that counts as a full turn.")]
-        public float fullTurnRate = 120f;
 
-        public float Scale(float drive) => Mathf.Lerp(lightScale, fullScale, drive);
+        /// <summary>Loop size at a drive, as a fraction of the full loop.</summary>
+        public float Amplitude(float drive) => Mathf.Lerp(lightAmplitude, 1f, drive);
 
-        /// <summary>Foot offset from rest at a phase. kickForward points at the loop's front end; outward is across it, toward the leg's side.</summary>
-        public Vector3 Offset(float phase, float powerFraction, Vector3 kickForward, Vector3 outward, float scale)
+        /// <summary>How far a kick growing in from rest (size 0) or fading out to it has moved onto its loop.</summary>
+        public float Engagement(float size) => Mathf.Clamp01(size / lightAmplitude);
+
+        /// <summary>Where on the loop the foot is at a phase: 0 = tucked, 0.5 = stretched, the push between, the draw after.</summary>
+        public float LoopAt(float phase, float powerFraction)
         {
-            float along;
             if (phase < powerFraction)
             {
                 float u = phase / powerFraction, k = Mathf.Max(2f, snap);
-                along = 1f - Mathf.Pow(1f - u, k) * (1f + k * u);
+                return 0.5f * (1f - Mathf.Pow(1f - u, k) * (1f + k * u));
+            }
+            float w = (phase - powerFraction) / Mathf.Max(1e-4f, 1f - powerFraction), drawEnd = 1f - cock;
+            float drawn = w < glide
+                ? glideDrift * Smooth(w / glide)
+                : glideDrift + (1f - glideDrift) * Smooth(Mathf.Clamp01((w - glide) / Mathf.Max(1e-4f, drawEnd - glide)));
+            return 0.5f + 0.5f * drawn;
+        }
+
+        /// <summary>Ankle at loop position s on a loop of the given size, in leg lengths from the hip joint: x back along
+        /// the body, y out toward the leg's side, z toward the belly.</summary>
+        public Vector3 Point(float s, float amplitude)
+        {
+            // the two poses for this loop size, shrunk toward each other about their middle
+            float midAngle = 0.5f * (tuckedAngle + stretchedAngle), midReach = 0.5f * (tuckedReach + stretchedReach);
+            Vector2 tuck = Polar(midAngle + amplitude * (tuckedAngle - midAngle), midReach + amplitude * (tuckedReach - midReach));
+            Vector2 stretch = Polar(midAngle + amplitude * (stretchedAngle - midAngle), midReach + amplitude * (stretchedReach - midReach));
+            float midOut = 0.5f * (tuckedOut + stretchedOut);
+            float tuckOut = midOut + amplitude * (tuckedOut - midOut), stretchOut = midOut + amplitude * (stretchedOut - midOut);
+            s = Mathf.Repeat(s, 1f);
+            // seen from the side (back, belly); the push bows out sideways and the draw folds in toward the hip, so the
+            // loop is not flat
+            Vector2 profile;
+            float outward;
+            if (s <= 0.5f)
+            {
+                // push: the leg straightens straight back from tucked to stretched, sweeping wide of the body
+                float w = 2f * s;
+                profile = Vector2.Lerp(tuck, stretch, w);
+                outward = Mathf.Lerp(tuckOut, stretchOut, w) + amplitude * pushBow * Mathf.Sin(Mathf.PI * w);
             }
             else
             {
-                float u = (phase - powerFraction) / Mathf.Max(1e-4f, 1f - powerFraction), drawEnd = 1f - cock;
-                along = 1f + (u < glide
-                    ? glideDrift * Smooth(u / glide)
-                    : glideDrift + (1f - glideDrift) * Smooth(Mathf.Clamp01((u - glide) / Mathf.Max(1e-4f, drawEnd - glide))));
+                // draw: the knee folds, pulling the foot in toward the hip as it comes forward close to the body
+                float w = 2f * s - 1f;
+                profile = Vector2.Lerp(stretch, tuck, w) * (1f - amplitude * drawFold * Mathf.Sin(Mathf.PI * w));
+                outward = Mathf.Lerp(stretchOut, tuckOut, w);
             }
-            return scale * (Point(Mathf.PI * along, kickForward, outward) - Point(restAngleDeg * Mathf.Deg2Rad, kickForward, outward));
+            return new Vector3(profile.x, outward, profile.y);
         }
 
-        private Vector3 Point(float theta, Vector3 forward, Vector3 outward) =>
-            forward * (Mathf.Cos(theta) * forwardRadius) + outward * (Mathf.Sin(theta) * sideRadius);
+        // back along the body and toward the belly, at an angle (deg) from straight back
+        private static Vector2 Polar(float angle, float reach) =>
+            new Vector2(Mathf.Cos(angle * Mathf.Deg2Rad), Mathf.Sin(angle * Mathf.Deg2Rad)) * reach;
 
         private static float Smooth(float u) => u * u * (3f - 2f * u);
     }
@@ -157,8 +189,8 @@ namespace OtterLocomotion
 
     /// <summary>
     /// Moves the limb IK targets along stroke paths from OtterLocomotionBrain's rhythm: phase and strength per limb,
-    /// so the limbs show what the allocation asks of them. Hind feet kick along HindPaddleTrajectoryRB's loop, aimed by
-    /// the allocated force (and, prone, splayed by the turn the brain asks for); forepaws sweep along the allocated
+    /// so the limbs show what the allocation asks of them. Hind feet draw in and kick out on a loop about the hip joint
+    /// (HindKick), run backward to brake; forepaws sweep along the allocated
     /// force direction, and rest folded on the chest when they have nothing to do, as on the back. Paths hang off the
     /// chest / hip bone, so they follow the spine's bend and roll. After the IK solve the hind flippers are turned at
     /// the ankle and toes (FlipperPose) to push square through the power stroke and slip edge-on through the recovery.
@@ -171,7 +203,7 @@ namespace OtterLocomotion
     {
         [Tooltip("Found on this object when empty.")]
         public OtterLocomotionBrain brain;
-        public KickEllipse hindKick = new KickEllipse();
+        public HindKick hindKick = new HindKick();
         public FlipperPose flipper = new FlipperPose();
         public StrokeShape foreStroke = new StrokeShape();
         [Tooltip("Time constant of a stroke growing in when a limb starts and fading out when it rests (s).")]
@@ -185,12 +217,16 @@ namespace OtterLocomotion
             public bool valid;
             public Transform target, girdle;
             public Vector3 restLocal, forwardLocal, upLocal, currentLocal;
+            /// <summary>The chain's root joint (shoulder / hip joint) in girdle space.</summary>
+            public Vector3 jointLocal;
             public float length;
-            /// <summary>Current stroke size: metres for a forepaw, a multiple of the kick radii for a hind foot.</summary>
+            /// <summary>Current stroke size: metres for a forepaw, a fraction of the full kick loop for a hind foot.</summary>
             public float size;
+            public AdvancedTwoBoneIK ik;
+            /// <summary>Whether the scene limits the chain's mid joint (knee / elbow) about its rest pose.</summary>
+            public bool kneeLimited;
 
             // hind flipper: the chain's end bone (the foot, hinged at the ankle) and the toe fan below it
-            public AdvancedTwoBoneIK ik;
             public Transform end, web;
             public Quaternion endRest, webRest;
             /// <summary>Web normal in the flipper's space (the face that is dorsal at rest), and where it points now, in girdle space.</summary>
@@ -244,6 +280,7 @@ namespace OtterLocomotion
             Capture();
             started = true;
             SuspendOldDrivers();
+            FreeKnees(true);
             afterIK = gameObject.AddComponent<AfterLimbIK>();
             afterIK.hideFlags = HideFlags.HideInInspector | HideFlags.DontSave;
             afterIK.Solved += PoseFlippers;
@@ -251,13 +288,27 @@ namespace OtterLocomotion
 
         private void OnEnable()
         {
-            if (started) SuspendOldDrivers();
+            if (!started) return;
+            SuspendOldDrivers();
+            FreeKnees(true);
         }
 
         private void OnDisable()
         {
             ResumeOldDrivers();
             RestoreFlippers();
+            FreeKnees(false);
+        }
+
+        // The hind knee's limits are set about the rig's nearly straight rest pose, which stops it short of the tuck the
+        // draw folds it into; the IK's pole keeps it bending the right way.
+        private void FreeKnees(bool free)
+        {
+            for (int i = 0; i < OtterRig.LimbCount; i++)
+            {
+                ref var l = ref limbs[i];
+                if (l.valid && l.ik != null && l.kneeLimited && !OtterRig.IsFore((LimbId)i)) l.ik.mid.useEulerLimits = !free;
+            }
         }
 
         private void OnDestroy()
@@ -284,7 +335,10 @@ namespace OtterLocomotion
                     currentLocal = rest,
                     forwardLocal = girdle.InverseTransformDirection(transform.forward),
                     upLocal = girdle.InverseTransformDirection(transform.up),
+                    jointLocal = girdle.InverseTransformPoint(a),
                     length = Vector3.Distance(a, b) + Vector3.Distance(b, c),
+                    ik = ik,
+                    kneeLimited = ik.mid.useEulerLimits,
                 };
                 if (!OtterRig.IsFore((LimbId)i)) CaptureFlipper(ref limbs[i], ik);
             }
@@ -378,8 +432,8 @@ namespace OtterLocomotion
             Vector3 travel = StrokeOffset(i, l, st, Mathf.Repeat(to, 1f)) - StrokeOffset(i, l, st, Mathf.Repeat(from, 1f));
             l.motionSpeed = st.active ? travel.magnitude * Mathf.Max(0f, st.rate) / Mathf.Max(1e-4f, to - from) : 0f;
             l.motionLocal = l.motionSpeed > 1e-4f ? l.girdle.InverseTransformDirection(travel.normalized) : Vector3.zero;
-            KickFrame(l, st, out var kickForward, out _);
-            l.sweepLocal = l.girdle.InverseTransformDirection(-kickForward);
+            Vector3 push = StrokeOffset(i, l, st, pf) - StrokeOffset(i, l, st, 0f);
+            if (push.sqrMagnitude > 1e-10f) l.sweepLocal = l.girdle.InverseTransformDirection(push.normalized);
             bool pushing = phase < st.powerFraction * (1f - flipper.release) || hindKick.Cocked(phase, st.powerFraction);
             l.push = st.active && !st.parking && l.size > 1e-4f && pushing ? 1f : 0f;
         }
@@ -400,7 +454,7 @@ namespace OtterLocomotion
                 if (ankle) l.end.localRotation = l.endRest;
                 l.web.localRotation = l.webRest;
                 // how much of a kick the foot is making: none at rest, full from the lightest kick up
-                float kicking = f.enabled ? Mathf.Clamp01(l.size / Mathf.Max(1e-3f, hindKick.lightScale)) : 0f;
+                float kicking = f.enabled ? hindKick.Engagement(l.size) : 0f;
                 Vector3 rest = l.web.TransformDirection(l.normalLocal);
                 // drawing forward the web lies along the way the leg actually swings it (it hangs on the shin well
                 // beyond the IK's end); the planned path steers it while the foot barely moves
@@ -498,7 +552,7 @@ namespace OtterLocomotion
         {
             // a limb with nothing left to do shrinks back to rest while its cycle runs out, e.g. forepaws folding as the otter rolls onto its back
             if (!st.active || st.parking) return 0f;
-            return OtterRig.IsFore((LimbId)i) ? foreStroke.Length(l.length, st.drive) : hindKick.Scale(st.drive);
+            return OtterRig.IsFore((LimbId)i) ? foreStroke.Length(l.length, st.drive) : hindKick.Amplitude(st.drive);
         }
 
         /// <summary>World-space paw offset from rest for limb i at a phase of its stroke, at the limb's current size.</summary>
@@ -516,36 +570,29 @@ namespace OtterLocomotion
                 return foreStroke.Offset(phase, st.powerFraction, power, right * side, up, l.size);
             }
 
-            KickFrame(l, st, out var kickForward, out var outward);
-            Vector3 offset = hindKick.Offset(phase, st.powerFraction, kickForward, outward, l.size);
-            float reach = Mathf.Abs(Vector3.Dot(rest - l.girdle.position, right)) * hindKick.midlineReach;
-            float inward = -Vector3.Dot(offset, right * side);
-            if (inward > 0f && reach > 1e-4f) offset += right * side * (inward - reach * (1f - Mathf.Exp(-inward / reach)));
+            KickAxes(l, out var joint, out var back, out var outward, out var belly);
+            float s = hindKick.LoopAt(phase, st.powerFraction);
+            // a braking kick pushes forward: the loop runs backward
+            if (st.direction.x > 0f) s = Mathf.Repeat(0.5f - s, 1f);
+            Vector3 p = hindKick.Point(s, Mathf.Max(l.size, hindKick.lightAmplitude));
+            Vector3 ankle = joint + l.length * (back * p.x + outward * p.y + belly * p.z);
+            Vector3 offset = (ankle - rest) * hindKick.Engagement(l.size);
+            float reach = Mathf.Abs(Vector3.Dot(rest - l.girdle.position, outward)) * hindKick.midlineReach;
+            float inward = -Vector3.Dot(offset, outward);
+            if (inward > 0f && reach > 1e-4f) offset += outward * (inward - reach * (1f - Mathf.Exp(-inward / reach)));
             return offset;
         }
 
-        /// <summary>A hind kick's loop axes (world): kickForward points at the loop's front end, outward across it toward the leg's side.</summary>
-        private void KickFrame(in Limb l, in LimbStroke st, out Vector3 kickForward, out Vector3 outward)
+        /// <summary>A hind kick's frame on the hip (world): the hip joint, back along the body, out toward the leg's side, and toward the belly.</summary>
+        private static void KickAxes(in Limb l, out Vector3 joint, out Vector3 back, out Vector3 outward, out Vector3 belly)
         {
-            var k = hindKick;
-            Vector3 up = Vector3.up;
-            Vector3 forward = Vector3.ProjectOnPlane(l.girdle.TransformDirection(l.forwardLocal), up).normalized;
-            Vector3 right = Vector3.Cross(up, forward);
-            float side = Vector3.Dot(l.girdle.TransformPoint(l.restLocal) - l.girdle.position, right) >= 0f ? 1f : -1f;
-            // + lean = the foot sweeps out away from the midline
-            Vector2 d = st.direction;
-            float back = d.x <= 0f ? 1f : -1f;
-            float lean = Mathf.Clamp(Mathf.Atan2(d.y * side, Mathf.Abs(d.x)) * Mathf.Rad2Deg * k.leanGain, -k.maxLeanDeg, k.maxLeanDeg);
-            float turnRate = brain.Demand.yawRateTarget;
-            float turn01 = Mathf.Clamp01(Mathf.Abs(turnRate) / Mathf.Max(1f, k.fullTurnRate));
-            bool inner = Mathf.Sign(turnRate) == side;
-            lean += k.turnKickYawDeg * turn01 * (inner ? k.innerYawAmplifier : k.outerYawAmplifier) * (1f - brain.Posture.SupineFraction);
-            // the loop's long axis, front end forward; a braking kick runs it back to front
-            Vector3 axis = Quaternion.AngleAxis(-lean * side * back, up) * forward;
-            // the loop's tilt follows the body: on the back the power side goes toward the belly, now facing up
-            float bodyUp = Vector3.Dot(l.girdle.TransformDirection(l.upLocal), up) >= 0f ? 1f : -1f;
-            outward = Quaternion.AngleAxis(k.trajectoryTiltDeg * side * bodyUp, axis) * (Vector3.Cross(up, axis) * side);
-            kickForward = axis * back;
+            Vector3 forward = l.girdle.TransformDirection(l.forwardLocal).normalized;
+            Vector3 dorsal = Vector3.ProjectOnPlane(l.girdle.TransformDirection(l.upLocal), forward).normalized;
+            Vector3 right = Vector3.Cross(dorsal, forward);
+            joint = l.girdle.TransformPoint(l.jointLocal);
+            back = -forward;
+            belly = -dorsal;
+            outward = Vector3.Dot(joint - l.girdle.position, right) >= 0f ? right : -right;
         }
 
 #if UNITY_EDITOR

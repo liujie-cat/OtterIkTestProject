@@ -69,8 +69,10 @@ namespace OtterLocomotion.EditorTools
 
             if (state == 1)
             {
-                // a paused editor would hold the run at its first frame until the timeout
+                // a paused editor would hold the run at its first frame until the timeout, and so would the editor
+                // losing focus while the project does not run in the background (for this Play only)
                 EditorApplication.isPaused = false;
+                Application.runInBackground = true;
                 var movement = Object.FindObjectsByType<MovementControllerRB>(FindObjectsSortMode.None).FirstOrDefault(m => m.isActiveAndEnabled);
                 if (movement == null)
                 {

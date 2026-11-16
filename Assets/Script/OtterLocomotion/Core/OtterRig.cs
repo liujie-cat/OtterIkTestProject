@@ -113,7 +113,7 @@ namespace OtterLocomotion
         }
 
         // Jacobi rotations on a symmetric 3x3 matrix; eigenvectors as columns of the accumulated rotation.
-        private static void SymmetricEigen(float[,] a, out float[] values, out Vector3[] vectors)
+        public static void SymmetricEigen(float[,] a, out float[] values, out Vector3[] vectors)
         {
             var v = new float[3, 3] { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
             for (int sweep = 0; sweep < 32; sweep++)
