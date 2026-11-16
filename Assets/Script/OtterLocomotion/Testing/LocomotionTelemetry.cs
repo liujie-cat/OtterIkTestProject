@@ -30,6 +30,9 @@ namespace OtterLocomotion.Testing
         public float turnMinDeg = 15f;
         public float settleToleranceDeg = 5f;
         public float stopSpeed = 0.1f;
+        [Tooltip("Hind foot speed relative to the hip (m/s) below which its web direction is not judged, and above which it counts as sweeping back or forward.")]
+        public float footStillSpeed = 0.05f;
+        public float footSweepSpeed = 0.1f;
 
         [Header("Feel targets (checked per segment in the summary)")]
         public float headReactionMax = 0.10f;
@@ -53,6 +56,16 @@ namespace OtterLocomotion.Testing
             public Vector3 restLocal;
         }
 
+        /// <summary>A hind foot's web, to see whether it faces the way it moves (pushing) or slides edge-on; tracked at the web's middle.</summary>
+        private class Foot
+        {
+            public string name;
+            public Transform bone;
+            public Vector3 normalLocal, lengthLocal, centerLocal;
+            public Vector3 previous;
+            public bool hasPrevious;
+        }
+
         private struct Sample
         {
             public float t, dt, intentYaw, steerYaw, bodyYaw, yawRate, speedFwd, speedLat, targetSpeed, demand;
@@ -62,6 +75,14 @@ namespace OtterLocomotion.Testing
             public MovementControllerRB.MoveZone zone;
             public float[] limb, limbOut;
             public int[] limbSide;
+            /// <summary>Per hind foot: |web normal · direction of motion| relative to the hip (1 = pushing flat-on, 0 = edge-on, -1 = still), and fore-aft speed (m/s, + = forward).</summary>
+            public float[] footFace, footFwd;
+            /// <summary>Per hind foot: speed relative to the hip (m/s), and the web normal's fore-aft component (±1 = facing straight back or ahead).</summary>
+            public float[] footSpeed, footNormalFwd;
+            /// <summary>Distance between the two hind webs' centres (cm), -1 without two feet.</summary>
+            public float feetGap;
+            /// <summary>Per hind foot, from LimbStrokeAnimator: ankle turn from rest (deg), push flag, web width, turn the goal asks for (deg).</summary>
+            public Vector4[] flipperPose;
             public Posture posture;
             public float supine, roll, speedTarget, speedCap, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
             public bool allocated;
@@ -86,8 +107,11 @@ namespace OtterLocomotion.Testing
         private int checkCount, passCount;
         private readonly List<PostureEvent> postureEvents = new List<PostureEvent>();
         private readonly List<Limb> limbs = new List<Limb>();
+        private readonly List<Foot> feet = new List<Foot>();
         private readonly List<Sample> samples = new List<Sample>();
         private Transform hip, chest, head;
+        private LimbStrokeAnimator animator;
+        private string footInfo = "";
         private bool kickThisFrame;
         private float prevYaw;
         private bool hasPrevYaw;
@@ -107,13 +131,25 @@ namespace OtterLocomotion.Testing
                 if (!OtterRig.TryClassify(ik, out var limb)) continue;
                 var space = OtterRig.Girdle(ik.root.bone);
                 limbs.Add(new Limb { name = limb.ToString(), target = ik.target, space = space, restLocal = space.InverseTransformPoint(ik.target.position) });
+                var flipper = OtterRig.IsFore(limb) ? null : OtterRig.Flipper(ik.end.bone);
+                if (flipper != null && OtterRig.TryFootPlane(flipper, out var normal, out var length, out var center, out _))
+                    feet.Add(new Foot { name = limb.ToString(), bone = flipper, normalLocal = normal, lengthLocal = length, centerLocal = center });
             }
             limbs.Sort((a, b) => string.CompareOrdinal(a.name, b.name));
+            feet.Sort((a, b) => string.CompareOrdinal(a.name, b.name));
+            var b0 = movement.transform;
+            footInfo = string.Join(" | ", feet.Select(f =>
+            {
+                Vector3 n = f.bone.TransformDirection(f.normalLocal), l = f.bone.TransformDirection(f.lengthLocal);
+                return $"{f.name} web normal (fwd {Vector3.Dot(n, b0.forward):F2}, right {Vector3.Dot(n, b0.right):F2}, up {Vector3.Dot(n, b0.up):F2})" +
+                       $" toes (fwd {Vector3.Dot(l, b0.forward):F2}, right {Vector3.Dot(l, b0.right):F2}, up {Vector3.Dot(l, b0.up):F2})";
+            }));
             hip = OtterRig.FindActiveBone(movement.transform, OtterRig.Hip);
             chest = OtterRig.FindActiveBone(movement.transform, OtterRig.Chest);
             head = OtterRig.FindActiveBone(movement.transform, OtterRig.Head);
             movement.OnKickCycleStart += OnKick;
             if (brain == null) brain = movement.GetComponent<OtterLocomotionBrain>();
+            animator = movement.GetComponent<LimbStrokeAnimator>();
             if (brain != null) brain.Posture.Changed += OnPosture;
         }
 
@@ -159,6 +195,28 @@ namespace OtterLocomotion.Testing
                 limbSide = limbs.Select(l => Vector3.Dot(l.space.TransformPoint(l.restLocal) - l.space.position, right) >= 0f ? 1 : -1).ToArray(),
             };
             s.limbOut = limbs.Select((l, k) => Vector3.Dot(l.target.position - l.space.TransformPoint(l.restLocal), right) * s.limbSide[k] * 100f).ToArray();
+            s.footFace = new float[feet.Count];
+            s.footFwd = new float[feet.Count];
+            s.footSpeed = new float[feet.Count];
+            s.footNormalFwd = new float[feet.Count];
+            s.feetGap = feet.Count == 2
+                ? Vector3.Distance(feet[0].bone.TransformPoint(feet[0].centerLocal), feet[1].bone.TransformPoint(feet[1].centerLocal)) * 100f
+                : -1f;
+            for (int k = 0; k < feet.Count && hip != null; k++)
+            {
+                var f = feet[k];
+                Vector3 p = hip.InverseTransformPoint(f.bone.TransformPoint(f.centerLocal));
+                Vector3 velocity = f.hasPrevious ? hip.TransformVector(p - f.previous) / dt : Vector3.zero;
+                f.previous = p;
+                f.hasPrevious = true;
+                float speed = velocity.magnitude;
+                Vector3 normal = f.bone.TransformDirection(f.normalLocal);
+                s.footFace[k] = speed > footStillSpeed ? Mathf.Abs(Vector3.Dot(normal, velocity / speed)) : -1f;
+                s.footFwd[k] = Vector3.Dot(velocity, fwd);
+                s.footSpeed[k] = speed;
+                s.footNormalFwd[k] = Vector3.Dot(normal, fwd);
+            }
+            s.flipperPose = feet.Select(f => animator != null && System.Enum.TryParse<LimbId>(f.name, out var id) ? animator.FlipperState(id) : Vector4.zero).ToArray();
             if (brain != null)
             {
                 var d = brain.Demand;
@@ -235,6 +293,13 @@ namespace OtterLocomotion.Testing
             // now (+1 right), which swaps left and right while on the back
             foreach (var l in limbs) sb.Append(',').Append(l.name).Append("_out");
             foreach (var l in limbs) sb.Append(',').Append(l.name).Append("_side");
+            // hind foot web vs its motion relative to the hip: face 1 = flat-on, 0 = edge-on, -1 = still; vfwd m/s, + = forward
+            // spd m/s; nfwd = web normal's fore-aft component
+            foreach (var f in feet) sb.Append(',').Append(f.name).Append("_face,").Append(f.name).Append("_vfwd,").Append(f.name).Append("_spd,").Append(f.name).Append("_nfwd");
+            // distance between the two webs' centres, cm
+            sb.Append(",feetGap");
+            // LimbStrokeAnimator's flipper pass: ankle turn from rest (deg), push flag, web width, turn the goal asks for (deg)
+            foreach (var f in feet) sb.Append(',').Append(f.name).Append("_turn,").Append(f.name).Append("_push,").Append(f.name).Append("_width,").Append(f.name).Append("_need");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedCap,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -255,6 +320,11 @@ namespace OtterLocomotion.Testing
                 foreach (var x in s.limb) sb.Append(',').Append(x.ToString("F2", ci));
                 foreach (var x in s.limbOut) sb.Append(',').Append(x.ToString("F2", ci));
                 foreach (var x in s.limbSide) sb.Append(',').Append(x);
+                for (int k = 0; k < feet.Count; k++)
+                    sb.Append(string.Format(ci, ",{0:F2},{1:F2},{2:F2},{3:F2}", s.footFace[k], s.footFwd[k], s.footSpeed[k], s.footNormalFwd[k]));
+                sb.Append(',').Append(s.feetGap.ToString("F2", ci));
+                foreach (var p in s.flipperPose)
+                    sb.Append(string.Format(ci, ",{0:F1},{1:F0},{2:F2},{3:F0}", p.x, p.y, p.z, p.w));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.speedCap, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
@@ -292,6 +362,7 @@ namespace OtterLocomotion.Testing
             sb.AppendLine($"# Locomotion playback '{label}', {samples.Count} frames, limbs: {string.Join(" ", limbs.Select(l => l.name))}");
             sb.AppendLine("# times in seconds from segment start; 'lead' = body reaction time minus limb reaction time (+ = limbs first);" +
                           " with the stroke rhythm the limb time is the first turning power stroke");
+            sb.AppendLine(feet.Count > 0 ? $"# hind feet at start (body axes): {footInfo}" : "# hind feet: no web found in the skinned mesh");
             if (brain != null && brain.HasLimbGeometry)
             {
                 var p = brain.Parameters;
@@ -330,9 +401,45 @@ namespace OtterLocomotion.Testing
                 }
                 if (brain != null) DemandMetrics(sb, idx, seg, t0);
                 RhythmMetrics(sb, idx);
+                FootMetrics(sb, idx);
             }
             sb.AppendLine($"\nfeel targets met: {passCount}/{checkCount}");
             return sb.ToString();
+        }
+
+        // Whether the hind feet push water: how squarely the web faces its motion relative to the hip, weighted by the
+        // fore-aft speed, while sweeping back (power, should be near 1) and coming forward (recovery, near 0).
+        private void FootMetrics(StringBuilder sb, List<int> idx)
+        {
+            if (feet.Count == 0) return;
+            var ci = CultureInfo.InvariantCulture;
+            var parts = new List<string>();
+            for (int k = 0; k < feet.Count; k++)
+            {
+                float backWeight = 0f, backFace = 0f, forwardWeight = 0f, forwardFace = 0f, peak = 0f;
+                foreach (int i in idx)
+                {
+                    var s = samples[i];
+                    if (s.footFace == null || k >= s.footFace.Length || s.footFace[k] < 0f) continue;
+                    float u = s.footFwd[k];
+                    if (u < -footSweepSpeed)
+                    {
+                        backWeight -= u;
+                        backFace -= u * s.footFace[k];
+                        peak = Mathf.Max(peak, -u);
+                    }
+                    else if (u > footSweepSpeed)
+                    {
+                        forwardWeight += u;
+                        forwardFace += u * s.footFace[k];
+                    }
+                }
+                string Mean(float sum, float weight) => weight > 1e-3f ? (sum / weight).ToString("F2", ci) : "-";
+                parts.Add($"{feet[k].name} back {Mean(backFace, backWeight)} fwd {Mean(forwardFace, forwardWeight)} peak {peak.ToString("F2", ci)} m/s");
+            }
+            var gaps = idx.Select(i => samples[i].feetGap).Where(g => g >= 0f).ToList();
+            string closest = gaps.Count > 0 ? $" | webs closest {gaps.Min().ToString("F1", ci)} cm" : "";
+            sb.AppendLine($"  feet (web facing its motion, 1 = flat-on push, 0 = edge-on): {string.Join(" | ", parts)}{closest}");
         }
 
         // What the demand layer asked for over the segment, next to what the body actually did.

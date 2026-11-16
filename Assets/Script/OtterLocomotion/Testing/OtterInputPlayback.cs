@@ -72,6 +72,42 @@ namespace OtterLocomotion.Testing
             new Segment("release", 1.5f, Zone.Release, 90f),
         };
 
+        /// <summary>
+        /// Small (20°) and large (120° / 160°) turns each way inside the inner ring (in place), between the rings
+        /// (swimming, on the back) and outside the outer ring (sprinting, prone), plus a gentle sweep in 15° steps.
+        /// </summary>
+        public static List<Segment> TurnScript() => new List<Segment>
+        {
+            new Segment("rest", 1.5f, Zone.Release, 0f),
+            new Segment("in ring: small left 20", 1.5f, Zone.Aim, -20f),
+            new Segment("in ring: small right 20", 1.5f, Zone.Aim, 0f),
+            new Segment("in ring: large right 120", 2.5f, Zone.Aim, 120f),
+            new Segment("in ring: large left 160", 3.0f, Zone.Aim, -40f),
+            new Segment("release", 1.0f, Zone.Release, -40f),
+            new Segment("swim: straight", 2.5f, Zone.Swim, -40f),
+            new Segment("swim: small left 20", 2.0f, Zone.Swim, -60f),
+            new Segment("swim: small right 20", 2.0f, Zone.Swim, -40f),
+            new Segment("swim: large right 120", 3.0f, Zone.Swim, 80f),
+            new Segment("swim: large left 160", 3.5f, Zone.Swim, -80f),
+            new Segment("swim: sweep right 15 (1/4)", 0.7f, Zone.Swim, -65f),
+            new Segment("swim: sweep right 15 (2/4)", 0.7f, Zone.Swim, -50f),
+            new Segment("swim: sweep right 15 (3/4)", 0.7f, Zone.Swim, -35f),
+            new Segment("swim: sweep right 15 (4/4)", 0.7f, Zone.Swim, -20f),
+            new Segment("sprint: straight", 2.5f, Zone.Sprint, -20f),
+            new Segment("sprint: small left 20", 2.0f, Zone.Sprint, -40f),
+            new Segment("sprint: small right 20", 2.0f, Zone.Sprint, -20f),
+            new Segment("sprint: large right 120", 3.0f, Zone.Sprint, 100f),
+            new Segment("sprint: large left 160", 3.5f, Zone.Sprint, -60f),
+            new Segment("release, coast", 2.5f, Zone.Release, -60f),
+        };
+
+        public static List<Segment> Script(string name) => name switch
+        {
+            "posture" => PostureScript(),
+            "turns" => TurnScript(),
+            _ => BaselineScript(),
+        };
+
         /// <summary>Exercises every posture rule: the sprint build-up, the arrow pulled back across supineReach, manual toggles while swimming and at rest.</summary>
         public static List<Segment> PostureScript() => new List<Segment>
         {

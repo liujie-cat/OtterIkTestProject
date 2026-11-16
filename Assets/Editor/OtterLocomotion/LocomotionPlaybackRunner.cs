@@ -18,13 +18,14 @@ namespace OtterLocomotion.EditorTools
         const string StateKey = "OtterLocomotion.Playback.State";   // 1 = entering Play, 2 = running
         const string LabelKey = "OtterLocomotion.Playback.Label";
         const string ScriptKey = "OtterLocomotion.Playback.Script";
+        const string OldLimbsKey = "OtterLocomotion.Playback.OldLimbs";
         const double TimeoutSeconds = 180.0;
 
         static OtterInputPlayback playback;
         static LocomotionTelemetry telemetry;
         static double deadline;
         static LocomotionSnapshots.Shot[] shots = new LocomotionSnapshots.Shot[0];
-        static int nextShot;
+        static int nextShot, nextFrame;
 
         static LocomotionPlaybackRunner() => EditorApplication.update += Tick;
 
@@ -34,15 +35,30 @@ namespace OtterLocomotion.EditorTools
         [MenuItem("Tools/Otter Locomotion/Run Posture Playback")]
         static void RunPosture() => Run("posture", "posture");
 
+        [MenuItem("Tools/Otter Locomotion/Run Turn Playback")]
+        static void RunTurns() => Run("turns", "turns");
+
+        [MenuItem("Tools/Otter Locomotion/Run Turn Playback (old limbs)")]
+        static void RunTurnsOldLimbs() => Run("turns_old", "turns", oldLimbs: true);
+
+        [MenuItem("Tools/Otter Locomotion/Run Baseline Playback (old limbs)")]
+        static void RunBaselineOldLimbs() => Run("baseline_old", "baseline", oldLimbs: true);
+
         [MenuItem("Tools/Otter Locomotion/Run Baseline Playback", true)]
         [MenuItem("Tools/Otter Locomotion/Run Posture Playback", true)]
+        [MenuItem("Tools/Otter Locomotion/Run Turn Playback", true)]
+        [MenuItem("Tools/Otter Locomotion/Run Turn Playback (old limbs)", true)]
+        [MenuItem("Tools/Otter Locomotion/Run Baseline Playback (old limbs)", true)]
         static bool CanRun() => !EditorApplication.isPlayingOrWillChangePlaymode;
 
-        public static void Run(string label, string script)
+        /// <param name="oldLimbs">Leave the limbs to the scene's old drivers (no LimbStrokeAnimator), to compare against.</param>
+        public static void Run(string label, string script, bool oldLimbs = false)
         {
             SessionState.SetString(LabelKey, label);
             SessionState.SetString(ScriptKey, script);
+            SessionState.SetBool(OldLimbsKey, oldLimbs);
             SessionState.SetInt(StateKey, 1);
+            EditorApplication.isPaused = false;
             EditorApplication.isPlaying = true;
         }
 
@@ -53,6 +69,8 @@ namespace OtterLocomotion.EditorTools
 
             if (state == 1)
             {
+                // a paused editor would hold the run at its first frame until the timeout
+                EditorApplication.isPaused = false;
                 var movement = Object.FindObjectsByType<MovementControllerRB>(FindObjectsSortMode.None).FirstOrDefault(m => m.isActiveAndEnabled);
                 if (movement == null)
                 {
@@ -67,19 +85,20 @@ namespace OtterLocomotion.EditorTools
                     var saved = movement.GetComponent(managed[i].type);
                     if (saved != null) Object.DestroyImmediate(saved);
                 }
-                foreach (var (type, _) in managed) movement.gameObject.AddComponent(type);
+                bool oldLimbs = SessionState.GetBool(OldLimbsKey, false);
+                foreach (var (type, _) in managed)
+                    if (!oldLimbs || type != typeof(LimbStrokeAnimator)) movement.gameObject.AddComponent(type);
                 var host = new GameObject("LocomotionPlayback (runtime)");
                 playback = host.AddComponent<OtterInputPlayback>();
                 playback.movement = movement;
-                playback.segments = SessionState.GetString(ScriptKey, "baseline") == "posture"
-                    ? OtterInputPlayback.PostureScript()
-                    : OtterInputPlayback.BaselineScript();
+                playback.segments = OtterInputPlayback.Script(SessionState.GetString(ScriptKey, "baseline"));
                 telemetry = host.AddComponent<LocomotionTelemetry>();
                 telemetry.playback = playback;
                 telemetry.movement = movement;
                 telemetry.label = SessionState.GetString(LabelKey, "baseline");
                 shots = LocomotionSnapshots.For(SessionState.GetString(ScriptKey, "baseline"));
-                nextShot = 0;
+                nextShot = nextFrame = 0;
+                LocomotionSnapshots.Release();
                 deadline = EditorApplication.timeSinceStartup + TimeoutSeconds;
                 SessionState.SetInt(StateKey, 2);
                 return;
@@ -91,12 +110,24 @@ namespace OtterLocomotion.EditorTools
                 Stop();
                 return;
             }
-            while (nextShot < shots.Length && playback.SegmentIndex > shots[nextShot].segment) nextShot++;
-            if (nextShot < shots.Length && playback.SegmentIndex == shots[nextShot].segment &&
-                Time.time - playback.SegmentStartTime >= shots[nextShot].time)
+            while (nextShot < shots.Length && playback.SegmentIndex > shots[nextShot].segment)
             {
-                LocomotionSnapshots.Take(telemetry.movement.transform, telemetry.label, shots[nextShot].name);
                 nextShot++;
+                nextFrame = 0;
+                LocomotionSnapshots.Release();
+            }
+            if (nextShot < shots.Length && playback.SegmentIndex == shots[nextShot].segment)
+            {
+                var shot = shots[nextShot];
+                if (Time.time - playback.SegmentStartTime >= shot.time + nextFrame * shot.interval)
+                {
+                    LocomotionSnapshots.Take(telemetry.movement.transform, telemetry.label, shot, nextFrame);
+                    if (++nextFrame >= shot.frames)
+                    {
+                        nextShot++;
+                        nextFrame = 0;
+                    }
+                }
             }
 
             bool timedOut = EditorApplication.timeSinceStartup > deadline;

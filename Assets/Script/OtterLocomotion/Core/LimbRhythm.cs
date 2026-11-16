@@ -31,9 +31,9 @@ namespace OtterLocomotion
     {
         [Tooltip("Hind feet kicking together: big, slower kicks when swimming fast.")]
         [FormerlySerializedAs("hind")]
-        public RhythmProfile hindTogether = new RhythmProfile(1.1f, 1.5f, 0.4f, 3f);
+        public RhythmProfile hindTogether = new RhythmProfile(1.1f, 1.5f, 0.3f, 3f);
         [Tooltip("Hind feet taking turns: small, quicker kicks at low speed (turning on the spot, swimming on the back).")]
-        public RhythmProfile hindAlternate = new RhythmProfile(1.6f, 2.2f, 0.45f, 3f);
+        public RhythmProfile hindAlternate = new RhythmProfile(1.6f, 2.2f, 0.35f, 3f);
         public RhythmProfile fore = new RhythmProfile(1.6f, 3.2f, 0.4f, 1.5f);
         [Tooltip("Hind feet kick together once the speed target (m/s) reaches this, and take turns again below hindApartSpeed; in between they keep their gait.")]
         public float hindTogetherSpeed = 1.6f;
@@ -44,8 +44,8 @@ namespace OtterLocomotion
         public float hindFullForce = 2.5f;
         public float foreFullForce = 0.6f;
         [Tooltip("Drive needed to start stroking. Below the release drive a limb finishes its cycle and rests.")]
-        public float engageDrive = 0.08f;
-        public float releaseDrive = 0.04f;
+        public float engageDrive = 0.04f;
+        public float releaseDrive = 0.02f;
         [Tooltip("Time constants of the stroke strength following the allocation (s).")]
         public float driveRiseTime = 0.04f;
         public float driveFallTime = 0.2f;
