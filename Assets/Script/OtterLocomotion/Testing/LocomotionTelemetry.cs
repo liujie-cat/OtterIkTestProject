@@ -29,7 +29,7 @@ namespace OtterLocomotion.Testing
         public float limbThresholdCm = 1f;
         public float turnMinDeg = 15f;
         public float settleToleranceDeg = 5f;
-        public float stopSpeed = 0.1f;
+        public float stopSpeed = 0.02f;
         [Tooltip("Hind foot speed relative to the hip (m/s) below which its web direction is not judged, and above which it counts as sweeping back or forward.")]
         public float footStillSpeed = 0.05f;
         public float footSweepSpeed = 0.1f;
@@ -266,7 +266,8 @@ namespace OtterLocomotion.Testing
                 intentYaw = Yaw(movement.GetWorldDir()), steerYaw = Yaw(movement.GetSteerDir()),
                 bodyYaw = yaw, yawRate = yawRate,
                 speedFwd = Vector3.Dot(v, fwd), speedLat = Vector3.Dot(v, right),
-                targetSpeed = movement.GetTargetSpeed(), demand = movement.GetDemand01(), kick = kickThisFrame, reach = movement.GetReach01(),
+                // the brain asks for its own speeds, capped by posture; the movement controller's belong to its impulse kicks
+                targetSpeed = brain != null && brain.isActiveAndEnabled ? brain.Demand.speedCap : movement.GetTargetSpeed(), demand = movement.GetDemand01(), kick = kickThisFrame, reach = movement.GetReach01(),
                 // bones point at their child along local +Y, so .up is the head/chest/hip direction
                 headYaw = head ? Vector3.SignedAngle(fwd, Flat(head.up), Vector3.up) : 0f,
                 chestBend = hip && chest ? Vector3.SignedAngle(Flat(hip.up), Flat(chest.up), Vector3.up) : 0f,
@@ -892,7 +893,7 @@ namespace OtterLocomotion.Testing
             foreach (int i in idx)
             {
                 if (t90 == null && samples[i].speedFwd >= 0.9f * target) t90 = samples[i].t - t0;
-                if (tPush == null && fromRest && samples[i].speedFwd > 0.3f) tPush = samples[i].t - t0;
+                if (tPush == null && fromRest && samples[i].speedFwd > 0.3f * target) tPush = samples[i].t - t0;
             }
             float end = samples[idx[idx.Count - 1]].t;
             var tail = idx.Where(i => samples[i].t >= end - 1f).Select(i => samples[i]).ToList();
@@ -901,7 +902,7 @@ namespace OtterLocomotion.Testing
             var kickTimes = idx.Where(i => samples[i].kick).Select(i => samples[i].t).ToList();
             string interval = kickTimes.Count > 1 ? ((kickTimes[kickTimes.Count - 1] - kickTimes[0]) / (kickTimes.Count - 1)).ToString("F2", ci) + " s" : "n/a";
             sb.AppendLine($"  speed: target {target:F2} m/s, 90% at {(t90.HasValue ? t90.Value.ToString("F2", ci) : "never")} s" +
-                          (fromRest ? $", first push (>0.3 m/s) at {(tPush.HasValue ? tPush.Value.ToString("F2", ci) : "never")} s" : "") +
+                          (fromRest ? $", first push (>30% of target) at {(tPush.HasValue ? tPush.Value.ToString("F2", ci) : "never")} s" : "") +
                           $", last 1 s mean {mean:F2} (min {minS:F2}, max {maxS:F2}) m/s, kick interval {interval}");
             float ripple = mean > 1e-3f ? (maxS - minS) / (2f * mean) : float.PositiveInfinity;
             sb.AppendLine("  targets: " + string.Join(" | ",

@@ -29,15 +29,15 @@ namespace OtterLocomotion
     [Serializable]
     public class RhythmSettings
     {
-        [Tooltip("Hind feet kicking together: big, slower kicks when swimming fast.")]
+        [Tooltip("Hind feet kicking together: big kicks when swimming fast, beating with the prone body wave; the fluke's push grows with the square of its beat.")]
         [FormerlySerializedAs("hind")]
-        public RhythmProfile hindTogether = new RhythmProfile(1.1f, 1.5f, 0.3f, 3f);
+        public RhythmProfile hindTogether = new RhythmProfile(0.7f, 2f, 0.3f, 3f);
         [Tooltip("Hind feet taking turns: smaller kicks at low speed (turning on the spot, swimming on the back).")]
-        public RhythmProfile hindAlternate = new RhythmProfile(1.1f, 1.6f, 0.4f, 3f);
+        public RhythmProfile hindAlternate = new RhythmProfile(0.6f, 1.6f, 0.4f, 3f);
         public RhythmProfile fore = new RhythmProfile(1.6f, 3.2f, 0.4f, 1.5f);
         [Tooltip("Hind feet kick together once the speed target (m/s) reaches this, and take turns again below hindApartSpeed; in between they keep their gait.")]
-        public float hindTogetherSpeed = 1.6f;
-        public float hindApartSpeed = 1.3f;
+        public float hindTogetherSpeed = 0.18f;
+        public float hindApartSpeed = 0.165f;
 
         [Header("Drive = allocated force / full-drive force")]
         [Tooltip("Allocated force (N) at which a limb strokes at full size and rate.")]
@@ -50,9 +50,11 @@ namespace OtterLocomotion
         public float driveRiseTime = 0.04f;
         public float driveFallTime = 0.2f;
 
-        [Header("Phase reset: a fresh demand starts the next power stroke early")]
-        [Tooltip("Last part of the recovery, as a fraction of it, in which a fresh demand starts the power stroke at once.")]
+        [Header("Hurried recovery: a fresh demand brings the next power stroke on early")]
+        [Tooltip("Last part of the recovery, as a fraction of it, which a fresh demand hurries through.")]
         [Range(0f, 1f)] public float resetWindow = 0.5f;
+        [Tooltip("Time a fresh demand takes to draw the foot through that window (s). Not a jump: snapping the leg forward would whip the web through the water and brake the body.")]
+        public float resetTime = 0.15f;
         [Tooltip("Rise in drive over the current stroke's, or turn of the stroke direction, that counts as a fresh demand.")]
         public float resetDriveJump = 0.25f;
         public float resetAngleDeg = 60f;
@@ -90,7 +92,7 @@ namespace OtterLocomotion
     /// asked to push sets its stroke strength and rate, the force direction sets its stroke direction, fixed when each
     /// power phase begins. Left and right of a girdle pull toward alternating strokes; the hind feet kick together
     /// when swimming fast. A limb with nothing to do finishes its cycle and rests; a fresh demand in the late recovery
-    /// starts the next power stroke at once, and a limb starting from rest pushes immediately.
+    /// hurries the rest of it through, and a limb starting from rest pushes immediately.
     /// </summary>
     public sealed class LimbRhythm
     {
@@ -159,12 +161,11 @@ namespace OtterLocomotion
                     rate += profile.coupling * Wrap(p.phase - l.phase - PartnerLead(i));
                 rate = Mathf.Max(0.2f * profile.minHz, rate);
 
-                if (!l.parking && !startedNow[i] && l.phase >= l.powerFraction &&
-                    l.phase >= 1f - (1f - l.powerFraction) * s.resetWindow &&
+                float window = (1f - l.powerFraction) * s.resetWindow;
+                if (!l.parking && !startedNow[i] && l.phase >= l.powerFraction && l.phase >= 1f - window &&
                     (l.targetDrive > l.strokeDrive + s.resetDriveJump || Vector2.Angle(l.targetDirection, l.direction) > s.resetAngleDeg))
-                    l.phase = 1f;
-                else
-                    l.phase += rate * dt;
+                    rate = Mathf.Max(rate, window / Mathf.Max(1e-3f, s.resetTime));
+                l.phase += rate * dt;
                 l.rate = rate;
 
                 if (l.phase < 1f) continue;

@@ -15,19 +15,22 @@ namespace OtterLocomotion
         public float pivotYawRateMax = 150f;
         [Tooltip("Yaw rate limit at yawRateRefSpeed and above (deg/s).")]
         public float cruiseYawRateMax = 180f;
-        public float yawRateRefSpeed = 2.5f;
+        public float yawRateRefSpeed = 0.2f;
 
         [Header("Yaw rate -> yaw moment")]
         [Tooltip("M = I * gain * (r* - r) + angular drag feedforward (1/s).")]
         public float yawRateGain = 8f;
 
         [Header("Speed -> surge force")]
-        [Tooltip("F = m * gain * (u* - u) + drag feedforward (1/s).")]
-        public float speedGain = 2.5f;
+        [Tooltip("Speed (m/s) the hind kicks hold at full stroke strength on the back, and on the belly (WebThrust). The stroke strength asked for is the speed target's share of it: kicks grow with the speed wanted, not with the push missing, since a web's push grows with the square of its speed through the water and a slow body gets far more from the same kick.")]
+        public float supineKickSpeed = 0.37f;
+        public float proneKickSpeed = 0.27f;
+        [Tooltip("Kicks for u* + gain * (u* - u): how much harder or lighter the speed error makes them.")]
+        public float speedGain = 1.5f;
         [Tooltip("How fast the speed target may rise (m/s^2).")]
-        public float speedRiseRate = 4f;
+        public float speedRiseRate = 0.4f;
         [Tooltip("How fast it falls: the release glide and the ease-down to the supine cap (m/s^2).")]
-        public float speedFallRate = 1.5f;
+        public float speedFallRate = 0.12f;
 
         [Header("Sideslip")]
         [Tooltip("Lateral force = m * (u r* - gain * sway): centripetal for the commanded turn plus sideslip damping (1/s).")]
@@ -67,7 +70,9 @@ namespace OtterLocomotion
 
         /// <param name="speedCap">Posture's top speed (m/s).</param>
         /// <param name="speedRiseRate">Posture's limit on how fast the speed target rises (m/s^2), on top of the settings'.</param>
-        public LocomotionDemand Step(DemandSettings s, in LocomotionIntent intent, in BodyState body, in BodyParameters p, float speedCap, float speedRiseRate, float dt)
+        /// <param name="kickSpeed">Posture's speed at full stroke strength (m/s).</param>
+        /// <param name="fullStroke">Surge force (N) that asks the kicking limbs for full stroke strength.</param>
+        public LocomotionDemand Step(DemandSettings s, in LocomotionIntent intent, in BodyState body, in BodyParameters p, float speedCap, float speedRiseRate, float kickSpeed, float fullStroke, float dt)
         {
             const float g = 9.81f;
             bool steering = intent.Steering;
@@ -91,9 +96,8 @@ namespace OtterLocomotion
             float requested = steering ? Mathf.Min(intent.requestedSpeed, speedCap) : 0f;
             bool slowing = requested < speedTarget - 1e-4f;
             speedTarget = Mathf.MoveTowards(speedTarget, requested, (slowing ? s.speedFallRate : Mathf.Min(s.speedRiseRate, speedRiseRate)) * dt);
-            float speed = body.Speed;
-            float drag = (p.linearDrag + p.quadraticDrag * speed) * body.surge;
-            float surgeForce = p.mass * s.speedGain * (speedTarget - body.surge) + drag;
+            float kick = speedTarget + s.speedGain * (speedTarget - body.surge);
+            float surgeForce = fullStroke * kick / Mathf.Max(1e-3f, kickSpeed);
             if (slowing) surgeForce = Mathf.Min(surgeForce, 0f);
 
             // yaw moment toward the yaw rate target, plus what the water's angular drag will take away

@@ -8,10 +8,10 @@ namespace OtterLocomotion
     {
         public Posture initial = Posture.Supine;
         [Tooltip("Top speed on the back (m/s) between the rings. After rolling onto the back the speed target eases down to this.")]
-        public float supineMaxSpeed = 1.2f;
+        public float supineMaxSpeed = 0.16f;
         [Tooltip("How fast the speed target may rise on the back (m/s^2). With proneSprintFraction it sets how long a " +
                  "sprint kicks on the back before rolling over.")]
-        public float supineRiseRate = 2.5f;
+        public float supineRiseRate = 0.15f;
         [Tooltip("Switch posture automatically. Manual toggles always work.")]
         public bool autoSwitch = true;
         [Tooltip("Sprinting (arrow beyond the outer ring) lifts the top speed on the back: the otter speeds up on its back " +
@@ -21,7 +21,7 @@ namespace OtterLocomotion
                  "the outer ring keeps it from flipping back and forth at the edge of the sprint zone.")]
         [Range(0f, 1f)] public float supineReach = 0.9f;
         [Tooltip("After letting go, or when starting to aim inside supineReach, a prone otter rolls onto its back once slower than this (m/s)...")]
-        public float supineEnterSpeed = 0.5f;
+        public float supineEnterSpeed = 0.05f;
         [Tooltip("...for this long (s).")]
         public float supineSettleTime = 0.5f;
         [Tooltip("Nominal roll-over time (s), used until the limbs drive the roll themselves.")]

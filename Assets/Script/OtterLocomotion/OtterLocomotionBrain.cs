@@ -22,6 +22,11 @@ namespace OtterLocomotion
         public MovementControllerRB intentSource;
         public WaterDrag waterDrag;
 
+        [Header("Speeds")]
+        [Tooltip("Speed asked for between the rings and beyond the outer ring (m/s): what the webs can push the body to through the water (WebThrust), so the kicks set how fast it goes. MovementControllerRB's own target speeds belong to its impulse kicks and are not used.")]
+        public float swimSpeed = 0.2f;
+        public float sprintSpeed = 0.27f;
+
         [Header("Posture")]
         public KeyCode postureToggleKey = KeyCode.F;
         public PostureSettings postureSettings = new PostureSettings();
@@ -164,7 +169,8 @@ namespace OtterLocomotion
             float supineCapped = Intent.band == SpeedBand.Sprint ? Intent.requestedSpeed : Mathf.Min(Intent.requestedSpeed, postureSettings.supineMaxSpeed);
             float speedCap = Mathf.Lerp(Intent.requestedSpeed, supineCapped, supine);
             float riseRate = Mathf.Lerp(demandSettings.speedRiseRate, postureSettings.supineRiseRate, supine);
-            var demand = demandLayer.Step(demandSettings, Intent, state, Parameters, speedCap, riseRate, dt);
+            float kickSpeed = Mathf.Lerp(demandSettings.proneKickSpeed, demandSettings.supineKickSpeed, supine);
+            var demand = demandLayer.Step(demandSettings, Intent, state, Parameters, speedCap, riseRate, kickSpeed, 2f * rhythmSettings.hindFullForce, dt);
 
             if (!HasLimbGeometry) return;
             actuators.Build(actuatorSettings, geometry, centerOfMass, postureMachine.RollDeg, postureMachine.SupineFraction, Parameters.mass);
@@ -189,7 +195,7 @@ namespace OtterLocomotion
             {
                 band = band,
                 heading = dir.sqrMagnitude > 1e-8f ? dir.normalized : estimator.State.forward,
-                requestedSpeed = intentSource.GetTargetSpeed(),
+                requestedSpeed = band == SpeedBand.Swim ? swimSpeed : band == SpeedBand.Sprint ? sprintSpeed : 0f,
                 reach = intentSource.GetReach01(),
             };
         }
