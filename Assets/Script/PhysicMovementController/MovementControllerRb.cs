@@ -151,6 +151,22 @@ public class MovementControllerRB : MonoBehaviour
 
     /// <summary>When set, input comes from this pointer instead of the mouse; everything downstream is unchanged.</summary>
     public IPointerSource PointerOverride { get; set; }
+
+    /// <summary>Times the propulsion by the limbs' strokes rather than this controller's own kick rhythm.</summary>
+    public interface IPropulsionTiming
+    {
+        /// <summary>This physics step's share of the average thrust: high while the limbs push, 0 between pushes, about 1 on average.</summary>
+        float Thrust { get; }
+        /// <summary>This step's share of the usual facing response: high while the turning strokes push, low between them.</summary>
+        float Turn { get; }
+    }
+
+    /// <summary>
+    /// When set, the thrust the kick rhythm would deliver (each kick's impulse over its cycle) is spread over the
+    /// strokes as a force, and the body swings round toward the steer direction mostly while they push. The rhythm
+    /// still runs for its timing and events.
+    /// </summary>
+    public IPropulsionTiming PropulsionTiming { get; set; }
     public Camera InputCamera => inputCamera;
     public DualRingUIControllerRB RingUI => ui;
 
@@ -414,6 +430,7 @@ public class MovementControllerRB : MonoBehaviour
             smoothing *= w;
         }
 
+        if (PropulsionTiming != null) smoothing *= Mathf.Max(0f, PropulsionTiming.Turn);
         if (smoothing <= 0f) return;
 
         // Dragging: face steerDir. Released: face releaseAlignDir for a short window.
@@ -593,7 +610,7 @@ public class MovementControllerRB : MonoBehaviour
                     // Apply impulse at the START of Kick phase
                     if (allowPropulsion)
                     {
-                        rb.AddForce(steerDir * impulse, ForceMode.Impulse);
+                        if (PropulsionTiming == null) rb.AddForce(steerDir * impulse, ForceMode.Impulse);
                         lastKickImpulse = impulse;
                     }
                     else
@@ -629,6 +646,9 @@ public class MovementControllerRB : MonoBehaviour
                     break;
             }
         }
+
+        if (PropulsionTiming != null && allowPropulsion)
+            rb.AddForce(steerDir * (impulse / T * Mathf.Max(0f, PropulsionTiming.Thrust)), ForceMode.Force);
 
         // Keep nextKickTime valid even mid-phase
         if (nextKickTime < Time.time)

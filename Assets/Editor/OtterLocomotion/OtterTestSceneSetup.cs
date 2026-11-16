@@ -30,6 +30,8 @@ namespace OtterLocomotion.EditorTools
             (typeof(LimbStrokeAnimator), "四肢划水"),
             (typeof(PostureFlipSync), "翻身同步"),
             (typeof(SpineKickWave), "脊柱踢水波"),
+            (typeof(StrokePropulsion), "划水推进"),
+            (typeof(WaterReference), "水中参照"),
         };
 
         internal enum Level { Ok, Fix, Blocked }

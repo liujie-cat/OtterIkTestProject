@@ -5,10 +5,13 @@ using UnityEngine;
 namespace OtterLocomotion.EditorTools
 {
     /// <summary>
-    /// Orthographic pictures of the otter at chosen moments of a playback, showing only its skinned meshes so the water
-    /// and the scene do not hide the limbs. Single shots frame the whole body from above (head up) and from its left;
-    /// strips are close-up contact sheets of the hind feet over a kick (frames left to right, then the next row),
-    /// from above, behind and the left. Written to Logs/Snapshots.
+    /// Pictures of the otter at chosen moments of a playback. The orthographic views show only its skinned meshes so
+    /// the scene does not hide the limbs; the perspective ones look on from above and behind its left side, as from
+    /// the Scene view, with WaterReference's grids and web trails, so the body's motion can be set against the world
+    /// and the strokes. Single shots frame the whole body from above (head up), from its left and in perspective;
+    /// strips are contact sheets over a kick (frames left to right, then the next row): close-ups of the hind feet
+    /// from above, behind and the left, a perspective close-up riding with the hips, and a perspective view held still
+    /// in the world over the whole strip, which the otter swims through. Written to Logs/Snapshots.
     /// </summary>
     static class LocomotionSnapshots
     {
@@ -31,11 +34,32 @@ namespace OtterLocomotion.EditorTools
             }
         }
 
+        readonly struct View
+        {
+            public readonly string name;
+            public readonly Vector3 position;
+            public readonly Quaternion rotation;
+            /// <summary>Half the picture's height at the subject (m).</summary>
+            public readonly float size;
+            public readonly bool perspective;
+
+            public View(string name, Vector3 position, Quaternion rotation, float size, bool perspective)
+            {
+                this.name = name;
+                this.position = position;
+                this.rotation = rotation;
+                this.size = size;
+                this.perspective = perspective;
+            }
+        }
+
         const int Layer = 31;
         const int CellWidth = 400, CellHeight = 320, Columns = 4;
+        const float FieldOfView = 30f;
 
         static Texture2D[] sheets;
         static Vector3 stripCenterLocal;
+        static View held;
 
         /// <summary>Moments to capture: segment index and seconds into it, matching OtterInputPlayback's scripts, in order and not overlapping.</summary>
         public static Shot[] For(string script) => script switch
@@ -77,48 +101,67 @@ namespace OtterLocomotion.EditorTools
             forward = forward.sqrMagnitude > 1e-6f ? forward.normalized : Vector3.forward;
             Vector3 right = Vector3.Cross(Vector3.up, forward);
             // the telemetry's hind ankle trails ride along under the hip
-            var drawn = meshes.Cast<Renderer>().Concat(otter.GetComponentsInChildren<LineRenderer>().Where(l => l.enabled && l.positionCount > 1)).ToArray();
+            var body = meshes.Cast<Renderer>().Concat(otter.GetComponentsInChildren<LineRenderer>().Where(l => l.enabled && l.positionCount > 1)).ToArray();
+            var reference = Object.FindObjectsByType<WaterReference>(FindObjectsSortMode.None).SelectMany(w => w.Renderers).Where(r => r != null);
+            var scene = body.Concat(reference).Distinct().ToArray();
+            // from above and behind the left side, as the Scene view usually looks on
+            Vector3 aside = (-right * 0.75f - forward * 0.45f + Vector3.up * 0.5f).normalized;
             string dir = Path.Combine("Logs", "Snapshots");
             Directory.CreateDirectory(dir);
 
             if (shot.frames <= 1)
             {
-                var views = new (string view, Vector3 from, Vector3 up)[]
+                var views = new[]
                 {
-                    ("top", Vector3.up, forward),
-                    ("left", -right, Vector3.up),
+                    Orthographic("top", bounds.center, Vector3.up, forward, extent * 0.8f, extent),
+                    Orthographic("left", bounds.center, -right, Vector3.up, extent * 0.8f, extent),
                 };
-                Render(drawn, bounds.center, extent * 0.8f, extent, 1000, 800, views,
-                    (v, tex) => File.WriteAllBytes(Path.Combine(dir, $"{label}_{shot.name}_{views[v].view}.png"), tex.EncodeToPNG()));
+                Render(body, views, 1000, 800,
+                    (v, tex) => File.WriteAllBytes(Path.Combine(dir, $"{label}_{shot.name}_{views[v].name}.png"), tex.EncodeToPNG()));
+                var persp = new[] { Perspective("persp", bounds.center, aside, extent * 0.9f) };
+                Render(scene, persp, 1000, 800,
+                    (v, tex) => File.WriteAllBytes(Path.Combine(dir, $"{label}_{shot.name}_{persp[v].name}.png"), tex.EncodeToPNG()));
                 return;
             }
 
             var hip = OtterRig.FindActiveBone(otter, OtterRig.Hip);
             if (hip == null) return;
-            var strip = new (string view, Vector3 from, Vector3 up)[]
-            {
-                ("top", Vector3.up, forward),
-                ("back", -forward, Vector3.up),
-                ("left", -right, Vector3.up),
-            };
             if (frame == 0)
             {
                 var chains = OtterRig.FindLimbChains(otter);
                 var hind = new[] { chains[(int)LimbId.HL], chains[(int)LimbId.HR] }.Where(c => c != null).ToArray();
                 Vector3 feet = hind.Length > 0 ? hind.Aggregate(Vector3.zero, (s, c) => s + c.end.bone.position) / hind.Length : hip.position;
                 stripCenterLocal = hip.InverseTransformPoint(Vector3.Lerp(hip.position, feet, 0.6f));
+                // held still in the world, framing the otter's whole way through the strip from its left
+                var rb = otter.GetComponent<Rigidbody>();
+                Vector3 travel = rb != null ? Vector3.ProjectOnPlane(rb.velocity, Vector3.up) * (shot.interval * (shot.frames - 1)) : Vector3.zero;
+                Vector3 side = (-right + Vector3.up * 0.6f).normalized;
+                float half = (0.5f * travel.magnitude + extent * 0.9f) * CellHeight / CellWidth;
+                held = Perspective("world", bounds.center + 0.5f * travel, side, Mathf.Max(extent * 0.7f, half));
                 Release();
                 int rows = (shot.frames + Columns - 1) / Columns;
-                sheets = strip.Select(_ => new Texture2D(CellWidth * Columns, CellHeight * rows, TextureFormat.RGB24, false)).ToArray();
+                sheets = Enumerable.Range(0, 5).Select(_ => new Texture2D(CellWidth * Columns, CellHeight * rows, TextureFormat.RGB24, false)).ToArray();
             }
             if (sheets == null) return;
+            Vector3 center = hip.TransformPoint(stripCenterLocal);
+            var close = new[]
+            {
+                Orthographic("top", center, Vector3.up, forward, extent * 0.3f, extent),
+                Orthographic("back", center, -forward, Vector3.up, extent * 0.3f, extent),
+                Orthographic("left", center, -right, Vector3.up, extent * 0.3f, extent),
+            };
+            var wide = new[] { Perspective("persp", center, aside, extent * 0.45f), held };
             int column = frame % Columns, row = frame / Columns, rowCount = sheets[0].height / CellHeight;
-            Render(drawn, hip.TransformPoint(stripCenterLocal), extent * 0.3f, extent, CellWidth, CellHeight, strip,
-                (v, tex) => sheets[v].SetPixels(column * CellWidth, (rowCount - 1 - row) * CellHeight, CellWidth, CellHeight, tex.GetPixels()));
+            Render(body, close, CellWidth, CellHeight, (v, tex) => Place(v, tex));
+            Render(scene, wide, CellWidth, CellHeight, (v, tex) => Place(close.Length + v, tex));
             if (frame < shot.frames - 1) return;
-            for (int v = 0; v < strip.Length; v++)
-                File.WriteAllBytes(Path.Combine(dir, $"{label}_{shot.name}_{strip[v].view}.png"), sheets[v].EncodeToPNG());
+            var names = close.Concat(wide).Select(v => v.name).ToArray();
+            for (int v = 0; v < names.Length; v++)
+                File.WriteAllBytes(Path.Combine(dir, $"{label}_{shot.name}_{names[v]}.png"), sheets[v].EncodeToPNG());
             Release();
+
+            void Place(int sheet, Texture2D tex) =>
+                sheets[sheet].SetPixels(column * CellWidth, (rowCount - 1 - row) * CellHeight, CellWidth, CellHeight, tex.GetPixels());
         }
 
         /// <summary>Drops a strip that could not finish (its segment ended).</summary>
@@ -129,17 +172,21 @@ namespace OtterLocomotion.EditorTools
             sheets = null;
         }
 
-        static void Render(Renderer[] meshes, Vector3 center, float size, float extent, int width, int height,
-            (string view, Vector3 from, Vector3 up)[] views, System.Action<int, Texture2D> use)
+        static View Orthographic(string name, Vector3 center, Vector3 from, Vector3 up, float size, float extent) =>
+            new View(name, center + from * (extent + 1f), Quaternion.LookRotation(-from, up), size, false);
+
+        static View Perspective(string name, Vector3 center, Vector3 from, float size) =>
+            new View(name, center + from * (size / Mathf.Tan(0.5f * FieldOfView * Mathf.Deg2Rad)), Quaternion.LookRotation(-from, Vector3.up), size, true);
+
+        static void Render(Renderer[] drawn, View[] views, int width, int height, System.Action<int, Texture2D> use)
         {
-            var layers = meshes.Select(m => m.gameObject.layer).ToArray();
-            foreach (var m in meshes) m.gameObject.layer = Layer;
+            var layers = drawn.Select(m => m.gameObject.layer).ToArray();
+            foreach (var m in drawn) m.gameObject.layer = Layer;
             var go = new GameObject("LocomotionSnapshotCamera") { hideFlags = HideFlags.HideAndDontSave };
             var cam = go.AddComponent<Camera>();
-            cam.orthographic = true;
-            cam.orthographicSize = size;
             cam.nearClipPlane = 0.01f;
-            cam.farClipPlane = extent * 2f + 2f;
+            cam.farClipPlane = 50f;
+            cam.fieldOfView = FieldOfView;
             cam.cullingMask = 1 << Layer;
             cam.clearFlags = CameraClearFlags.SolidColor;
             cam.backgroundColor = new Color(0.62f, 0.70f, 0.64f);
@@ -150,7 +197,9 @@ namespace OtterLocomotion.EditorTools
             {
                 for (int v = 0; v < views.Length; v++)
                 {
-                    go.transform.SetPositionAndRotation(center + views[v].from * (extent + 1f), Quaternion.LookRotation(-views[v].from, views[v].up));
+                    cam.orthographic = !views[v].perspective;
+                    cam.orthographicSize = views[v].size;
+                    go.transform.SetPositionAndRotation(views[v].position, views[v].rotation);
                     cam.Render();
                     var prev = RenderTexture.active;
                     RenderTexture.active = rt;
@@ -162,7 +211,7 @@ namespace OtterLocomotion.EditorTools
             }
             finally
             {
-                for (int i = 0; i < meshes.Length; i++) meshes[i].gameObject.layer = layers[i];
+                for (int i = 0; i < drawn.Length; i++) drawn[i].gameObject.layer = layers[i];
                 cam.targetTexture = null;
                 Object.DestroyImmediate(go);
                 Object.DestroyImmediate(rt);

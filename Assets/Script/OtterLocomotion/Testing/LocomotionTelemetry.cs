@@ -65,7 +65,8 @@ namespace OtterLocomotion.Testing
             public string name;
             public Transform bone;
             public Vector3 normalLocal, lengthLocal, centerLocal;
-            public Vector3 previous;
+            /// <summary>Web middle last frame, relative to the hip and in the world.</summary>
+            public Vector3 previous, previousWorld;
             public bool hasPrevious;
             /// <summary>The leg's IK chain, for the ankle's path relative to the hip joint in the hip's axes; side = +1 when the leg is on the hip's +X.</summary>
             public Transform hipJoint, ankle, girdle;
@@ -101,6 +102,8 @@ namespace OtterLocomotion.Testing
             public float[] footHeave;
             /// <summary>SpineKickWave sent a wave packet down the spine this frame.</summary>
             public bool pulse;
+            /// <summary>Per hind foot: the web's fore-aft speed through the water (m/s, world, + = forward); a push that holds its water keeps it near 0 or below.</summary>
+            public float[] footWorldFwd;
             public Posture posture;
             public float supine, roll, speedTarget, speedCap, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
             public bool allocated;
@@ -279,12 +282,16 @@ namespace OtterLocomotion.Testing
             s.feetGap = feet.Count == 2
                 ? Vector3.Distance(feet[0].bone.TransformPoint(feet[0].centerLocal), feet[1].bone.TransformPoint(feet[1].centerLocal)) * 100f
                 : -1f;
+            s.footWorldFwd = new float[feet.Count];
             for (int k = 0; k < feet.Count && hip != null; k++)
             {
                 var f = feet[k];
-                Vector3 p = hip.InverseTransformPoint(f.bone.TransformPoint(f.centerLocal));
+                Vector3 world = f.bone.TransformPoint(f.centerLocal);
+                Vector3 p = hip.InverseTransformPoint(world);
                 Vector3 velocity = f.hasPrevious ? hip.TransformVector(p - f.previous) / dt : Vector3.zero;
+                s.footWorldFwd[k] = f.hasPrevious ? Vector3.Dot(world - f.previousWorld, fwd) / dt : 0f;
                 f.previous = p;
+                f.previousWorld = world;
                 f.hasPrevious = true;
                 float speed = velocity.magnitude;
                 Vector3 normal = f.bone.TransformDirection(f.normalLocal);
@@ -394,6 +401,8 @@ namespace OtterLocomotion.Testing
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_heave");
             // 1 = SpineKickWave sent a wave packet down the spine
             sb.Append(",pulse");
+            // each web's fore-aft speed through the water, m/s
+            foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wfwd");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedCap,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -425,6 +434,7 @@ namespace OtterLocomotion.Testing
                 sb.Append(string.Format(ci, ",{0:F2},{1:F3},{2:F1},{3:F1}", s.fluke, s.flukePhase, s.hipPitch, s.chestPitch));
                 foreach (var h in s.footHeave) sb.Append(',').Append(h.ToString("F2", ci));
                 sb.Append(',').Append(s.pulse ? 1 : 0);
+                foreach (var w in s.footWorldFwd) sb.Append(',').Append(w.ToString("F2", ci));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.speedCap, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
@@ -537,7 +547,14 @@ namespace OtterLocomotion.Testing
                     }
                 }
                 string Mean(float sum, float weight) => weight > 1e-3f ? (sum / weight).ToString("F2", ci) : "-";
-                parts.Add($"{feet[k].name} back {Mean(backFace, backWeight)} fwd {Mean(forwardFace, forwardWeight)} peak {peak.ToString("F2", ci)} m/s");
+                // through its power strokes, how fast the web moves forward through the water beside the body
+                var pushing = System.Enum.TryParse<LimbId>(feet[k].name, out var id)
+                    ? idx.Where(i => (samples[i].powerMask & (1 << (int)id)) != 0 && samples[i].footWorldFwd != null).ToList()
+                    : new List<int>();
+                string water = pushing.Count > 0
+                    ? $", pushing web {pushing.Average(i => samples[i].footWorldFwd[k]).ToString("F2", ci)} vs body {pushing.Average(i => samples[i].speedFwd).ToString("F2", ci)} m/s"
+                    : "";
+                parts.Add($"{feet[k].name} back {Mean(backFace, backWeight)} fwd {Mean(forwardFace, forwardWeight)} peak {peak.ToString("F2", ci)} m/s{water}");
             }
             var gaps = idx.Select(i => samples[i].feetGap).Where(g => g >= 0f).ToList();
             string closest = gaps.Count > 0 ? $" | webs closest {gaps.Min().ToString("F1", ci)} cm" : "";
