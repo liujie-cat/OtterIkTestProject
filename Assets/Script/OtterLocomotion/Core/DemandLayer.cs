@@ -65,7 +65,9 @@ namespace OtterLocomotion
             hasHeading = false;
         }
 
-        public LocomotionDemand Step(DemandSettings s, in LocomotionIntent intent, in BodyState body, in BodyParameters p, float speedCap, float dt)
+        /// <param name="speedCap">Posture's top speed (m/s).</param>
+        /// <param name="speedRiseRate">Posture's limit on how fast the speed target rises (m/s^2), on top of the settings'.</param>
+        public LocomotionDemand Step(DemandSettings s, in LocomotionIntent intent, in BodyState body, in BodyParameters p, float speedCap, float speedRiseRate, float dt)
         {
             const float g = 9.81f;
             bool steering = intent.Steering;
@@ -88,7 +90,7 @@ namespace OtterLocomotion
             // speed target: requested, capped by posture, slewed; never push forward while deliberately slowing
             float requested = steering ? Mathf.Min(intent.requestedSpeed, speedCap) : 0f;
             bool slowing = requested < speedTarget - 1e-4f;
-            speedTarget = Mathf.MoveTowards(speedTarget, requested, (slowing ? s.speedFallRate : s.speedRiseRate) * dt);
+            speedTarget = Mathf.MoveTowards(speedTarget, requested, (slowing ? s.speedFallRate : Mathf.Min(s.speedRiseRate, speedRiseRate)) * dt);
             float speed = body.Speed;
             float drag = (p.linearDrag + p.quadraticDrag * speed) * body.surge;
             float surgeForce = p.mass * s.speedGain * (speedTarget - body.surge) + drag;

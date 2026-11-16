@@ -72,19 +72,22 @@ namespace OtterLocomotion.Testing
             new Segment("release", 1.5f, Zone.Release, 90f),
         };
 
-        /// <summary>Exercises every posture rule: the arrow crossing both thresholds, manual toggles while swimming and at rest.</summary>
+        /// <summary>Exercises every posture rule: the sprint build-up, the arrow pulled back across supineReach, manual toggles while swimming and at rest.</summary>
         public static List<Segment> PostureScript() => new List<Segment>
         {
             new Segment("rest (expect supine)", 1.5f, Zone.Release, 0f),
             new Segment("swim mid-ring: stays supine, eases to cap", 3.0f, Zone.Swim, 0f),
-            new Segment("arrow out to 95%: prone", 2.5f, Zone.Swim, 0f, reach: 0.95f),
-            new Segment("arrow back to 78%: supine", 3.0f, Zone.Swim, 0f, reach: 0.78f),
-            new Segment("F while swimming -> prone, held", 2.5f, Zone.Swim, 0f, pressFlip: true, reach: 0.78f),
+            new Segment("arrow out to 98%, still between the rings: stays supine", 2.0f, Zone.Swim, 0f, reach: 0.98f),
+            new Segment("sprint: speeds up on its back, then prone", 2.5f, Zone.Sprint, 0f),
+            new Segment("arrow back to 95%: stays prone", 1.5f, Zone.Swim, 0f, reach: 0.95f),
+            new Segment("arrow back to 85%: supine", 3.0f, Zone.Swim, 0f, reach: 0.85f),
+            new Segment("F while swimming -> prone, held", 2.5f, Zone.Swim, 0f, pressFlip: true, reach: 0.85f),
             new Segment("sprint: already prone", 2.5f, Zone.Sprint, 0f),
             new Segment("release: glide, then supine", 3.0f, Zone.Release, 0f),
             new Segment("F at rest -> prone", 1.5f, Zone.Release, 0f, pressFlip: true),
             new Segment("aim pivot left 90: supine once slow", 2.5f, Zone.Aim, -90f),
-            new Segment("release", 1.0f, Zone.Release, -90f),
+            new Segment("sprint from rest: on its back first, then prone", 2.5f, Zone.Sprint, -90f),
+            new Segment("release", 1.5f, Zone.Release, -90f),
         };
 
         private void Start()

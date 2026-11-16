@@ -156,12 +156,15 @@ namespace OtterLocomotion
             var state = estimator.Step(body, dt);
             Intent = ReadIntent();
 
-            postureMachine.Step(postureSettings, Intent, state, toggleRequested, Demand.yawRateTarget, dt);
+            postureMachine.Step(postureSettings, Intent, state, toggleRequested, Demand.speedTarget, Demand.yawRateTarget, dt);
             toggleRequested = false;
 
-            float supineCapped = Mathf.Min(Intent.requestedSpeed, postureSettings.supineMaxSpeed);
-            float speedCap = Mathf.Lerp(Intent.requestedSpeed, supineCapped, postureMachine.SupineFraction);
-            var demand = demandLayer.Step(demandSettings, Intent, state, Parameters, speedCap, dt);
+            // sprinting lifts the top speed on the back, so the otter speeds up on its back until it rolls over
+            float supine = postureMachine.SupineFraction;
+            float supineCapped = Intent.band == SpeedBand.Sprint ? Intent.requestedSpeed : Mathf.Min(Intent.requestedSpeed, postureSettings.supineMaxSpeed);
+            float speedCap = Mathf.Lerp(Intent.requestedSpeed, supineCapped, supine);
+            float riseRate = Mathf.Lerp(demandSettings.speedRiseRate, postureSettings.supineRiseRate, supine);
+            var demand = demandLayer.Step(demandSettings, Intent, state, Parameters, speedCap, riseRate, dt);
 
             if (!HasLimbGeometry) return;
             actuators.Build(actuatorSettings, geometry, centerOfMass, postureMachine.RollDeg, postureMachine.SupineFraction, Parameters.mass);

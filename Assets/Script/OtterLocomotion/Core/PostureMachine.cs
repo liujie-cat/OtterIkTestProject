@@ -7,15 +7,19 @@ namespace OtterLocomotion
     public class PostureSettings
     {
         public Posture initial = Posture.Supine;
-        [Tooltip("Top speed on the back (m/s). After rolling onto the back the speed target eases down to this.")]
+        [Tooltip("Top speed on the back (m/s) between the rings. After rolling onto the back the speed target eases down to this.")]
         public float supineMaxSpeed = 1.2f;
-        [Tooltip("Switch posture automatically from how far the arrow is pulled. Manual toggles always work.")]
+        [Tooltip("How fast the speed target may rise on the back (m/s^2). With proneSprintFraction it sets how long a " +
+                 "sprint kicks on the back before rolling over.")]
+        public float supineRiseRate = 2.5f;
+        [Tooltip("Switch posture automatically. Manual toggles always work.")]
         public bool autoSwitch = true;
-        [Tooltip("Arrow length, as a fraction of the outer ring's radius, that rolls the otter onto its belly to swim fast.")]
-        [Range(0f, 1f)] public float proneReach = 0.9f;
-        [Tooltip("Pulling the arrow back below this rolls it onto its back again. The gap to proneReach keeps it from " +
-                 "flipping back and forth; inside the gap the otter keeps its posture.")]
-        [Range(0f, 1f)] public float supineReach = 0.8f;
+        [Tooltip("Sprinting (arrow beyond the outer ring) lifts the top speed on the back: the otter speeds up on its back " +
+                 "and rolls onto its belly once its speed target reaches this fraction of the sprint speed.")]
+        [Range(0f, 1f)] public float proneSprintFraction = 0.9f;
+        [Tooltip("Pulling the arrow back below this fraction of the outer ring rolls it onto its back again. The gap to " +
+                 "the outer ring keeps it from flipping back and forth at the edge of the sprint zone.")]
+        [Range(0f, 1f)] public float supineReach = 0.9f;
         [Tooltip("After letting go, or when starting to aim inside supineReach, a prone otter rolls onto its back once slower than this (m/s)...")]
         public float supineEnterSpeed = 0.5f;
         [Tooltip("...for this long (s).")]
@@ -25,10 +29,11 @@ namespace OtterLocomotion
     }
 
     /// <summary>
-    /// Prone/supine posture, from how far the player pulls the arrow. Automatic switches fire only when the arrow
-    /// crosses a threshold: out past proneReach rolls prone, back inside supineReach rolls supine; letting go, or
-    /// starting to aim inside supineReach, rolls supine once slow. A manual toggle holds until the next crossing.
-    /// The speed cap follows the roll progress, and the demand layer eases the speed target down to it.
+    /// Prone/supine posture. Between the rings the otter swims on its back. Sprinting, it first speeds up on its back
+    /// and rolls prone once the speed target reaches proneSprintFraction of the sprint speed; pulling the arrow back
+    /// inside supineReach rolls it supine, and letting go, or starting to aim, rolls it supine once slow. Automatic
+    /// switches fire only on crossings, so a manual toggle holds until the next one. The speed cap follows the roll
+    /// progress, and the demand layer eases the speed target down to it.
     /// </summary>
     public sealed class PostureMachine
     {
@@ -57,7 +62,7 @@ namespace OtterLocomotion
         /// <summary>(new posture, reason) whenever a roll starts.</summary>
         public event Action<Posture, string> Changed;
 
-        private float previousReach;
+        private float previousReach, previousSprint;
         private bool previousSteering;
         private bool hasPrevious;
         private bool pendingSupine;
@@ -74,9 +79,12 @@ namespace OtterLocomotion
             slowTimer = 0f;
         }
 
-        public void Step(PostureSettings s, in LocomotionIntent intent, in BodyState body, bool togglePressed, float yawRateDemand, float dt)
+        /// <param name="speedTarget">The demand layer's speed target from the previous step (m/s).</param>
+        public void Step(PostureSettings s, in LocomotionIntent intent, in BodyState body, bool togglePressed, float speedTarget, float yawRateDemand, float dt)
         {
             float reach = intent.Steering ? intent.reach : 0f;
+            // how far a sprint has built up, 0 outside the sprint zone
+            float sprint = intent.band == SpeedBand.Sprint ? speedTarget / Mathf.Max(0.1f, intent.requestedSpeed) : 0f;
             if (togglePressed)
             {
                 pendingSupine = false;
@@ -84,18 +92,17 @@ namespace OtterLocomotion
             }
             else if (s.autoSwitch)
             {
-                int percent = Mathf.RoundToInt(reach * 100f);
                 if (hasPrevious)
                 {
-                    if (reach >= s.proneReach && previousReach < s.proneReach)
+                    if (sprint >= s.proneSprintFraction && previousSprint < s.proneSprintFraction)
                     {
                         pendingSupine = false;
-                        Begin(Posture.Prone, $"arrow out to {percent}% of the outer ring", yawRateDemand);
+                        Begin(Posture.Prone, $"sprint built up to {Mathf.RoundToInt(sprint * 100f)}% of sprint speed", yawRateDemand);
                     }
                     else if (intent.Steering && previousSteering && reach < s.supineReach && previousReach >= s.supineReach)
                     {
                         pendingSupine = false;
-                        Begin(Posture.Supine, $"arrow back to {percent}%", yawRateDemand);
+                        Begin(Posture.Supine, $"arrow back to {Mathf.RoundToInt(reach * 100f)}% of the outer ring", yawRateDemand);
                     }
                     else if (intent.Steering != previousSteering && reach < s.supineReach)
                     {
@@ -115,6 +122,7 @@ namespace OtterLocomotion
                 }
             }
             previousReach = reach;
+            previousSprint = sprint;
             previousSteering = intent.Steering;
             hasPrevious = true;
             if (FlipProgress < 1f) FlipProgress = Mathf.Min(1f, FlipProgress + dt / Mathf.Max(0.05f, s.flipDuration));
