@@ -96,6 +96,9 @@ namespace OtterLocomotion.Testing
             public Vector4[] flipperPose;
             /// <summary>Per hind foot, from LimbStrokeAnimator: how far its kick loop swings out for the turn (deg).</summary>
             public float[] kickYaw;
+            /// <summary>LimbStrokeAnimator's fluke (0..1) and its beat (cycles); the hip and chest bones' pitch (deg, + = front up); per hind foot the ankle's height over the hip joint (cm, world up).</summary>
+            public float fluke, flukePhase, hipPitch, chestPitch;
+            public float[] footHeave;
             public Posture posture;
             public float supine, roll, speedTarget, speedCap, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
             public bool allocated;
@@ -285,6 +288,11 @@ namespace OtterLocomotion.Testing
             }
             s.flipperPose = feet.Select(f => animator != null && System.Enum.TryParse<LimbId>(f.name, out var id) ? animator.FlipperState(id) : Vector4.zero).ToArray();
             s.kickYaw = feet.Select(f => animator != null && System.Enum.TryParse<LimbId>(f.name, out var id) ? animator.KickYaw(id) : 0f).ToArray();
+            s.fluke = animator != null ? animator.Fluke : 0f;
+            s.flukePhase = animator != null ? animator.FlukePhase : 0f;
+            s.hipPitch = hip != null ? Mathf.Asin(Mathf.Clamp(Vector3.Dot(hip.up, Vector3.up), -1f, 1f)) * Mathf.Rad2Deg : 0f;
+            s.chestPitch = chest != null ? Mathf.Asin(Mathf.Clamp(Vector3.Dot(chest.up, Vector3.up), -1f, 1f)) * Mathf.Rad2Deg : 0f;
+            s.footHeave = feet.Select(f => (f.ankle.position.y - f.hipJoint.position.y) * 100f).ToArray();
             if (brain != null)
             {
                 var d = brain.Demand;
@@ -372,6 +380,9 @@ namespace OtterLocomotion.Testing
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_pf,").Append(f.name).Append("_po,").Append(f.name).Append("_pv,").Append(f.name).Append("_reach");
             // how far each kick loop swings out for the turn (deg)
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_kyaw");
+            // the fluke: how far in (0..1), its beat (cycles), the hip bone's pitch (deg) and each ankle's height over its hip joint (cm)
+            sb.Append(",fluke,flukePh,hipPitch,chestPitch");
+            foreach (var f in feet) sb.Append(',').Append(f.name).Append("_heave");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedCap,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -400,6 +411,8 @@ namespace OtterLocomotion.Testing
                 for (int k = 0; k < feet.Count; k++)
                     sb.Append(string.Format(ci, ",{0:F2},{1:F2},{2:F2},{3:F3}", s.footPath[k].x, s.footPath[k].y, s.footPath[k].z, s.footReach[k]));
                 foreach (var y in s.kickYaw) sb.Append(',').Append(y.ToString("F1", ci));
+                sb.Append(string.Format(ci, ",{0:F2},{1:F3},{2:F1},{3:F1}", s.fluke, s.flukePhase, s.hipPitch, s.chestPitch));
+                foreach (var h in s.footHeave) sb.Append(',').Append(h.ToString("F2", ci));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.speedCap, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
@@ -478,6 +491,7 @@ namespace OtterLocomotion.Testing
                 RhythmMetrics(sb, idx);
                 FootMetrics(sb, idx);
                 PathMetrics(sb, idx);
+                FlukeMetrics(sb, idx);
             }
             sb.AppendLine($"\nfeel targets met: {passCount}/{checkCount}");
             return sb.ToString();
@@ -570,6 +584,51 @@ namespace OtterLocomotion.Testing
                           $" push {heading} deg, loop swung {yaw.ToString("F0", ci)} deg");
             }
             sb.AppendLine($"  hind paths (ankle from hip joint; travel and main axis in fwd/out/vent; push heading from straight back, + = out): {string.Join(" | ", parts)}");
+        }
+
+        // The fluke over the frames it is mostly in: its beat, how far the hips pitch and the feet heave (5th..95th
+        // percentile), and how long the feet run behind the hips (the delay that best lines the feet's heave up with
+        // the tail end of the hips dropping; 0 = the legs move rigidly with the hips).
+        private void FlukeMetrics(StringBuilder sb, List<int> idx)
+        {
+            var seq = idx.Select(i => samples[i]).Where(s => s.fluke > 0.5f && s.footHeave != null).ToList();
+            if (seq.Count < 20 || feet.Count == 0) return;
+            var ci = CultureInfo.InvariantCulture;
+            float duration = Mathf.Max(1e-3f, seq[seq.Count - 1].t - seq[0].t);
+            int beats = 0;
+            for (int i = 1; i < seq.Count; i++)
+                if (seq[i].flukePhase < seq[i - 1].flukePhase - 0.5f) beats++;
+            string Range(IEnumerable<float> xs)
+            {
+                var o = xs.OrderBy(x => x).ToList();
+                return $"{o[(int)(0.05f * (o.Count - 1))].ToString("F1", ci)}..{o[(int)(0.95f * (o.Count - 1))].ToString("F1", ci)}";
+            }
+            var parts = new List<string>
+            {
+                $"beat {(beats / duration).ToString("F2", ci)} Hz",
+                $"pitch hips {Range(seq.Select(s => s.hipPitch))} chest {Range(seq.Select(s => s.chestPitch))} deg",
+            };
+            float pitchMean = seq.Average(s => s.hipPitch);
+            for (int k = 0; k < feet.Count; k++)
+            {
+                float heaveMean = seq.Average(s => s.footHeave[k]);
+                float bestLag = 0f, best = float.MinValue;
+                for (float lag = 0f; lag <= 0.6f; lag += 0.02f)
+                {
+                    float sum = 0f;
+                    int n = 0, j = 0;
+                    for (int i = 0; i < seq.Count; i++)
+                    {
+                        while (j < seq.Count - 1 && seq[j].t < seq[i].t + lag) j++;
+                        if (seq[j].t < seq[i].t + lag - 0.03f) break;
+                        sum += -(seq[i].hipPitch - pitchMean) * (seq[j].footHeave[k] - heaveMean);
+                        n++;
+                    }
+                    if (n > 10 && sum / n > best) { best = sum / n; bestLag = lag; }
+                }
+                parts.Add($"{feet[k].name} heave {Range(seq.Select(s => s.footHeave[k]))} cm reach {seq.Average(s => s.footReach[k]).ToString("F2", ci)} behind hips {bestLag.ToString("F2", ci)} s");
+            }
+            sb.AppendLine($"  fluke ({seq.Count} frames): {string.Join(" | ", parts)}");
         }
 
         // What the demand layer asked for over the segment, next to what the body actually did.

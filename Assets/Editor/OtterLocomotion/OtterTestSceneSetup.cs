@@ -29,6 +29,7 @@ namespace OtterLocomotion.EditorTools
             (typeof(OtterLocomotionBrain), "运动大脑"),
             (typeof(LimbStrokeAnimator), "四肢划水"),
             (typeof(PostureFlipSync), "翻身同步"),
+            (typeof(FlukeSpineWave), "尾鳍脊柱波"),
         };
 
         internal enum Level { Ok, Fix, Blocked }

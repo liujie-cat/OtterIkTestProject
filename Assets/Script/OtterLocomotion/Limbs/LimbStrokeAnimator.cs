@@ -181,6 +181,37 @@ namespace OtterLocomotion
     }
 
     /// <summary>
+    /// Sprinting prone the hind feet stop kicking: the legs stretch out behind along the hips, feet in beside the tail
+    /// and webs flat, and heave up and down with the spine as one fluke, the feet running behind the hips like the end
+    /// of a whip and the webs pitched into the water they meet. The wave keeps the hind rhythm's beat; FlukeSpineWave
+    /// puts it on the spine.
+    /// </summary>
+    [Serializable]
+    public class FlukeStroke
+    {
+        public bool enabled = true;
+        [Tooltip("Time constant of changing between kicking and the fluke (s).")]
+        public float blendTime = 0.3f;
+        [Header("Legs held out behind, from the hip joint")]
+        [Tooltip("Ankle distance over the leg's length, and its angle toward the belly from straight back (deg).")]
+        public float reach = 0.96f;
+        public float angle = 8f;
+        [Tooltip("How far out the feet sit (leg lengths; negative = in toward the tail).")]
+        public float outward = -0.15f;
+        [Header("Wave")]
+        [Tooltip("How far the legs swing up and down about the hips on top of the hips' own pitch (deg), and how far behind the spine wave's beat they run (cycles).")]
+        public float sweep = 12f;
+        [Range(0f, 1f)] public float lag = 0.75f;
+        [Tooltip("Web pitch into the water it meets (deg): its trailing edge rises as it sweeps down and drops as it sweeps up.")]
+        public float attack = 20f;
+        [Tooltip("Web width as a multiple of its rest width.")]
+        public float width = 1.15f;
+        [Tooltip("Spine pitch asked for at full drive (deg; the hips 1.5 times this, the chest 0.4), and how far the wave runs behind from chest to hips (rad per joint). The harmonizer's chain stiffness and damping take off about three quarters.")]
+        public float spineAmplitude = 35f;
+        public float spineWaveOffset = 0.8f;
+    }
+
+    /// <summary>
     /// Turns the hind flippers at the ankle and toes, on top of the IK: through the push the web turns square to its sweep
     /// and spreads, so it shoves water; drawing forward it folds and turns edge-on so it slips through. The web is a flat
     /// fan, so either face can meet the sweep: each push holds the one the ankle could reach at the last push's fastest
@@ -214,7 +245,8 @@ namespace OtterLocomotion
     /// <summary>
     /// Moves the limb IK targets along stroke paths from OtterLocomotionBrain's rhythm: phase and strength per limb,
     /// so the limbs show what the allocation asks of them. Hind feet draw in and kick out on a loop about the hip joint
-    /// (HindKick), run backward to brake, and part ways in a turn (HindTurn); forepaws sweep along the allocated
+    /// (HindKick), run backward to brake, part ways in a turn (HindTurn), and sprinting prone hold out behind as a
+    /// fluke (FlukeStroke); forepaws sweep along the allocated
     /// force direction, and rest folded on the chest when they have nothing to do, as on the back. Paths hang off the
     /// chest / hip bone, so they follow the spine's bend and roll. After the IK solve the hind flippers are turned at
     /// the ankle and toes (FlipperPose) to push square through the power stroke and slip edge-on through the recovery.
@@ -229,6 +261,7 @@ namespace OtterLocomotion
         public OtterLocomotionBrain brain;
         public HindKick hindKick = new HindKick();
         public HindTurn hindTurn = new HindTurn();
+        public FlukeStroke fluke = new FlukeStroke();
         public FlipperPose flipper = new FlipperPose();
         public StrokeShape foreStroke = new StrokeShape();
         [Tooltip("Time constant of a stroke growing in when a limb starts and fading out when it rests (s).")]
@@ -292,6 +325,12 @@ namespace OtterLocomotion
 
         /// <summary>How far a hind foot's kick loop swings out for the turn (deg); 0 for a forepaw.</summary>
         public float KickYaw(LimbId limb) => limbs[(int)limb].yaw;
+
+        /// <summary>How far the hind legs have gone over from kicking to the fluke (0..1).</summary>
+        public float Fluke { get; private set; }
+        /// <summary>The fluke's beat (cycles; the hind rhythm's phase) and strength (the hind drive, 0..1).</summary>
+        public float FlukePhase { get; private set; }
+        public float FlukeDrive { get; private set; }
 
         /// <summary>A hind flipper's ankle turn from rest (deg), whether it is set to push, its web width, and the turn its goal
         /// asks for (deg); zeros for a forepaw.</summary>
@@ -430,6 +469,21 @@ namespace OtterLocomotion
             suspended.Clear();
         }
 
+        // The fluke is set before the spine's pass, which takes its beat from here
+        private void Update()
+        {
+            if (brain == null || !brain.HasLimbGeometry) return;
+            float goal = fluke.enabled && brain.Rhythm.HindTogether ? 1f - brain.Posture.SupineFraction : 0f;
+            Fluke = Mathf.Lerp(Fluke, goal, 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, fluke.blendTime)));
+            // the hind feet keep one beat when they kick together; the left one's unless it is resting
+            var a = brain.Rhythm.limbs[(int)LimbId.HL];
+            var b = brain.Rhythm.limbs[(int)LimbId.HR];
+            var lead = a.active ? a : b;
+            float drive = Mathf.Max(a.active && !a.parking ? a.drive : 0f, b.active && !b.parking ? b.drive : 0f);
+            FlukeDrive = Mathf.Lerp(FlukeDrive, drive, 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, sizeTime)));
+            if (lead.active) FlukePhase = Mathf.Repeat(lead.phase + lead.rate * (Time.time - Time.fixedTime), 1f);
+        }
+
         private void LateUpdate()
         {
             if (brain == null || !brain.HasLimbGeometry) return;
@@ -485,7 +539,7 @@ namespace OtterLocomotion
             {
                 ref var l = ref limbs[i];
                 if (!l.valid || l.web == null) continue;
-                float turn = l.push > 0f ? squaring : relaxing;
+                float turn = l.push > 0f || Fluke > 0.5f ? squaring : relaxing;
                 // the IK carries the foot rigidly on the shin unless it aligns the end bone itself
                 bool ankle = l.ik != null && !l.ik.alignEndRotation;
                 if (ankle) l.end.localRotation = l.endRest;
@@ -540,6 +594,7 @@ namespace OtterLocomotion
                 }
                 l.pushing = pushing;
                 goal = Vector3.Slerp(rest, goal, kicking);
+                if (Fluke > 1e-3f) goal = Vector3.Slerp(goal, FlukeNormal(l, rest), Fluke);
                 // the aim eases toward the goal in the hip's space, and the ankle is solved fresh from the shin each
                 // frame, so the web holds its line while the shin swings under it
                 Vector3 next = Vector3.RotateTowards(aim, Vector3.Slerp(aim, goal, turn), f.maxTurnSpeed * Mathf.Deg2Rad * Time.deltaTime, 0f);
@@ -550,16 +605,19 @@ namespace OtterLocomotion
                 Quaternion whole = Quaternion.FromToRotation(rest, next);
                 if (ankle) l.end.rotation = Quaternion.Slerp(Quaternion.identity, whole, f.ankleShare) * l.end.rotation;
                 l.web.rotation = Quaternion.FromToRotation(l.web.TransformDirection(l.normalLocal), next) * l.web.rotation;
-                // the least turn can swing the toes anywhere in the new plane; twist them back toward where they point at rest
+                // the least turn can swing the toes anywhere in the new plane; twist them back toward where they point at
+                // rest, or straight back along the fluke
                 Vector3 toesNow = l.web.TransformDirection(l.toesLocal);
-                Vector3 toesWant = Vector3.ProjectOnPlane(l.girdle.TransformDirection(l.toesRestLocal), next);
+                Vector3 toesHome = Vector3.Slerp(l.girdle.TransformDirection(l.toesRestLocal), -l.girdle.TransformDirection(l.forwardLocal), Fluke);
+                Vector3 toesWant = Vector3.ProjectOnPlane(toesHome, next);
                 float twistGoal = toesWant.sqrMagnitude > 1e-4f
-                    ? Mathf.Clamp(Vector3.SignedAngle(toesNow, toesWant, next), -f.maxTwistDeg, f.maxTwistDeg) * kicking
+                    ? Mathf.Clamp(Vector3.SignedAngle(toesNow, toesWant, next), -f.maxTwistDeg, f.maxTwistDeg) * Mathf.Max(kicking, Fluke)
                     : l.twist;
                 l.twist = Mathf.MoveTowards(l.twist, Mathf.Lerp(l.twist, twistGoal, turn), f.maxTurnSpeed * Time.deltaTime);
                 l.web.rotation = Quaternion.AngleAxis(l.twist, next) * l.web.rotation;
 
-                l.width = Mathf.Lerp(l.width, Mathf.Lerp(1f, Mathf.Lerp(f.fold, f.spread, l.push), kicking), turn);
+                float kickWidth = Mathf.Lerp(1f, Mathf.Lerp(f.fold, f.spread, l.push), kicking);
+                l.width = Mathf.Lerp(l.width, Mathf.Lerp(kickWidth, fluke.width, Fluke), turn);
                 var scale = l.webScale;
                 scale[l.widthAxis] *= l.width;
                 l.web.localScale = scale;
@@ -595,31 +653,56 @@ namespace OtterLocomotion
         /// <summary>World-space paw offset from rest for limb i at a phase of its stroke, at the limb's current size.</summary>
         private Vector3 StrokeOffset(int i, in Limb l, in LimbStroke st, float phase)
         {
-            if (l.size < 1e-5f) return Vector3.zero;
-            Vector3 up = Vector3.up;
-            Vector3 forward = Vector3.ProjectOnPlane(l.girdle.TransformDirection(l.forwardLocal), up).normalized;
-            Vector3 right = Vector3.Cross(up, forward);
+            bool fore = OtterRig.IsFore((LimbId)i);
+            if (l.size < 1e-5f && (fore || Fluke < 1e-3f)) return Vector3.zero;
             Vector3 rest = l.girdle.TransformPoint(l.restLocal);
-            float side = Vector3.Dot(rest - l.girdle.position, right) >= 0f ? 1f : -1f;
-            if (OtterRig.IsFore((LimbId)i))
+            if (fore)
             {
+                Vector3 up = Vector3.up;
+                Vector3 forward = Vector3.ProjectOnPlane(l.girdle.TransformDirection(l.forwardLocal), up).normalized;
+                Vector3 right = Vector3.Cross(up, forward);
+                float side = Vector3.Dot(rest - l.girdle.position, right) >= 0f ? 1f : -1f;
                 Vector3 power = (forward * st.direction.x + right * st.direction.y).normalized;
                 return foreStroke.Offset(phase, st.powerFraction, power, right * side, up, l.size);
             }
 
             KickAxes(l, out var joint, out var back, out var outward, out var belly);
-            float s = hindKick.LoopAt(phase, st.powerFraction);
-            // a braking kick pushes forward: the loop runs backward
-            if (st.direction.x > 0f) s = Mathf.Repeat(0.5f - s, 1f);
-            Vector3 p = hindKick.Point(s, Mathf.Max(l.size, hindKick.lightAmplitude));
-            float yaw = l.yaw * Mathf.Deg2Rad, cos = Mathf.Cos(yaw), sin = Mathf.Sin(yaw);
-            Vector3 swungBack = back * cos + outward * sin, swungOut = outward * cos - back * sin;
-            Vector3 ankle = joint + l.length * (swungBack * p.x + swungOut * p.y + belly * p.z);
-            Vector3 offset = (ankle - rest) * hindKick.Engagement(l.size);
+            Vector3 offset = Vector3.zero;
+            if (l.size >= 1e-5f)
+            {
+                float s = hindKick.LoopAt(phase, st.powerFraction);
+                // a braking kick pushes forward: the loop runs backward
+                if (st.direction.x > 0f) s = Mathf.Repeat(0.5f - s, 1f);
+                Vector3 p = hindKick.Point(s, Mathf.Max(l.size, hindKick.lightAmplitude));
+                float yaw = l.yaw * Mathf.Deg2Rad, cos = Mathf.Cos(yaw), sin = Mathf.Sin(yaw);
+                Vector3 swungBack = back * cos + outward * sin, swungOut = outward * cos - back * sin;
+                Vector3 ankle = joint + l.length * (swungBack * p.x + swungOut * p.y + belly * p.z);
+                offset = (ankle - rest) * hindKick.Engagement(l.size);
+            }
+            if (Fluke > 1e-3f) offset = Vector3.Lerp(offset, FlukeAnkle(l, joint, back, outward, belly) - rest, Fluke);
+            // kicking, the feet are held off the midline; as a fluke they come in beside the tail
             float reach = Mathf.Abs(Vector3.Dot(rest - l.girdle.position, outward)) * hindKick.midlineReach;
             float inward = -Vector3.Dot(offset, outward);
-            if (inward > 0f && reach > 1e-4f) offset += outward * (inward - reach * (1f - Mathf.Exp(-inward / reach)));
+            if (inward > 0f && reach > 1e-4f) offset += outward * ((1f - Fluke) * (inward - reach * (1f - Mathf.Exp(-inward / reach))));
             return offset;
+        }
+
+        // Sprinting prone: the leg held out behind along the hips, swinging up and down behind the hips' own pitch
+        private Vector3 FlukeAnkle(in Limb l, Vector3 joint, Vector3 back, Vector3 outward, Vector3 belly)
+        {
+            var f = fluke;
+            float a = (f.angle - f.sweep * FlukeDrive * Mathf.Cos(2f * Mathf.PI * (FlukePhase - f.lag))) * Mathf.Deg2Rad;
+            return joint + l.length * (f.reach * (back * Mathf.Cos(a) + belly * Mathf.Sin(a)) + outward * f.outward);
+        }
+
+        // The fluke's web normal: flat to the hips, pitched into the water it meets. Sweeping toward the belly its
+        // trailing edge rises, so the dorsal face tips forward. Signed to the face nearer the web's rest.
+        private Vector3 FlukeNormal(in Limb l, Vector3 rest)
+        {
+            KickAxes(l, out _, out var back, out _, out var belly);
+            float pitch = fluke.attack * FlukeDrive * Mathf.Sin(2f * Mathf.PI * (FlukePhase - fluke.lag)) * Mathf.Deg2Rad;
+            Vector3 n = -belly * Mathf.Cos(pitch) - back * Mathf.Sin(pitch);
+            return Vector3.Dot(rest, n) >= 0f ? n : -n;
         }
 
         // How far a hind foot's kick loop swings for the turn (HindTurn), from the side of the turn the leg is on now

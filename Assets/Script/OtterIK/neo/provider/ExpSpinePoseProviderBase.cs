@@ -18,6 +18,12 @@ namespace OtterIK.Neo.Experiment
         public virtual bool RequiresContinuousPath => false;
 
         /// <summary>
+        /// 叠加型（如脊柱谐波）：Yaw/Pitch 加在其它 provider 的加权平均之上，而不是参与平均，
+        /// 这样它不会把转向稀释掉，自己也不会被稀释。默认 false。
+        /// </summary>
+        public virtual bool Additive => false;
+
+        /// <summary>
         /// 为指定索引的关节计算绝对本地目标旋转。
         /// </summary>
         /// <param name="index">关节索引</param>

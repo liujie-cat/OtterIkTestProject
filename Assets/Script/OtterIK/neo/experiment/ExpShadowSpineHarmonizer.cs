@@ -59,6 +59,7 @@ namespace OtterIK.Neo.Experiment
             for (int i = 0; i < n; i++)
             {
                 Vector3 ypRotVecSum = Vector3.zero;
+                Vector3 ypAdditive = Vector3.zero;
                 float ypWeightSum = 0f;
                 float dominantRoll = 0f; // 用于记录当前关节最强的 Roll 意图
 
@@ -92,6 +93,11 @@ namespace OtterIK.Neo.Experiment
                         {
                             ypOnly.ToAngleAxis(out float angle, out Vector3 axis);
                             if (angle > 180) angle -= 360;
+                            if (prov.Additive)
+                            {
+                                ypAdditive += axis.normalized * (angle * Mathf.Deg2Rad) * finalW;
+                                continue;
+                            }
                             ypRotVecSum += axis.normalized * (angle * Mathf.Deg2Rad) * finalW;
                             ypWeightSum += finalW;
                         }
@@ -108,9 +114,13 @@ namespace OtterIK.Neo.Experiment
                     
                     // 我们只让 AimProvider 产生的部分受到 aimBlend (拖拽状态) 的影响
                     // 而像简谐运动这种叠加效果，应该在 ypRotVecSum 中被直接应用
-                    Vector3 meanVec = (ypRotVecSum / ypWeightSum) * totalW;
+                    Vector3 meanVec = (ypRotVecSum / ypWeightSum) * totalW + ypAdditive;
                     
                     yawPitchTargets[i] = Quaternion.AngleAxis(meanVec.magnitude * Mathf.Rad2Deg, meanVec.normalized);
+                }
+                else if (ypAdditive.sqrMagnitude > 1e-12f)
+                {
+                    yawPitchTargets[i] = Quaternion.AngleAxis(ypAdditive.magnitude * Mathf.Rad2Deg, ypAdditive.normalized);
                 }
                 else
                 {
