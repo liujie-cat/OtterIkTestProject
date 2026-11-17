@@ -33,6 +33,7 @@ namespace OtterLocomotion.EditorTools
             (typeof(WebThrust), "脚蹼推水"),
             (typeof(BodyKeel), "身体侧向阻力"),
             (typeof(StrokePropulsion), "划水推进"),
+            (typeof(HindLegColliders), "后腿碰撞体"),
             (typeof(TailRudder), "尾舵"),
             (typeof(SpineKickSway), "腰部摆动"),
             (typeof(WaterReference), "水中参照"),

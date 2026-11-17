@@ -106,8 +106,8 @@ namespace OtterLocomotion.Testing
             public float[] footWorldFwd;
             /// <summary>Per hind foot: the web middle's speed up through the water (m/s) and its normal's up component.</summary>
             public float[] footWorldUp, footNormalUp;
-            /// <summary>TailRudder: the tip's bend from the hips' line (deg, + = right), NaN without one.</summary>
-            public float tailBend;
+            /// <summary>TailRudder: the tip's bend from the hips' line (deg, + = right) and lift above it (deg, + = toward the back), and how deep the tail sits in the hind legs (cm); NaN without one.</summary>
+            public float tailBend, tailLift, tailHit;
             /// <summary>Side bend at the waist, the hips' heading to the chest's seen from above (deg, + = curled to the right), and
             /// the hind pushes' bend that SpineKickSway puts on the spine (-1..1, NaN without one).</summary>
             public float waist, swayBend;
@@ -329,6 +329,8 @@ namespace OtterLocomotion.Testing
             s.footHeave = feet.Select(f => (f.ankle.position.y - f.hipJoint.position.y) * 100f).ToArray();
             s.pulse = pulseThisFrame;
             s.tailBend = tail != null && tail.isActiveAndEnabled ? tail.TipBend : float.NaN;
+            s.tailHit = tail != null && tail.isActiveAndEnabled ? tail.LegOverlap * 100f : float.NaN;
+            s.tailLift = tail != null && tail.isActiveAndEnabled ? tail.TipLift : float.NaN;
             s.swayBend = sway != null && sway.isActiveAndEnabled ? sway.Bend : float.NaN;
             s.webPush = feet.Select(f => webThrust != null && webThrust.isActiveAndEnabled && System.Enum.TryParse<LimbId>(f.name, out var id) ? webThrust.Push(id) : 0f).ToArray();
             // spine bones point +Y toward the head
@@ -431,8 +433,9 @@ namespace OtterLocomotion.Testing
             // each web's fore-aft speed through the water, m/s
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wfwd");
             // the tail tip's bend from the hips' line, deg, + = right; the waist's side bend, deg, + = curled right; the
-            // hind pushes' bend on the spine, -1..1
-            sb.Append(",tail,waist,bend");
+            // hind pushes' bend on the spine, -1..1; how deep the tail sits in the hind legs, cm; the tail tip's lift above
+            // the hips' line, deg, + = toward the back
+            sb.Append(",tail,waist,bend,tailHit,tailLift");
             // each web's push on the body along its heading, N
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wpush");
             // the web middle's speed up through the water (m/s) and its normal's up component
@@ -472,7 +475,8 @@ namespace OtterLocomotion.Testing
                 sb.Append(',').Append(float.IsNaN(s.tailBend) ? "" : s.tailBend.ToString("F1", ci));
                 sb.Append(',').Append(s.waist.ToString("F1", ci));
                 sb.Append(',').Append(float.IsNaN(s.swayBend) ? "" : s.swayBend.ToString("F2", ci));
-                foreach (var w in s.webPush) sb.Append(',').Append(w.ToString("F3", ci));
+                sb.Append(',').Append(float.IsNaN(s.tailHit) ? "" : s.tailHit.ToString("F2", ci));
+                sb.Append(',').Append(float.IsNaN(s.tailLift) ? "" : s.tailLift.ToString("F1", ci));                foreach (var w in s.webPush) sb.Append(',').Append(w.ToString("F3", ci));
                 for (int k = 0; k < s.footWorldUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footWorldUp[k], s.footNormalUp[k]));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
@@ -527,6 +531,9 @@ namespace OtterLocomotion.Testing
                     sb.AppendLine($"#   {(LimbId)i}: joint from centre (fwd {a.x:F1}, right {a.y:F1}, up {a.z:F1}) cm, limb {g.length * 100f:F1} cm");
                 }
             }
+            var legShapes = movement.GetComponent<HindLegColliders>();
+            if (tail != null && legShapes != null && legShapes.Ready)
+                sb.AppendLine($"# collision: tail {(tail.collide ? "keeps out of" : "passes through")} the hind legs; tail radius {tail.Describe()} cm; legs {legShapes.Describe()} cm");
             if (webThrust != null && webThrust.isActiveAndEnabled)
                 sb.AppendLine($"# web thrust: water push {webThrust.waterPush:F0} face-on, {webThrust.slicePush:F0} slicing N/(m^2 (m/s)^2), area x{webThrust.areaScale:F2}, " +
                               $"HL {webThrust.Area(LimbId.HL) * 1e4f:F1} cm^2, HR {webThrust.Area(LimbId.HR) * 1e4f:F1} cm^2");
@@ -584,6 +591,10 @@ namespace OtterLocomotion.Testing
                 if (vw > 1e-4f && vb > 1e-4f) follow = $" | waist follows the pushes' bend: corr {(cov / (vw * vb)).ToString("+0.00;-0.00", ci)}";
             }
             sb.AppendLine($"  body (seen from above, + = curled right): waist {Range(waist)} | tail tip {Range(tails)}{follow}");
+            var hits = idx.Select(i => samples[i].tailHit).Where(x => !float.IsNaN(x)).ToList();
+            var lifts = idx.Select(i => samples[i].tailLift).Where(x => !float.IsNaN(x)).OrderBy(x => x).ToList();
+            if (hits.Count > 0)
+                sb.AppendLine($"  tail in the hind legs: deepest {hits.Max().ToString("F2", ci)} cm, in them {hits.Count(x => x > 0.2f) / (float)hits.Count:P0} of frames (over 2 mm) | tip lift (+ = up) {Range(lifts)}");
         }
 
         // Whether the hind feet push water: how squarely the web faces its motion relative to the hip, weighted by the

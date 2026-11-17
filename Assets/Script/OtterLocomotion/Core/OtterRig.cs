@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 
@@ -50,66 +51,133 @@ namespace OtterLocomotion
         }
 
         /// <summary>
-        /// The flat of a foot, from the skinned mesh: the vertices that follow the bone (it and the bones below it carry
-        /// at least half their weight), in the bone's own space. normal = the thinnest direction (the way the web
-        /// faces), length = the longest, center = the middle of the web; extents = the spread along normal / middle /
-        /// length (metres, one sigma). The mesh need not be readable: the skin is baked twice with the bone turned a
-        /// little in between, and the share of the rigid motion each vertex follows is its weight.
+        /// The skinned mesh's vertices that follow a bone (it and the bones below it carry at least half their weight),
+        /// in the world, as posed now; null when no skin has that many on the bone. The mesh need not be readable: the
+        /// skin is baked twice with the bone turned a little in between, and the share of the rigid motion each vertex
+        /// follows is its weight.
         /// </summary>
-        public static bool TryFootPlane(Transform foot, out Vector3 normal, out Vector3 length, out Vector3 center, out Vector3 extents)
+        public static List<Vector3> FollowingVertices(Transform bone, int minimum = 8)
         {
-            normal = length = center = extents = Vector3.zero;
-            foreach (var skin in foot.root.GetComponentsInChildren<SkinnedMeshRenderer>())
+            foreach (var skin in bone.root.GetComponentsInChildren<SkinnedMeshRenderer>())
             {
-                if (skin.sharedMesh == null || skin.bones == null || !skin.bones.Any(b => b != null && b.IsChildOf(foot))) continue;
+                if (skin.sharedMesh == null || skin.bones == null || !skin.bones.Any(b => b != null && b.IsChildOf(bone))) continue;
                 var before = new Mesh();
                 var after = new Mesh();
-                var points = new System.Collections.Generic.List<Vector3>();
-                var saved = foot.localRotation;
+                var points = new List<Vector3>();
+                var saved = bone.localRotation;
                 try
                 {
                     skin.BakeMesh(before, true);
-                    var turn = Quaternion.AngleAxis(10f, foot.right);
-                    foot.rotation = turn * foot.rotation;
+                    var turn = Quaternion.AngleAxis(10f, bone.right);
+                    bone.rotation = turn * bone.rotation;
                     skin.BakeMesh(after, true);
-                    foot.localRotation = saved;
+                    bone.localRotation = saved;
                     var a = before.vertices;
                     var b = after.vertices;
-                    Vector3 pivot = foot.position;
+                    Vector3 pivot = bone.position;
                     for (int v = 0; v < a.Length && v < b.Length; v++)
                     {
                         Vector3 p = skin.transform.TransformPoint(a[v]);
                         float rigid = (turn * (p - pivot) - (p - pivot)).magnitude;
                         if (rigid < 1e-3f) continue;
-                        if ((skin.transform.TransformPoint(b[v]) - p).magnitude / rigid >= 0.5f) points.Add(foot.InverseTransformPoint(p));
+                        if ((skin.transform.TransformPoint(b[v]) - p).magnitude / rigid >= 0.5f) points.Add(p);
                     }
                 }
                 finally
                 {
-                    foot.localRotation = saved;
+                    bone.localRotation = saved;
                     Object.DestroyImmediate(before);
                     Object.DestroyImmediate(after);
                 }
-                if (points.Count < 8) continue;
-                Vector3 mean = points.Aggregate(Vector3.zero, (s, p) => s + p) / points.Count;
-                var c = new float[3, 3];
-                foreach (var p in points)
-                {
-                    Vector3 d = p - mean;
-                    for (int i = 0; i < 3; i++)
-                        for (int j = 0; j < 3; j++)
-                            c[i, j] += d[i] * d[j] / points.Count;
-                }
-                SymmetricEigen(c, out var values, out var vectors);
-                var order = Enumerable.Range(0, 3).OrderBy(i => values[i]).ToArray();
-                normal = vectors[order[0]].normalized;
-                length = vectors[order[2]].normalized;
-                center = mean;
-                float scale = foot.lossyScale.x;
-                extents = new Vector3(Mathf.Sqrt(Mathf.Max(0f, values[order[0]])), Mathf.Sqrt(Mathf.Max(0f, values[order[1]])), Mathf.Sqrt(Mathf.Max(0f, values[order[2]]))) * scale;
-                return true;
+                if (points.Count >= minimum) return points;
             }
-            return false;
+            return null;
+        }
+
+        /// <summary>
+        /// The flat of a foot, from the skinned mesh: the vertices that follow the bone, in the bone's own space.
+        /// normal = the thinnest direction (the way the web faces), length = the longest, center = the middle of the
+        /// web; extents = the spread along normal / middle / length (metres, one sigma).
+        /// </summary>
+        public static bool TryFootPlane(Transform foot, out Vector3 normal, out Vector3 length, out Vector3 center, out Vector3 extents)
+        {
+            normal = length = center = extents = Vector3.zero;
+            var world = FollowingVertices(foot);
+            if (world == null) return false;
+            var points = world.Select(foot.InverseTransformPoint).ToList();
+            Vector3 mean = points.Aggregate(Vector3.zero, (s, p) => s + p) / points.Count;
+            Principal(points, mean, out var values, out var axes);
+            normal = axes[0];
+            length = axes[2];
+            center = mean;
+            float scale = foot.lossyScale.x;
+            extents = new Vector3(Mathf.Sqrt(Mathf.Max(0f, values[0])), Mathf.Sqrt(Mathf.Max(0f, values[1])), Mathf.Sqrt(Mathf.Max(0f, values[2]))) * scale;
+            return true;
+        }
+
+        /// <summary>
+        /// A box around the vertices that follow a bone, in the bone's own space, so it turns and scales with the bone:
+        /// its middle, and its half-axes from the thinnest to the longest (each along a principal direction of the
+        /// vertices, as long as the box reaches that way).
+        /// </summary>
+        public static bool TryBox(Transform bone, out Vector3 center, out Vector3[] halfAxes)
+        {
+            center = Vector3.zero;
+            halfAxes = null;
+            var world = FollowingVertices(bone);
+            if (world == null) return false;
+            var points = world.Select(bone.InverseTransformPoint).ToList();
+            Vector3 mean = points.Aggregate(Vector3.zero, (s, p) => s + p) / points.Count;
+            Principal(points, mean, out _, out var axes);
+            halfAxes = new Vector3[3];
+            center = mean;
+            for (int k = 0; k < 3; k++)
+            {
+                float lo = points.Min(p => Vector3.Dot(p - mean, axes[k])), hi = points.Max(p => Vector3.Dot(p - mean, axes[k]));
+                center += axes[k] * (0.5f * (lo + hi));
+                halfAxes[k] = axes[k] * (0.5f * (hi - lo));
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// The thickness about a bone's line from <paramref name="from"/> to <paramref name="to"/> (world): the given
+        /// quantile of how far the vertices that follow the bone and lie alongside that stretch sit from it (metres).
+        /// </summary>
+        public static bool TryRadius(Transform bone, Vector3 from, Vector3 to, out float radius, float quantile = 0.5f)
+        {
+            radius = 0f;
+            var world = FollowingVertices(bone);
+            Vector3 axis = to - from;
+            if (world == null || axis.sqrMagnitude < 1e-10f) return false;
+            var distances = new List<float>();
+            foreach (var p in world)
+            {
+                float t = Vector3.Dot(p - from, axis) / axis.sqrMagnitude;
+                if (t >= 0f && t <= 1f) distances.Add(Vector3.Distance(p, from + axis * t));
+            }
+            if (distances.Count < 4) return false;
+            distances.Sort();
+            radius = distances[Mathf.Clamp(Mathf.RoundToInt(quantile * (distances.Count - 1)), 0, distances.Count - 1)];
+            return true;
+        }
+
+
+        // The principal directions of a point cloud about its mean, from the least spread to the most, with their variances.
+        private static void Principal(List<Vector3> points, Vector3 mean, out float[] values, out Vector3[] axes)
+        {
+            var c = new float[3, 3];
+            foreach (var p in points)
+            {
+                Vector3 d = p - mean;
+                for (int i = 0; i < 3; i++)
+                    for (int j = 0; j < 3; j++)
+                        c[i, j] += d[i] * d[j] / points.Count;
+            }
+            SymmetricEigen(c, out var raw, out var vectors);
+            var order = Enumerable.Range(0, 3).OrderBy(i => raw[i]).ToArray();
+            values = order.Select(i => raw[i]).ToArray();
+            axes = order.Select(i => vectors[i].normalized).ToArray();
         }
 
         // Jacobi rotations on a symmetric 3x3 matrix; eigenvectors as columns of the accumulated rotation.

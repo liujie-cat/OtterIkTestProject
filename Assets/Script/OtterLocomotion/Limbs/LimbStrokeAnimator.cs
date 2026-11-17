@@ -167,10 +167,10 @@ namespace OtterLocomotion
     }
 
     /// <summary>
-    /// Sprinting prone the hind feet stop kicking: the legs stretch out behind along the hips, feet in beside the tail
-    /// and webs flat, and heave up and down with the spine as one fluke, the feet running behind the hips like the end
-    /// of a whip and the webs pitched into the water they meet. The wave keeps the hind rhythm's beat; SpineKickWave
-    /// puts it on the spine.
+    /// Sprinting prone the hind feet stop kicking: the legs stretch out behind along the hips, feet under the sides of
+    /// the tail and webs flat, and heave up and down with the spine as one fluke, the feet running behind the hips like
+    /// the end of a whip and the webs pitched into the water they meet; the tail keeps out of their way (TailRudder). The
+    /// wave keeps the hind rhythm's beat; SpineKickWave puts it on the spine.
     /// </summary>
     [Serializable]
     public class FlukeStroke
@@ -179,14 +179,14 @@ namespace OtterLocomotion
         [Tooltip("Time constant of changing between kicking and the fluke (s).")]
         public float blendTime = 0.3f;
         [Header("Legs held out behind, from the hip joint")]
-        [Tooltip("Ankle distance over the leg's length, and its angle toward the belly from straight back (deg).")]
+        [Tooltip("Ankle distance over the leg's length, and its angle toward the belly from straight back (deg): the legs run back under the sides of the tail, whose root sits just behind and above the hip joints and is wider than they are apart, so held straight back they would run through it.")]
         public float reach = 0.96f;
-        public float angle = 8f;
-        [Tooltip("How far out the feet sit (leg lengths; negative = in toward the tail).")]
-        public float outward = -0.15f;
+        public float angle = 25f;
+        [Tooltip("How far out the feet sit (leg lengths, within the reach; negative = in toward the tail). The webs sweep up past the tail's root, so they must clear its sides.")]
+        public float outward = 0.4f;
         [Header("Wave")]
         [Tooltip("How far the legs swing up and down about the hips on top of the hips' own pitch (deg), and how far behind the spine wave's beat they run (cycles).")]
-        public float sweep = 40f;
+        public float sweep = 44f;
         [Range(0f, 1f)] public float lag = 0.75f;
         [Tooltip("Web pitch into the water it meets: its trailing edge rises as it sweeps down and drops as it sweeps up, by this share of the angle its path through the water makes with the heading (a short flat plate drives hardest at about half), at most attack (deg).")]
         public float feather = 0.5f;
@@ -689,7 +689,7 @@ namespace OtterLocomotion
                 offset = (ankle - rest) * hindKick.Engagement(l.size);
             }
             if (Fluke > 1e-3f) offset = Vector3.Lerp(offset, FlukeAnkle(l, joint, back, outward, belly) - rest, Fluke);
-            // kicking, the feet are held off the midline; as a fluke they come in beside the tail
+            // kicking, the feet are held off the midline; as a fluke FlukeStroke places them
             float reach = Mathf.Abs(Vector3.Dot(rest - l.girdle.position, outward)) * hindKick.midlineReach;
             float inward = -Vector3.Dot(offset, outward);
             if (inward > 0f && reach > 1e-4f) offset += outward * ((1f - Fluke) * (inward - reach * (1f - Mathf.Exp(-inward / reach))));
@@ -701,7 +701,8 @@ namespace OtterLocomotion
         {
             var f = fluke;
             float a = (f.angle - f.sweep * FlukeDrive * Mathf.Cos(2f * Mathf.PI * (FlukePhase - f.lag))) * Mathf.Deg2Rad;
-            return joint + l.length * (f.reach * (back * Mathf.Cos(a) + belly * Mathf.Sin(a)) + outward * f.outward);
+            float along = Mathf.Sqrt(Mathf.Max(0f, f.reach * f.reach - f.outward * f.outward));
+            return joint + l.length * (along * (back * Mathf.Cos(a) + belly * Mathf.Sin(a)) + outward * f.outward);
         }
 
         // The fluke pitches the web into the water it meets, from the way it actually moves through it: the hips' own
@@ -754,12 +755,14 @@ namespace OtterLocomotion
         }
 
         // Back along the body's heading through the water and the hips' belly side square to it: the hips' own pitch
-        // left out, since the push that drives the body on is along the heading; their roll kept, for the roll-over
+        // left out, since the push that drives the body on is along the heading; their roll kept, for the roll-over.
+        // The heading is taken in the hips' up-and-down plane: rolling over, the hips come round after the chest, and
+        // their pitch in the world then lies across them, which would turn the webs aside into the tail.
         private void LevelAxes(in Limb l, out Vector3 back, out Vector3 belly)
         {
-            KickAxes(l, out _, out var hipBack, out _, out var hipBelly);
-            Vector3 heading = brain.State.forward;
-            back = heading.sqrMagnitude > 1e-6f ? -heading.normalized : hipBack;
+            KickAxes(l, out _, out var hipBack, out var outward, out var hipBelly);
+            Vector3 heading = Vector3.ProjectOnPlane(brain.State.forward, outward);
+            back = heading.sqrMagnitude > 0.25f * brain.State.forward.sqrMagnitude && heading.sqrMagnitude > 1e-6f ? -heading.normalized : hipBack;
             Vector3 level = Vector3.ProjectOnPlane(hipBelly, back);
             belly = level.sqrMagnitude > 1e-6f ? level.normalized : hipBelly;
         }

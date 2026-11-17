@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 namespace OtterLocomotion
@@ -8,14 +9,24 @@ namespace OtterLocomotion
     /// water behind the hips and held to the tail's shape by a spring that softens toward the tip, so the tail trails
     /// the path, lags the hips' swings and whips back after them, and the spine's fluke wave runs on down it. As a
     /// rudder it bends toward the side the otter turns to, following the brain's turn rate so it leads the body, and it
-    /// swings away from each hind foot as that foot pushes, with the curl of the body (HindBend).
+    /// swings away from each hind foot as that foot pushes, with the curl of the body (HindBend). It is posed after the
+    /// legs and keeps out of them (HindLegColliders): a shin or web that sweeps into it carries it aside, without
+    /// flinging it.
     /// </summary>
-    [DefaultExecutionOrder(320)]
+    [DefaultExecutionOrder(375)]
     [DisallowMultipleComponent]
     public class TailRudder : MonoBehaviour
     {
         [Tooltip("Found on this object when empty.")]
         public OtterLocomotionBrain brain;
+        [Tooltip("Found on this object when empty; without one the tail passes through the legs.")]
+        public HindLegColliders legs;
+        [Tooltip("Keep out of the hind legs.")]
+        public bool collide = true;
+        [Tooltip("Scale on the tail's thickness measured from the mesh.")]
+        public float thickness = 1f;
+        [Tooltip("Fastest a web pushes the tail aside (m/s); the shins push it out at once. The webs are thin and give, so one turning over fast against the tail only brushes it, while one pressed on it pushes it clear.")]
+        public float webPushSpeed = 1f;
         [Tooltip("How long the tip takes to follow the hips (s); joints nearer the root follow sooner.")]
         [Range(0.005f, 0.3f)] public float lag = 0.07f;
         [Tooltip("Damping of each joint's spring (1 = no overshoot; lower = a livelier whip after the hips stop).")]
@@ -36,22 +47,34 @@ namespace OtterLocomotion
         public float fullMoment = 0.05f;
 
         private readonly List<Transform> bones = new List<Transform>();
+        // the body's dorsal side in the space of the bone the tail hangs from
+        private Vector3 upLocal;
         private Quaternion[] rest;
         private Vector3 tipLocal, straightTip;
-        // points 0..n-1 at the bones, n past the last bone's end; point 0 rides on the hips
-        private Vector3[] point, velocity, goal, lastGoal;
-        private float[] length;
+        // points 0..n-1 at the bones, n past the last bone's end; point 0 rides on the hips. free: where they would be
+        // this step without the legs' shoves
+        private Vector3[] point, free, velocity, goal, lastGoal;
+        // per bone, from it to the next point
+        private float[] length, radius;
         private float turn;
         private bool settled;
+        private const int BallsPerBone = 4;
 
         /// <summary>The tail's bend from the hips' line at the tip (deg, + = to the otter's right in the world, seen from above).</summary>
         public float TipBend { get; private set; }
+        /// <summary>The tip's lift above the hips' line (deg, + = toward the back).</summary>
+        public float TipLift { get; private set; }
         /// <summary>The rudder's share of the bend asked for (-1..1 of a full turn, + = right).</summary>
         public float Rudder => turn;
+        /// <summary>How deep the tail sits in the hind legs as posed (m), NaN without HindLegColliders.</summary>
+        public float LegOverlap { get; private set; } = float.NaN;
+        /// <summary>The tail's thickness measured from the mesh (cm, root to tip), for the logs.</summary>
+        public string Describe() => radius == null ? "-" : string.Join("/", radius.Select(r => (r * thickness * 100f).ToString("F1")));
 
         private void Awake()
         {
             if (brain == null) brain = GetComponent<OtterLocomotionBrain>();
+            if (legs == null) legs = GetComponent<HindLegColliders>();
         }
 
         // after SpineDecouplerWithShadows has rebuilt the spine in Awake
@@ -75,15 +98,22 @@ namespace OtterLocomotion
             int n = bones.Count;
             rest = new Quaternion[n];
             for (int j = 0; j < n; j++) rest[j] = bones[j].localRotation;
+            upLocal = bones[0].parent.InverseTransformDirection(transform.up);
             Transform last = bones[n - 1];
             tipLocal = last.InverseTransformPoint(last.position + 0.8f * (last.position - bones[n - 2].position));
             point = new Vector3[n + 1];
+            free = new Vector3[n + 1];
             velocity = new Vector3[n + 1];
             goal = new Vector3[n + 1];
             lastGoal = new Vector3[n + 1];
             length = new float[n];
+            radius = new float[n];
             Shape(0f);
-            for (int j = 0; j < n; j++) length[j] = Vector3.Distance(goal[j], goal[j + 1]);
+            for (int j = 0; j < n; j++)
+            {
+                length[j] = Vector3.Distance(goal[j], goal[j + 1]);
+                radius[j] = OtterRig.TryRadius(bones[j], goal[j], goal[j + 1], out float r) ? r : j > 0 ? radius[j - 1] : 0.01f;
+            }
             settled = false;
         }
 
@@ -116,12 +146,15 @@ namespace OtterLocomotion
                 settled = true;
             }
 
+            bool colliding = collide && legs != null && legs.Ready;
             int steps = Mathf.Clamp(Mathf.CeilToInt(dt * 240f), 1, 16);
             float h = dt / steps;
+            float webStep = Mathf.Max(0f, webPushSpeed) * h;
             for (int s = 1; s <= steps; s++)
             {
                 float a = (float)s / steps;
-                point[0] = Vector3.Lerp(lastGoal[0], goal[0], a);
+                point[0] = free[0] = Vector3.Lerp(lastGoal[0], goal[0], a);
+                Vector3 rootAlong = Vector3.Lerp(lastGoal[1], goal[1], a) - point[0];
                 for (int j = 1; j <= n; j++)
                 {
                     // a spring to the shape, damped against the still water; the tip's lags most
@@ -130,16 +163,24 @@ namespace OtterLocomotion
                     Vector3 target = Vector3.Lerp(lastGoal[j], goal[j], a);
                     Vector3 before = point[j];
                     velocity[j] += (w * w * (target - point[j]) - 2f * damping * w * velocity[j]) * h;
-                    point[j] += velocity[j] * h;
+                    Vector3 moved = point[j] + velocity[j] * h;
 
-                    Vector3 along = j == 1
-                        ? Vector3.Lerp(lastGoal[1], goal[1], a) - point[0]
-                        : point[j - 1] - point[j - 2];
-                    Vector3 d = point[j] - point[j - 1];
-                    if (d.sqrMagnitude < 1e-12f) d = along;
-                    d = Vector3.RotateTowards(along.normalized, d.normalized, maxBend * Mathf.Deg2Rad, 0f);
-                    point[j] = point[j - 1] + d * length[j - 1];
-                    velocity[j] = (point[j] - before) / h;
+                    // the legs move once a frame, so a contact shoves the tail a frame's worth in one step: the shove
+                    // and what it drags along are kept out of the velocity, or the tail would be flung off the leg
+                    free[j] = Hang(j, moved, free[j - 1], j == 1 ? rootAlong : free[j - 1] - free[j - 2]);
+                    velocity[j] = (free[j] - before) / h;
+                    point[j] = Hang(j, moved, point[j - 1], j == 1 ? rootAlong : point[j - 1] - point[j - 2]);
+                    if (colliding)
+                    {
+                        Vector3 unpushed = point[j];
+                        Collide(j, webStep);
+                        Vector3 shove = point[j] - unpushed;
+                        if (shove.sqrMagnitude > 1e-12f)
+                        {
+                            Vector3 normal = shove.normalized;
+                            velocity[j] -= normal * Mathf.Min(0f, Vector3.Dot(velocity[j], normal));
+                        }
+                    }
                 }
             }
             for (int j = 0; j <= n; j++) lastGoal[j] = goal[j];
@@ -155,6 +196,58 @@ namespace OtterLocomotion
             Vector3 line = Vector3.ProjectOnPlane(straightTip - goal[0], Vector3.up);
             Vector3 tail = Vector3.ProjectOnPlane(point[n] - point[0], Vector3.up);
             TipBend = line.sqrMagnitude > 1e-8f && tail.sqrMagnitude > 1e-8f ? -Vector3.SignedAngle(line, tail, Vector3.up) : 0f;
+            Vector3 hipsLine = straightTip - goal[0], dorsal = bones[0].parent.TransformDirection(upLocal);
+            Vector3 side = Vector3.Cross(dorsal, hipsLine);
+            TipLift = side.sqrMagnitude > 1e-10f
+                ? -Vector3.SignedAngle(hipsLine, Vector3.ProjectOnPlane(point[n] - point[0], side), side)
+                : 0f;
+
+            if (legs == null || !legs.Ready) return;
+            float overlap = 0f;
+            for (int j = 1; j <= n; j++)
+                for (int k = 1; k <= BallsPerBone; k++)
+                    overlap = Mathf.Max(overlap, legs.Depth(Vector3.Lerp(point[j - 1], point[j], (float)k / BallsPerBone), Ball(j)));
+            LegOverlap = overlap;
+        }
+
+        // Balls along the bone from point j-1 to point j keep out of the legs: the bone swings about its root, each ball
+        // moving the far end by its push. A ball nearer the root moves less, so it clears over the next steps; clearing it
+        // at once would swing the bone a long way for a small push.
+        private void Collide(int j, float webStep)
+        {
+            Vector3 root = point[j - 1];
+            for (int k = 1; k <= BallsPerBone; k++)
+            {
+                float t = (float)k / BallsPerBone;
+                Vector3 push = legs.Push(Vector3.Lerp(root, point[j], t), Ball(j), webStep);
+                if (push == Vector3.zero) continue;
+                Vector3 d = point[j] + push - root;
+                if (d.sqrMagnitude > 1e-12f) point[j] = root + d.normalized * length[j - 1];
+            }
+        }
+
+        // Point j at its bone's length from the point before, bent at most maxBend from the way along there
+        private Vector3 Hang(int j, Vector3 at, Vector3 before, Vector3 along)
+        {
+            Vector3 d = at - before;
+            if (d.sqrMagnitude < 1e-12f) d = along;
+            d = Vector3.RotateTowards(along.normalized, d.normalized, maxBend * Mathf.Deg2Rad, 0f);
+            return before + d * length[j - 1];
+        }
+
+        // the balls along the bone from point j-1 to point j
+        private float Ball(int j) => radius[j - 1] * thickness;
+
+        private void OnDrawGizmosSelected()
+        {
+            if (point == null || radius == null) return;
+            Gizmos.color = new Color(0.3f, 0.8f, 1f, 0.8f);
+            for (int j = 1; j < point.Length; j++)
+            {
+                Gizmos.DrawLine(point[j - 1], point[j]);
+                for (int k = 1; k <= BallsPerBone; k++)
+                    Gizmos.DrawWireSphere(Vector3.Lerp(point[j - 1], point[j], (float)k / BallsPerBone), Ball(j));
+            }
         }
 
         // The bones at rest on the hips, each bent by the given angle about world up; the points they make.
