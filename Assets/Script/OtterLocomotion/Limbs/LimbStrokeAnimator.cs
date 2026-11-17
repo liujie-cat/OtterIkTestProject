@@ -145,20 +145,21 @@ namespace OtterLocomotion
 
     /// <summary>
     /// Turning, the hind feet kick out to either side: each kick loop swings outward about its own middle, round the
-    /// hip's dorso-ventral axis. The foot on the outside of the turn swings wide and does the turning; the inside one
-    /// stays close to the body's line and keeps it steady. Turning on the spot, the inside foot's kick swings on round
-    /// toward the middle of the turn, sculling the hindquarters around.
+    /// hip's dorso-ventral axis. The foot on the inside of the turn does the turning: it kicks back and out toward the
+    /// middle of the turn, pushing the hindquarters the other way, so the head comes round. The outside foot kicks
+    /// nearly straight back and carries the body on along its path. Turning on the spot, the inside foot's kick swings
+    /// on round toward the middle of the turn, sculling the hindquarters around.
     /// </summary>
     [Serializable]
     public class HindTurn
     {
         [Tooltip("Yaw rate target (deg/s) that counts as a full turn.")]
         public float fullTurnRate = 90f;
-        [Tooltip("Speed target (m/s) from which the otter swims through its turns rather than turning on the spot.")]
-        public float travelSpeed = 0.07f;
+        [Tooltip("Speed target (body lengths/s) from which the otter swims through its turns rather than turning on the spot.")]
+        public float travelSpeedBL = 0.15f;
         [Tooltip("How far out the outside foot's kick swings, and the inside one's, at a full turn (deg).")]
-        public float outerYaw = 45f;
-        public float innerYaw = 15f;
+        public float outerYaw = 8f;
+        public float innerYaw = 45f;
         [Tooltip("Turning on the spot, how far round toward the middle of the turn (90 deg out) the inside foot's kick swings at a full turn.")]
         [Range(0f, 1f)] public float innerSteer = 0.75f;
         [Tooltip("Time constant of the kicks following the turn (s).")]
@@ -185,15 +186,16 @@ namespace OtterLocomotion
         public float outward = -0.15f;
         [Header("Wave")]
         [Tooltip("How far the legs swing up and down about the hips on top of the hips' own pitch (deg), and how far behind the spine wave's beat they run (cycles).")]
-        public float sweep = 30f;
+        public float sweep = 40f;
         [Range(0f, 1f)] public float lag = 0.75f;
         [Tooltip("Web pitch into the water it meets: its trailing edge rises as it sweeps down and drops as it sweeps up, by this share of the angle its path through the water makes with the heading (a short flat plate drives hardest at about half), at most attack (deg).")]
         public float feather = 0.5f;
         public float attack = 40f;
-        [Tooltip("Time constant of the web turning to its pitch (s).")]
+        [Tooltip("Time constant of the web turning to its pitch (s), and the fastest it turns (deg/s). With little way on the pitch flips right over at each end of the beat; flipping slower than the beat turns, the web spends the stroke pitched the wrong way and pushes the body back.")]
         public float pitchTime = 0.02f;
+        public float maxPitchSpeed = 2500f;
         [Tooltip("Web width as a multiple of its rest width.")]
-        public float width = 1.15f;
+        public float width = 1.3f;
         [Tooltip("Spine pitch asked for at full drive (deg; the hips 1.5 times this, the chest 0.4), and how far the wave runs behind from chest to hips (rad per joint). The harmonizer's chain stiffness and damping take off about three quarters.")]
         public float spineAmplitude = 55f;
         public float spineWaveOffset = 0.8f;
@@ -488,7 +490,7 @@ namespace OtterLocomotion
             var demand = brain.Demand;
             float turnGoal = Mathf.Clamp(demand.yawRateTarget / Mathf.Max(1f, hindTurn.fullTurnRate), -1f, 1f);
             turn = Mathf.Lerp(turn, turnGoal, 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, hindTurn.response)));
-            float travel = Mathf.Clamp01(demand.speedTarget / Mathf.Max(1e-3f, hindTurn.travelSpeed));
+            float travel = Mathf.Clamp01(demand.speedTarget / Mathf.Max(1e-3f, hindTurn.travelSpeedBL * brain.Parameters.bodyLength));
             for (int i = 0; i < OtterRig.LimbCount; i++)
             {
                 ref var l = ref limbs[i];
@@ -602,7 +604,8 @@ namespace OtterLocomotion
                 if (Fluke > 1e-3f) goal = Vector3.Slerp(goal, FlukeNormal(l, rest, aim), Fluke);
                 // the aim eases toward the goal in the hip's space, and the ankle is solved fresh from the shin each
                 // frame, so the web holds its line while the shin swings under it
-                Vector3 next = Vector3.RotateTowards(aim, Vector3.Slerp(aim, goal, turn), f.maxTurnSpeed * Mathf.Deg2Rad * Time.deltaTime, 0f);
+                float turnSpeed = Fluke > 0.5f ? fluke.maxPitchSpeed : f.maxTurnSpeed;
+                Vector3 next = Vector3.RotateTowards(aim, Vector3.Slerp(aim, goal, turn), turnSpeed * Mathf.Deg2Rad * Time.deltaTime, 0f);
                 next = Vector3.RotateTowards(rest, next, Mathf.Min(Vector3.Angle(rest, next), f.maxSquareDeg + 15f) * Mathf.Deg2Rad, 0f);
                 l.aimLocal = l.girdle.InverseTransformDirection(next);
                 l.turned = Vector3.Angle(rest, next);

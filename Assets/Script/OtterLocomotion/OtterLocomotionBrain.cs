@@ -22,10 +22,12 @@ namespace OtterLocomotion
         public MovementControllerRB intentSource;
         public WaterDrag waterDrag;
 
-        [Header("Speeds")]
-        [Tooltip("Speed asked for between the rings and beyond the outer ring (m/s): what the webs can push the body to through the water (WebThrust), so the kicks set how fast it goes. MovementControllerRB's own target speeds belong to its impulse kicks and are not used.")]
-        public float swimSpeed = 0.2f;
-        public float sprintSpeed = 0.27f;
+        [Header("Speeds (body lengths per second)")]
+        [Tooltip("Speed asked for between the rings, swimming prone (on the back it is capped at postureSettings.supineMaxSpeedBL), and beyond the outer ring, in body lengths per second so it scales with the otter. The webs push the body to it through the water (WebThrust), so the kicks set how fast it goes. MovementControllerRB's own target speeds belong to its impulse kicks and are not used.")]
+        public float swimSpeedBL = 1.2f;
+        public float sprintSpeedBL = 2f;
+        [Tooltip("Body length (m) assumed when the head or tail bone is not found.")]
+        public float fallbackBodyLength = 0.4f;
 
         [Header("Posture")]
         public KeyCode postureToggleKey = KeyCode.F;
@@ -161,21 +163,23 @@ namespace OtterLocomotion
             var state = estimator.Step(body, dt);
             Intent = ReadIntent();
 
-            postureMachine.Step(postureSettings, Intent, state, toggleRequested, Demand.speedTarget, Demand.yawRateTarget, dt);
+            float length = Parameters.bodyLength;
+            postureMachine.Step(postureSettings, Intent, state, toggleRequested, Demand.speedTarget, Demand.yawRateTarget, length, dt);
             toggleRequested = false;
 
             // sprinting lifts the top speed on the back, so the otter speeds up on its back until it rolls over
             float supine = postureMachine.SupineFraction;
-            float supineCapped = Intent.band == SpeedBand.Sprint ? Intent.requestedSpeed : Mathf.Min(Intent.requestedSpeed, postureSettings.supineMaxSpeed);
+            float supineCapped = Intent.band == SpeedBand.Sprint ? Intent.requestedSpeed : Mathf.Min(Intent.requestedSpeed, postureSettings.supineMaxSpeedBL * length);
             float speedCap = Mathf.Lerp(Intent.requestedSpeed, supineCapped, supine);
-            float riseRate = Mathf.Lerp(demandSettings.speedRiseRate, postureSettings.supineRiseRate, supine);
-            float kickSpeed = Mathf.Lerp(demandSettings.proneKickSpeed, demandSettings.supineKickSpeed, supine);
+            float riseRate = Mathf.Lerp(demandSettings.speedRiseRateBL, postureSettings.supineRiseRateBL, supine) * length;
+            float kickSpeed = Mathf.Lerp(demandSettings.proneKickSpeedBL, demandSettings.supineKickSpeedBL, supine) * length;
             var demand = demandLayer.Step(demandSettings, Intent, state, Parameters, speedCap, riseRate, kickSpeed, 2f * rhythmSettings.hindFullForce, dt);
 
             if (!HasLimbGeometry) return;
-            actuators.Build(actuatorSettings, geometry, centerOfMass, postureMachine.RollDeg, postureMachine.SupineFraction, Parameters.mass);
+            float speedTargetBL = demand.speedTarget / length;
+            actuators.Build(actuatorSettings, geometry, centerOfMass, postureMachine.RollDeg, postureMachine.SupineFraction, Parameters.mass, speedTargetBL);
             allocator.Solve(allocatorSettings, actuators, demand, Parameters);
-            rhythm.Step(rhythmSettings, allocator, demand.speedTarget, dt);
+            rhythm.Step(rhythmSettings, allocator, speedTargetBL, supine < 0.5f, dt);
         }
 
         private LocomotionIntent ReadIntent()
@@ -195,7 +199,7 @@ namespace OtterLocomotion
             {
                 band = band,
                 heading = dir.sqrMagnitude > 1e-8f ? dir.normalized : estimator.State.forward,
-                requestedSpeed = band == SpeedBand.Swim ? swimSpeed : band == SpeedBand.Sprint ? sprintSpeed : 0f,
+                requestedSpeed = (band == SpeedBand.Swim ? swimSpeedBL : band == SpeedBand.Sprint ? sprintSpeedBL : 0f) * Parameters.bodyLength,
                 reach = intentSource.GetReach01(),
             };
         }
@@ -208,6 +212,7 @@ namespace OtterLocomotion
             return new BodyParameters
             {
                 mass = body.mass,
+                bodyLength = BodyLength > 0f ? BodyLength : fallbackBodyLength,
                 yawInertia = inertia,
                 linearDrag = waterDrag != null ? waterDrag.Linear : 0f,
                 quadraticDrag = waterDrag != null ? waterDrag.Quadratic : 0f,

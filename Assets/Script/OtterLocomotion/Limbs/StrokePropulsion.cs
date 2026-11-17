@@ -21,7 +21,7 @@ namespace OtterLocomotion
         [Tooltip("How sharply each push peaks in the middle of its power stroke (2 = a rounded surge; higher = a shorter, harder shove).")]
         [Range(1f, 6f)] public float sharpness = 2f;
         [Tooltip("How much of the body's turning waits for the strokes that turn it (0 = it turns steadily, 1 = only while they push).")]
-        [Range(0f, 1f)] public float turnPulse = 0.75f;
+        [Range(0f, 1f)] public float turnPulse = 0.1f;
 
         public float Thrust { get; private set; }
         public float Turn { get; private set; } = 1f;

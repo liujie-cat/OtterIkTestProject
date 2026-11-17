@@ -38,6 +38,9 @@ namespace OtterLocomotion.EditorTools
         [MenuItem("Tools/Otter Locomotion/Run Turn Playback")]
         static void RunTurns() => Run("turns", "turns");
 
+        [MenuItem("Tools/Otter Locomotion/Run Speed Playback")]
+        static void RunSpeeds() => Run("speeds", "speeds");
+
         [MenuItem("Tools/Otter Locomotion/Run Turn Playback (old limbs)")]
         static void RunTurnsOldLimbs() => Run("turns_old", "turns", oldLimbs: true);
 
@@ -47,6 +50,7 @@ namespace OtterLocomotion.EditorTools
         [MenuItem("Tools/Otter Locomotion/Run Baseline Playback", true)]
         [MenuItem("Tools/Otter Locomotion/Run Posture Playback", true)]
         [MenuItem("Tools/Otter Locomotion/Run Turn Playback", true)]
+        [MenuItem("Tools/Otter Locomotion/Run Speed Playback", true)]
         [MenuItem("Tools/Otter Locomotion/Run Turn Playback (old limbs)", true)]
         [MenuItem("Tools/Otter Locomotion/Run Baseline Playback (old limbs)", true)]
         static bool CanRun() => !EditorApplication.isPlayingOrWillChangePlaymode;

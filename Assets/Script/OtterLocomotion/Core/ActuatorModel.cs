@@ -51,6 +51,8 @@ namespace OtterLocomotion
         public StrokeCapacity hindScullIn = new StrokeCapacity(0.6f, 4f, 1f, 0.8f);
 
         [Header("Forepaws: steering and fine sculling when prone, little thrust; held on the chest out of the water on the back")]
+        [Tooltip("Swimming prone, the forepaws fold against the chest as the speed target passes this (body lengths/s) and the body and hind feet do the steering; only turning on the spot do they scull.")]
+        public float foreTuckSpeedBL = 0.15f;
         public StrokeCapacity foreThrust = new StrokeCapacity(0.5f, 12f, 1f, 0f);
         public StrokeCapacity foreBrake = new StrokeCapacity(1.5f, 1.5f, 1f, 0f);
         [Tooltip("Sweeping out to the side is the strong scull; sweeping in across the chest is weak, so the paw on the outside of a turn sculls.")]
@@ -65,7 +67,7 @@ namespace OtterLocomotion
         public float foreDepth = 0.3f;
 
         [Tooltip("Share of effectiveness lost at the middle of a roll-over: limbs busy rolling push little water.")]
-        [Range(0f, 1f)] public float rollPenalty = 0.7f;
+        [Range(0f, 1f)] public float rollPenalty = 0.3f;
     }
 
     /// <summary>One stroke primitive: the body-frame wrench (Fx, Fy, Mz) per newton of stroke force, and its limits.</summary>
@@ -95,11 +97,13 @@ namespace OtterLocomotion
         public readonly bool[] present = new bool[OtterRig.LimbCount];
         public Vector3 CenterOfMass { get; private set; }
 
-        public void Build(ActuatorSettings s, LimbGeometry[] geometry, Vector3 centerOfMass, float rollDeg, float supineFraction, float mass)
+        /// <param name="speedTargetBL">The demand layer's speed target (body lengths/s), which folds the forepaws away when swimming prone.</param>
+        public void Build(ActuatorSettings s, LimbGeometry[] geometry, Vector3 centerOfMass, float rollDeg, float supineFraction, float mass, float speedTargetBL)
         {
             CenterOfMass = centerOfMass;
             float roll = rollDeg * Mathf.Deg2Rad, cos = Mathf.Cos(roll), sin = Mathf.Sin(roll);
             float rollFactor = 1f - s.rollPenalty * Mathf.Sin(Mathf.PI * Mathf.Clamp01(supineFraction));
+            float foreOut = 1f - Mathf.Clamp01(speedTargetBL / Mathf.Max(1e-3f, s.foreTuckSpeedBL));
             for (int i = 0; i < OtterRig.LimbCount; i++)
             {
                 var limb = (LimbId)i;
@@ -123,7 +127,7 @@ namespace OtterLocomotion
 
             void SetColumn(int limbIndex, int k, LimbId limb, StrokeKind kind, Vector3 wrench, StrokeCapacity cap)
             {
-                float e = present[limbIndex] ? Mathf.Lerp(cap.prone, cap.supine, supineFraction) * rollFactor : 0f;
+                float e = present[limbIndex] ? Mathf.Lerp(cap.prone * (OtterRig.IsFore(limb) ? foreOut : 1f), cap.supine, supineFraction) * rollFactor : 0f;
                 float hi = cap.maxAccel * mass * e;
                 columns[limbIndex * ColumnsPerLimb + k] = new StrokeColumn
                 {

@@ -31,13 +31,15 @@ namespace OtterLocomotion
     {
         [Tooltip("Hind feet kicking together: big kicks when swimming fast, beating with the prone body wave; the fluke's push grows with the square of its beat.")]
         [FormerlySerializedAs("hind")]
-        public RhythmProfile hindTogether = new RhythmProfile(0.7f, 2f, 0.3f, 3f);
+        public RhythmProfile hindTogether = new RhythmProfile(0.7f, 3f, 0.3f, 3f);
         [Tooltip("Hind feet taking turns: smaller kicks at low speed (turning on the spot, swimming on the back).")]
-        public RhythmProfile hindAlternate = new RhythmProfile(0.6f, 1.6f, 0.4f, 3f);
+        public RhythmProfile hindAlternate = new RhythmProfile(0.6f, 2f, 0.4f, 3f);
         public RhythmProfile fore = new RhythmProfile(1.6f, 3.2f, 0.4f, 1.5f);
-        [Tooltip("Hind feet kick together once the speed target (m/s) reaches this, and take turns again below hindApartSpeed; in between they keep their gait.")]
-        public float hindTogetherSpeed = 0.18f;
-        public float hindApartSpeed = 0.165f;
+        [Tooltip("Hind feet kick together once the speed target (body lengths/s) reaches this, and take turns again below hindApartSpeedBL; in between they keep their gait.")]
+        public float hindTogetherSpeedBL = 1f;
+        public float hindApartSpeedBL = 0.92f;
+        [Tooltip("Prone, the hind feet beat together as one fluke whenever the speed target (body lengths/s) is above this, from a standing start too; only turning on the spot do they paddle. Paddling hard prone bends the hips down and drives the kicks into the depths.")]
+        public float proneFlukeSpeedBL = 0.05f;
 
         [Header("Drive = allocated force / full-drive force")]
         [Tooltip("Allocated force (N) at which a limb strokes at full size and rate.")]
@@ -98,27 +100,31 @@ namespace OtterLocomotion
     {
         public readonly LimbStroke[] limbs = new LimbStroke[OtterRig.LimbCount];
         public event Action<LimbId, LimbStroke> PowerStarted;
-        /// <summary>Hind feet kicking together (fast swimming) rather than taking turns.</summary>
+        /// <summary>Hind feet kicking together (fast swimming, or swimming prone) rather than taking turns.</summary>
         public bool HindTogether { get; private set; }
 
         private readonly bool[] want = new bool[OtterRig.LimbCount];
         private readonly bool[] startedNow = new bool[OtterRig.LimbCount];
+        private readonly float[] stepPhase = new float[OtterRig.LimbCount];
+        private bool fast;
 
         public void Reset()
         {
             Array.Clear(limbs, 0, limbs.Length);
             HindTogether = false;
+            fast = false;
         }
 
         private static int Partner(int limb) => limb ^ 1;
         private static bool IsLeft(int limb) => (limb & 1) == 0;
         private static float Wrap(float x) => x - Mathf.Round(x);
 
-        /// <param name="speedTarget">The demand layer's speed target (m/s), which picks the hind gait.</param>
-        public void Step(RhythmSettings s, ControlAllocator allocation, float speedTarget, float dt)
+        /// <param name="speedTargetBL">The demand layer's speed target (body lengths/s), which picks the hind gait.</param>
+        public void Step(RhythmSettings s, ControlAllocator allocation, float speedTargetBL, bool prone, float dt)
         {
-            if (speedTarget >= s.hindTogetherSpeed) HindTogether = true;
-            else if (speedTarget < s.hindApartSpeed) HindTogether = false;
+            if (speedTargetBL >= s.hindTogetherSpeedBL) fast = true;
+            else if (speedTargetBL < s.hindApartSpeedBL) fast = false;
+            HindTogether = prone ? speedTargetBL > s.proneFlukeSpeedBL : fast;
 
             for (int i = 0; i < OtterRig.LimbCount; i++)
             {
@@ -149,6 +155,9 @@ namespace OtterLocomotion
                 }
             }
 
+            // a pair couples on the phases both had at the start of the step: coupling the second on the first's new
+            // phase, a pair half a cycle apart would each be pushed back across the half and both slow, locked apart
+            for (int i = 0; i < OtterRig.LimbCount; i++) stepPhase[i] = limbs[i].phase;
             for (int i = 0; i < OtterRig.LimbCount; i++)
             {
                 ref var l = ref limbs[i];
@@ -156,9 +165,8 @@ namespace OtterLocomotion
                 l.parking = !want[i];
                 var profile = Profile(s, i);
                 float rate = Mathf.Lerp(profile.minHz, profile.maxHz, l.drive);
-                ref var p = ref limbs[Partner(i)];
-                if (p.active)
-                    rate += profile.coupling * Wrap(p.phase - l.phase - PartnerLead(i));
+                if (limbs[Partner(i)].active)
+                    rate += profile.coupling * Wrap(stepPhase[Partner(i)] - stepPhase[i] - PartnerLead(i));
                 rate = Mathf.Max(0.2f * profile.minHz, rate);
 
                 float window = (1f - l.powerFraction) * s.resetWindow;

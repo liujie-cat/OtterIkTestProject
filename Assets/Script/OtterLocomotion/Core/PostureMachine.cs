@@ -7,33 +7,30 @@ namespace OtterLocomotion
     public class PostureSettings
     {
         public Posture initial = Posture.Supine;
-        [Tooltip("Top speed on the back (m/s) between the rings. After rolling onto the back the speed target eases down to this.")]
-        public float supineMaxSpeed = 0.16f;
-        [Tooltip("How fast the speed target may rise on the back (m/s^2). With proneSprintFraction it sets how long a " +
-                 "sprint kicks on the back before rolling over.")]
-        public float supineRiseRate = 0.15f;
+        [Tooltip("Top speed on the back between the rings (body lengths/s). After rolling onto the back the speed target eases down to this.")]
+        public float supineMaxSpeedBL = 0.8f;
+        [Tooltip("How fast the speed target may rise on the back (body lengths/s^2). With proneSprintFraction it sets how " +
+                 "long a sprint kicks on the back before rolling over.")]
+        public float supineRiseRateBL = 0.6f;
         [Tooltip("Switch posture automatically. Manual toggles always work.")]
         public bool autoSwitch = true;
         [Tooltip("Sprinting (arrow beyond the outer ring) lifts the top speed on the back: the otter speeds up on its back " +
                  "and rolls onto its belly once its speed target reaches this fraction of the sprint speed.")]
-        [Range(0f, 1f)] public float proneSprintFraction = 0.9f;
-        [Tooltip("Pulling the arrow back below this fraction of the outer ring rolls it onto its back again. The gap to " +
-                 "the outer ring keeps it from flipping back and forth at the edge of the sprint zone.")]
-        [Range(0f, 1f)] public float supineReach = 0.9f;
-        [Tooltip("After letting go, or when starting to aim inside supineReach, a prone otter rolls onto its back once slower than this (m/s)...")]
-        public float supineEnterSpeed = 0.05f;
-        [Tooltip("...for this long (s).")]
-        public float supineSettleTime = 0.5f;
+        [Range(0f, 1f)] public float proneSprintFraction = 0.55f;
+        [Tooltip("Prone, it holds its belly through every turn and slow-down, wherever the arrow goes, and rolls onto its back only once it has swum and then come to a stop: slower than this (body lengths/s)...")]
+        public float supineEnterSpeedBL = 0.12f;
+        [Tooltip("...for this long (s), long enough that a quick pivot on the spot keeps it prone.")]
+        public float supineSettleTime = 1f;
         [Tooltip("Nominal roll-over time (s), used until the limbs drive the roll themselves.")]
         public float flipDuration = 0.6f;
     }
 
     /// <summary>
     /// Prone/supine posture. Between the rings the otter swims on its back. Sprinting, it first speeds up on its back
-    /// and rolls prone once the speed target reaches proneSprintFraction of the sprint speed; pulling the arrow back
-    /// inside supineReach rolls it supine, and letting go, or starting to aim, rolls it supine once slow. Automatic
-    /// switches fire only on crossings, so a manual toggle holds until the next one. The speed cap follows the roll
-    /// progress, and the demand layer eases the speed target down to it.
+    /// and rolls prone once the speed target reaches proneSprintFraction of the sprint speed. Prone it stays prone,
+    /// however it turns, slows or steers, until it has swum and then come to a stop; then it rolls onto its back.
+    /// Automatic switches fire only on crossings, so a manual toggle holds until the next one. The speed cap follows
+    /// the roll progress, and the demand layer eases the speed target down to it.
     /// </summary>
     public sealed class PostureMachine
     {
@@ -62,10 +59,10 @@ namespace OtterLocomotion
         /// <summary>(new posture, reason) whenever a roll starts.</summary>
         public event Action<Posture, string> Changed;
 
-        private float previousReach, previousSprint;
-        private bool previousSteering;
+        private float previousSprint;
         private bool hasPrevious;
-        private bool pendingSupine;
+        /// <summary>Has swum since it last lay prone at rest, so coming to a stop is a crossing.</summary>
+        private bool swam;
         private float slowTimer;
 
         public void Reset(PostureSettings s)
@@ -75,55 +72,45 @@ namespace OtterLocomotion
             RollSide = 1;
             LastReason = "initial";
             hasPrevious = false;
-            pendingSupine = false;
+            swam = false;
             slowTimer = 0f;
         }
 
         /// <param name="speedTarget">The demand layer's speed target from the previous step (m/s).</param>
-        public void Step(PostureSettings s, in LocomotionIntent intent, in BodyState body, bool togglePressed, float speedTarget, float yawRateDemand, float dt)
+        /// <param name="bodyLength">Metres per body length, the settings' unit of speed.</param>
+        public void Step(PostureSettings s, in LocomotionIntent intent, in BodyState body, bool togglePressed, float speedTarget, float yawRateDemand, float bodyLength, float dt)
         {
-            float reach = intent.Steering ? intent.reach : 0f;
             // how far a sprint has built up, 0 outside the sprint zone
             float sprint = intent.band == SpeedBand.Sprint ? speedTarget / Mathf.Max(0.1f, intent.requestedSpeed) : 0f;
             if (togglePressed)
             {
-                pendingSupine = false;
+                swam = false;
                 Begin(Current == Posture.Prone ? Posture.Supine : Posture.Prone, "manual", yawRateDemand);
             }
             else if (s.autoSwitch)
             {
-                if (hasPrevious)
+                if (hasPrevious && sprint >= s.proneSprintFraction && previousSprint < s.proneSprintFraction)
+                    Begin(Posture.Prone, $"sprint built up to {Mathf.RoundToInt(sprint * 100f)}% of sprint speed", yawRateDemand);
+                if (Current == Posture.Prone && !IsFlipping)
                 {
-                    if (sprint >= s.proneSprintFraction && previousSprint < s.proneSprintFraction)
+                    if (body.Speed >= s.supineEnterSpeedBL * bodyLength)
                     {
-                        pendingSupine = false;
-                        Begin(Posture.Prone, $"sprint built up to {Mathf.RoundToInt(sprint * 100f)}% of sprint speed", yawRateDemand);
-                    }
-                    else if (intent.Steering && previousSteering && reach < s.supineReach && previousReach >= s.supineReach)
-                    {
-                        pendingSupine = false;
-                        Begin(Posture.Supine, $"arrow back to {Mathf.RoundToInt(reach * 100f)}% of the outer ring", yawRateDemand);
-                    }
-                    else if (intent.Steering != previousSteering && reach < s.supineReach)
-                    {
-                        // let go, or started aiming close in: roll over once the body has slowed
-                        pendingSupine = Current == Posture.Prone;
+                        swam = true;
                         slowTimer = 0f;
                     }
-                }
-                if (pendingSupine)
-                {
-                    slowTimer = body.Speed < s.supineEnterSpeed ? slowTimer + dt : 0f;
-                    if (slowTimer >= s.supineSettleTime)
+                    else if (swam && (slowTimer += dt) >= s.supineSettleTime)
                     {
-                        pendingSupine = false;
-                        Begin(Posture.Supine, "settled at rest", yawRateDemand);
+                        swam = false;
+                        Begin(Posture.Supine, "came to a stop", yawRateDemand);
                     }
                 }
+                else
+                {
+                    swam = false;
+                    slowTimer = 0f;
+                }
             }
-            previousReach = reach;
             previousSprint = sprint;
-            previousSteering = intent.Steering;
             hasPrevious = true;
             if (FlipProgress < 1f) FlipProgress = Mathf.Min(1f, FlipProgress + dt / Mathf.Max(0.05f, s.flipDuration));
         }

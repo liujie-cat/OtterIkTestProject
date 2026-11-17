@@ -31,6 +31,7 @@ namespace OtterLocomotion.EditorTools
             (typeof(PostureFlipSync), "翻身同步"),
             (typeof(SpineKickWave), "脊柱踢水波"),
             (typeof(WebThrust), "脚蹼推水"),
+            (typeof(BodyKeel), "身体侧向阻力"),
             (typeof(StrokePropulsion), "划水推进"),
             (typeof(TailRudder), "尾舵"),
             (typeof(SpineKickSway), "腰部摆动"),

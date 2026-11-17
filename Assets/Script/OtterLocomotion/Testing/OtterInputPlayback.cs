@@ -101,29 +101,41 @@ namespace OtterLocomotion.Testing
             new Segment("release, coast", 2.5f, Zone.Release, -60f),
         };
 
+        /// <summary>Long straight runs at each speed: on the back, the sprint's build-up and roll, prone sprint, prone cruise, then the glide to a stop.</summary>
+        public static List<Segment> SpeedScript() => new List<Segment>
+        {
+            new Segment("idle", 1.0f, Zone.Release, 0f),
+            new Segment("swim on the back", 5.0f, Zone.Swim, 0f),
+            new Segment("sprint: build up on the back, roll, sprint prone", 6.0f, Zone.Sprint, 0f),
+            new Segment("back into the swim ring: prone cruise", 5.0f, Zone.Swim, 0f),
+            new Segment("release: glide, stop, supine", 4.0f, Zone.Release, 0f),
+        };
+
         public static List<Segment> Script(string name) => name switch
         {
             "posture" => PostureScript(),
             "turns" => TurnScript(),
+            "speeds" => SpeedScript(),
             _ => BaselineScript(),
         };
 
-        /// <summary>Exercises every posture rule: the sprint build-up, the arrow pulled back across supineReach, manual toggles while swimming and at rest.</summary>
+        /// <summary>Exercises every posture rule: the sprint build-up, prone held through pulling back and turning until it stops, manual toggles while swimming and at rest.</summary>
         public static List<Segment> PostureScript() => new List<Segment>
         {
             new Segment("rest (expect supine)", 1.5f, Zone.Release, 0f),
             new Segment("swim mid-ring: stays supine, eases to cap", 3.0f, Zone.Swim, 0f),
             new Segment("arrow out to 98%, still between the rings: stays supine", 2.0f, Zone.Swim, 0f, reach: 0.98f),
             new Segment("sprint: speeds up on its back, then prone", 2.5f, Zone.Sprint, 0f),
-            new Segment("arrow back to 95%: stays prone", 1.5f, Zone.Swim, 0f, reach: 0.95f),
-            new Segment("arrow back to 85%: supine", 3.0f, Zone.Swim, 0f, reach: 0.85f),
-            new Segment("F while swimming -> prone, held", 2.5f, Zone.Swim, 0f, pressFlip: true, reach: 0.85f),
-            new Segment("sprint: already prone", 2.5f, Zone.Sprint, 0f),
-            new Segment("release: glide, then supine", 3.0f, Zone.Release, 0f),
-            new Segment("F at rest -> prone", 1.5f, Zone.Release, 0f, pressFlip: true),
-            new Segment("aim pivot left 90: supine once slow", 2.5f, Zone.Aim, -90f),
-            new Segment("sprint from rest: on its back first, then prone", 2.5f, Zone.Sprint, -90f),
-            new Segment("release", 1.5f, Zone.Release, -90f),
+            new Segment("arrow back into the swim ring: stays prone", 2.5f, Zone.Swim, 0f),
+            new Segment("prone swim turn right 120: stays prone", 3.0f, Zone.Swim, 120f),
+            new Segment("aim in the inner ring: stops, then supine", 3.5f, Zone.Aim, 120f),
+            new Segment("F while swimming -> prone, held", 2.5f, Zone.Swim, 120f, pressFlip: true),
+            new Segment("release: glide, then supine", 3.0f, Zone.Release, 120f),
+            new Segment("F at rest -> prone", 1.5f, Zone.Release, 120f, pressFlip: true),
+            new Segment("aim pivot left 90: stays prone (it has not swum)", 2.5f, Zone.Aim, 30f),
+            new Segment("sprint: already prone", 2.0f, Zone.Sprint, 30f),
+            new Segment("sprint turn left 120: stays prone", 3.0f, Zone.Sprint, -90f),
+            new Segment("release: stops, then supine", 2.5f, Zone.Release, -90f),
         };
 
         private void Start()

@@ -64,6 +64,8 @@ namespace OtterLocomotion
     public struct BodyParameters
     {
         public float mass;
+        /// <summary>Nose-to-rump length (m). Speeds in the settings are in body lengths per second, so they scale with the otter.</summary>
+        public float bodyLength;
         public float yawInertia;
         /// <summary>Same model as WaterDrag: F = -(linear + quadratic*|v|) v, M = -angularLinear * w.</summary>
         public float linearDrag, quadraticDrag, angularLinearDrag;

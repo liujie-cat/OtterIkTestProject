@@ -65,6 +65,12 @@ namespace OtterLocomotion.EditorTools
         public static Shot[] For(string script) => script switch
         {
             "posture" => new Shot[0],
+            "speeds" => new[]
+            {
+                new Shot(1, 4.0f, "1_supine_cruise_feet", 8, 0.06f),
+                new Shot(2, 5.0f, "2_prone_sprint_feet", 8, 0.04f),
+                new Shot(3, 4.0f, "3_prone_cruise_feet", 8, 0.05f),
+            },
             "turns" => new[]
             {
                 new Shot(2, 0.15f, "02_ring_small_right_feet", 8, 0.06f),

@@ -25,9 +25,14 @@ namespace OtterLocomotion
         [Tooltip("The push across its path on a web slicing through at a slant, per square metre, per radian of slant, at 1 m/s (N): half the water's density times about pi/2 for a plate about as long as it is wide.")]
         public float slicePush = 800f;
         [Tooltip("Web area as a multiple of the one measured from the mesh.")]
-        public float areaScale = 1f;
+        public float areaScale = 1.25f;
         [Tooltip("Fastest a web is taken to move (m/s), against jumps in its pose.")]
         public float maxWebSpeed = 4f;
+        [Tooltip("Count the body's swing about its centre in a turn as web motion through the water. MovementControllerRB " +
+                 "turns the body rigidly, sweeping the hind feet sideways far faster than a real otter's, whose hindquarters " +
+                 "follow its path through the bend; a web slanted to that sweep is pushed back and the otter stalls in every " +
+                 "turn. Off, the webs move through the water with the body's travel and their own strokes.")]
+        public bool sweptByTurn = false;
 
         private class Web
         {
@@ -44,6 +49,7 @@ namespace OtterLocomotion
         private Vector3 impulse, force;
         private float time;
         private bool started;
+        private Vector3 previousPivot, previousHeading;
 
         /// <summary>A hind web's push on the body along its heading (N, + = forward) last frame; 0 without one.</summary>
         public float Push(LimbId limb)
@@ -114,13 +120,18 @@ namespace OtterLocomotion
             float dt = Time.deltaTime;
             if (body == null || dt <= 0f) return;
             Vector3 heading = Vector3.ProjectOnPlane(body.rotation * Vector3.forward, Vector3.up).normalized;
+            var root = body.transform;
+            Vector3 pivot = root.position, facing = Vector3.ProjectOnPlane(root.forward, Vector3.up).normalized;
+            // where each web would be had the body only travelled since last frame, not swung round
+            Quaternion swing = sweptByTurn || previousHeading == Vector3.zero ? Quaternion.identity : Quaternion.FromToRotation(previousHeading, facing);
             Vector3 total = Vector3.zero;
             foreach (var w in webs)
             {
                 if (w == null || w.bone == null) continue;
                 Vector3 p = w.bone.TransformPoint(w.centerLocal);
                 Vector3 n = w.bone.TransformDirection(w.normalLocal).normalized;
-                Vector3 v = w.hasPrevious ? Vector3.ClampMagnitude((p - w.previous) / dt, maxWebSpeed) : Vector3.zero;
+                Vector3 from = previousPivot + swing * (w.previous - previousPivot);
+                Vector3 v = w.hasPrevious ? Vector3.ClampMagnitude((p - from) / dt, maxWebSpeed) : Vector3.zero;
                 w.previous = p;
                 w.hasPrevious = true;
                 float spread = animator != null && animator.isActiveAndEnabled ? Mathf.Max(0f, animator.FlipperState(w.limb).z) : 1f;
@@ -132,6 +143,8 @@ namespace OtterLocomotion
                 w.push = Vector3.Dot(f, heading);
                 total += heading * w.push;
             }
+            previousPivot = pivot;
+            previousHeading = facing;
             impulse += total * dt;
             time += dt;
         }
