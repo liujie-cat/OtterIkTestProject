@@ -9,28 +9,29 @@ on its back with its head tucked, forepaws raised by the face, hind flippers rai
 under its back, and is not quite symmetric. It is cut into head, arms and body, skinned on the same bones placed on
 its own pose (REF below, millimetres), then every bone carries its flesh onto the bind pose:
 D = T(bind head) F1 S F0^T T(-ref head), F0 / F1 the bone's frame (its axis and a side direction, REF / bind_side) in
-either pose, S the scale (S0 across, the length ratio along, SHAPE on top). The sculpt's head is swapped for an
-otter's built on the head bone (long rounded skull, blunt snout, cheeks, throat) and a lofted neck joins it on; the
-carried mesh is fused on a voxel grid, made exactly symmetric, decimated to a low-poly flat-shaded model, given ears,
-eyes, nose and mouth, coloured from a palette and skinned on the bind pose.
+either pose, S the scale (S0 across, the length ratio along, SHAPE on top). The sculpt's head is dropped for the one
+of a low-poly otter model (low-poly_otter_3d_model.fbx, kept outside the project too), cut off at its neck and set
+on the head bone with its own faces and texture. The carried mesh and a neck lofted from the chest to that cut are
+fused on a voxel grid, made exactly symmetric and decimated to a low-poly flat-shaded model; the head is stitched on,
+given eyes, coloured (the head from its texture, the rest from a palette, in one atlas) and skinned on the bind pose.
 
 Run (Blender 5.x) from the project root:
   blender -b --factory-startup --python Tools/Blender/build_sea_otter.py -- \
-      "Assets/ArtByLiv/Lowpoly Cat/Mesh/cat_lowpoly.fbx" <Sea_Otter.stl> Tools/Blender/sea_otter_skeleton.json \
-      Assets/ArtResource/Otter/SeaOtter ArtSource/SeaOtter [preview_dir]
+      "Assets/ArtByLiv/Lowpoly Cat/Mesh/cat_lowpoly.fbx" <Sea_Otter.stl> <low-poly_otter_3d_model.fbx> \
+      Tools/Blender/sea_otter_skeleton.json Assets/ArtResource/Otter/SeaOtter ArtSource/SeaOtter [preview_dir]
 Outputs:
   <unity_out_dir>/sea_otter.fbx, sea_otter_basecolor.jpg   (the committed .meta files and SeaOtter.mat are kept)
   <source_out_dir>/sea_otter.blend
 """
 import bpy, bmesh, sys, os, math, json
+import numpy as np
 from mathutils import Vector, Matrix, Quaternion
 from mathutils.kdtree import KDTree
-from mathutils.bvhtree import BVHTree
 from mathutils.geometry import intersect_point_line
 
 argv = [os.path.abspath(a) for a in sys.argv[sys.argv.index("--") + 1:]]
-CAT_FBX, REF_STL, SKELETON, UNITY_DIR, SOURCE_DIR = argv[:5]
-PREVIEW_DIR = argv[5] if len(argv) > 5 else None
+CAT_FBX, REF_STL, HEAD_FBX, SKELETON, UNITY_DIR, SOURCE_DIR = argv[:6]
+PREVIEW_DIR = argv[6] if len(argv) > 6 else None
 for d in (UNITY_DIR, SOURCE_DIR, PREVIEW_DIR):
     if d:
         os.makedirs(d, exist_ok=True)
@@ -49,7 +50,7 @@ REF_FACES = 40000       # faces the reference is skinned with
 FUSE_VOXEL = 0.003      # m: the carried mesh is fused on this grid
 SMOOTH_ITER = 8         # smoothing passes over the fused mesh (irons out the seams between the bones' carries)
 SIDE = "r"              # the otter's half that is kept and mirrored (its arm and flipper carry more cleanly)
-FACES = 3360            # final triangles (skin; the face pieces come on top)
+FACES = 2700            # final triangles of the body and neck (the head and eyes come on top)
 FLAT_SHADING = True
 
 # ============================================================================ reference anatomy (mm)
@@ -453,18 +454,15 @@ for k, sgn in (("arm_l", 1), ("arm_r", -1)):
             v.co.x = sgn * (ARM_GAP + ARM_EASE * math.exp((u - ARM_GAP - ARM_EASE) / ARM_EASE))
 
 # ---------------------------------------------------------------- head
-# The sculpt's head is swapped for an otter's on the head bone, in its frame (x the otter's left, f forward along the
-# bone, u up across it; metres from the bone's head): a long rounded skull whose forehead slopes into a blunt snout,
-# cheeks widening the face below the eyes, a short chin, two small whisker pads under the nose, and a throat running
-# back into the neck. Ears, eyes, nose and mouth go on after the low-poly pass.
-HEAD = {  # centre (x > 0: left, mirrored), half-axes (x, f, u), pitch (deg, nose down)
-    "skull":  ((0, 0.030, 0.012), (0.072, 0.066, 0.056), 0),
-    "snout":  ((0, 0.090, -0.002), (0.044, 0.062, 0.036), 15),
-    "cheek":  ((0.034, 0.060, -0.016), (0.036, 0.045, 0.030), 0),
-    "chin":   ((0, 0.075, -0.032), (0.032, 0.042, 0.020), 10),
-    "throat": ((0, 0.010, -0.028), (0.056, 0.055, 0.038), 0),
-    "pad":    ((0.014, 0.127, -0.020), (0.013, 0.012, 0.012), 0),
-}
+# The head is the low-poly otter's (HEAD_FBX: a cub sitting up, face -y, up +z, metres; its skin one mesh, each eye
+# a dense sphere of its own, its mirror plane midway between the eyes). It is cut from its neck along the plane
+# through its throat and nape (HEAD_CUT, (y, z) on the mirror plane), made exactly symmetric from its left half,
+# scaled by HEAD_SCALE and set in the head bone's frame (x the otter's left, f forward along the bone, u up across
+# it; metres from the bone's head) with the cut's centre at HEAD_AT, tipped HEAD_PITCH nose down. It keeps its faces
+# and texture; the eyes become low-poly beads where its eyes were.
+HEAD_CUT = ((-0.350, 0.417), (-0.208, 0.593))
+HEAD_SCALE, HEAD_AT, HEAD_PITCH = 0.56, (0, 0.0, 0.0), 0.0
+HEAD_RIM_STEP = 0.012   # m between the points of the head's rim
 hh, ht = bind["head.x"]
 HX, HF = Vector((1, 0, 0)), (ht - hh).normalized()
 HU = HF.cross(HX).normalized()
@@ -475,30 +473,111 @@ def at_head(x, f, u):
 def head_dir(x, f, u):
     return (HX * x + HF * f + HU * u).normalized()
 
-def ellipsoid(bm, centre, radii, axes, segs, rings):
-    m = Matrix([a * r for a, r in zip(axes, radii)]).transposed().to_4x4()
-    m.translation = centre
-    verts = bmesh.ops.create_uvsphere(bm, u_segments=segs, v_segments=rings, radius=1.0, matrix=m)["verts"]
-    bmesh.ops.recalc_face_normals(bm, faces=list({f for v in verts for f in v.link_faces}))
-    return verts
+def islands(bm):
+    """Connected pieces, smallest (by the size of their bounds) first."""
+    seen, out = set(), []
+    for v in bm.verts:
+        if v in seen:
+            continue
+        seen.add(v)
+        stack, isl = [v], []
+        while stack:
+            a = stack.pop()
+            isl.append(a)
+            for e in a.link_edges:
+                b = e.other_vert(a)
+                if b not in seen:
+                    seen.add(b)
+                    stack.append(b)
+        out.append(isl)
+    return sorted(out, key=lambda isl: (Vector([max(v.co[i] for v in isl) - min(v.co[i] for v in isl) for i in range(3)])).length)
 
 bpy.data.objects.remove(parts.pop("head"), do_unlink=True)
+before = set(bpy.data.objects)
+bpy.ops.import_scene.fbx(filepath=HEAD_FBX)
+src = next(o for o in set(bpy.data.objects) - before if o.type == 'MESH')
+src.data.transform(src.matrix_world)
+head_img = next(n_.image for n_ in src.active_material.node_tree.nodes if n_.type == 'TEX_IMAGE')
 bm = bmesh.new()
-for (x, f, u), radii, pitch in HEAD.values():
-    a = math.radians(pitch)
-    axes = (HX, HF * math.cos(a) - HU * math.sin(a), HU * math.cos(a) + HF * math.sin(a))
-    for s in ((1, -1) if x else (1,)):
-        ellipsoid(bm, at_head(s * x, f, u), radii, axes, 48, 24)
-head = bpy.data.objects.new("Head", bpy.data.meshes.new("Head"))
-bm.to_mesh(head.data)
+bm.from_mesh(src.data)
+for o in set(bpy.data.objects) - before:
+    bpy.data.objects.remove(o, do_unlink=True)
+src_uv = bm.loops.layers.uv.active
+*eyes, skin = islands(bm)
+if len(eyes) != 2:
+    raise RuntimeError(f"expected the head model's skin and two eyes, got {len(eyes) + 1} pieces")
+eye_src = []
+for isl in eyes:
+    lo, hi = Vector(map(min, *(v.co for v in isl))), Vector(map(max, *(v.co for v in isl)))
+    eye_src.append(((lo + hi) / 2, (hi - lo) / 2))
+X0 = sum(c.x for c, _ in eye_src) / 2
+bmesh.ops.delete(bm, geom=[v for isl in eyes for v in isl], context='VERTS')
+throat, nape = Vector((X0, *HEAD_CUT[0])), Vector((X0, *HEAD_CUT[1]))
+cut_n = Vector((0, nape.z - throat.z, throat.y - nape.y)).normalized()   # out of the head, into its neck
+nose = min(bm.verts, key=lambda v: v.co.y).co.copy()
+if (nose - throat).dot(cut_n) >= 0:
+    raise RuntimeError("the head cut faces the wrong way")
+bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:], plane_co=throat, plane_no=cut_n, clear_outer=True)
+*rest, kept = islands(bm)
+if not any((v.co - nose).length < 1e-6 for v in kept):
+    raise RuntimeError("the head cut lost the nose")
+bmesh.ops.delete(bm, geom=[v for isl in rest for v in isl], context='VERTS')
+res = bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:], plane_co=(X0, 0, 0), plane_no=(1, 0, 0),
+                             clear_inner=True)
+for v in res["geom_cut"]:
+    if isinstance(v, bmesh.types.BMVert):
+        v.co.x = X0
+twin = bmesh.ops.duplicate(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:])["geom"]
+for v in (g for g in twin if isinstance(g, bmesh.types.BMVert)):
+    v.co.x = 2 * X0 - v.co.x
+bmesh.ops.reverse_faces(bm, faces=[g for g in twin if isinstance(g, bmesh.types.BMFace)])
+bmesh.ops.remove_doubles(bm, verts=[v for v in bm.verts if abs(v.co.x - X0) < 1e-6], dist=1e-6)
+for e in [e for e in bm.edges if e.is_boundary]:   # the rim's points as close as the neck's skin will meet them
+    cuts = round(e.calc_length() * HEAD_SCALE / HEAD_RIM_STEP) - 1
+    if cuts > 0:
+        bmesh.ops.subdivide_edges(bm, edges=[e], cuts=cuts, use_grid_fill=False)
+bmesh.ops.triangulate(bm, faces=bm.faces[:])
+rim = [e for e in bm.edges if e.is_boundary]
+loop = [rim[0].verts[0]]
+while len(loop) <= len(rim):
+    nxt = [e.other_vert(loop[-1]) for e in loop[-1].link_edges if e.is_boundary]
+    nxt = [v for v in nxt if len(loop) < 2 or v is not loop[-2]]
+    if nxt[0] is loop[0]:
+        break
+    loop.append(nxt[0])
+if len(loop) != len(rim) or any(not e.is_manifold for e in bm.edges if not e.is_boundary):
+    raise RuntimeError(f"the cut head is not a clean shell with one rim ({len(rim)} rim edges, loop of {len(loop)})")
+rim_c = sum((v.co for v in loop), Vector()) / len(loop)
+a = math.radians(HEAD_PITCH)
+PF, PU = HF * math.cos(a) - HU * math.sin(a), HU * math.cos(a) + HF * math.sin(a)
+def head_place(p):
+    q = p - rim_c
+    return at_head(*HEAD_AT) + (HX * q.x - PF * q.y + PU * q.z) * HEAD_SCALE
+def head_turn(d):
+    return (HX * d.x - PF * d.y + PU * d.z).normalized()
+# which way the skin runs from each rim point into the head (across the rim)
+rim_in = []
+for i, v in enumerate(loop):
+    along = (loop[(i + 1) % len(loop)].co - loop[i - 1].co).normalized()
+    d = sum(((f.calc_center_median() - v.co).normalized() for f in v.link_faces), Vector())
+    rim_in.append(head_turn((d - along * d.dot(along)).normalized()))
+bm.verts.index_update()
+HEAD_VERTS = [head_place(v.co) for v in bm.verts]
+HEAD_FACES = [([v.index for v in f.verts], [tuple(l[src_uv].uv) for l in f.loops]) for f in bm.faces]
+HEAD_RIM = [v.index for v in loop]
+EYES = [(head_place(c), r * HEAD_SCALE) for c, r in eye_src]
 bm.free()
-bpy.context.scene.collection.objects.link(head)
-parts["head"] = head
+rim_at, rim_n = at_head(*HEAD_AT), (-PF * cut_n.y + PU * cut_n.z).normalized()
+rim_up = (PU - rim_n * PU.dot(rim_n)).normalized()
+print(f"head: {len(HEAD_FACES)} faces, rim of {len(HEAD_RIM)}, eyes {[tuple(round(x, 4) for x in r) for _, r in EYES]} "
+      f"(half-extents), mirror plane x={X0:.4f}")
 
 # ---------------------------------------------------------------- neck
-# The head stands off the chest; the neck between is a thick tube lofted from the chest's cross-section to the back
-# of the head's, along the neck bones.
-NECK_RINGS, NECK_SEGS = 16, 32
+# The head stands off the chest; the neck between is a thick tube lofted from the chest's cross-section to the head's
+# rim, each point of the one curving to the same angle round the other: leaving the chest along the neck and
+# arriving the way the head's skin runs on from the rim, so the two meet without a crease. It reaches on past the
+# rim into the head so the fuse leaves its cross-section true there, and is cut back to the rim after the fuse.
+NECK_RINGS, NECK_SEGS, NECK_PAST = 16, 32, 0.3   # ..., how far past the rim it reaches (of its length)
 def section(o, centre, axis, reach):
     """Centre, half-width and half-height of a part's flesh over a slab across an axis through a point."""
     xs, zs = [], []
@@ -510,21 +589,42 @@ def section(o, centre, axis, reach):
     x0, x1, z0, z1 = q(xs, 0.03), q(xs, 0.97), q(zs, 0.03), q(zs, 0.97)
     return Vector(((x0 + x1) / 2, centre.y, (z0 + z1) / 2)), (x1 - x0) / 2, (z1 - z0) / 2
 
-chest_at, head_at = bind["spine_03.x"][0], at_head(0, 0.0, 0)
-fwd = (head_at - chest_at).normalized()
+chest_at = bind["spine_03.x"][0]
+fwd = (rim_at - chest_at).normalized()
 chest_c, chest_w, chest_h = section(parts["body"], chest_at, fwd, 0.01)
-head_c, head_w, head_h = section(parts["head"], head_at, fwd, 0.01)
-print(f"neck from chest {chest_w:.3f}x{chest_h:.3f} to head {head_w:.3f}x{head_h:.3f} (half-width x half-height, m)")
 up = frame(fwd, Vector((0, 0, 1))).col[2]
+rim2 = [((HEAD_VERTS[i] - rim_at).dot(HX), (HEAD_VERTS[i] - rim_at).dot(rim_up)) for i in HEAD_RIM]
+
+def rim_point(t):
+    """Where the head's rim crosses the ray from its centre at angle t (from the otter's left towards the nape), and
+    which way the skin runs on from there into the head."""
+    dx, dy = math.cos(t), math.sin(t)
+    reach, run = 0.0, None
+    for i, ((ax, ay), (bx, by)) in enumerate(zip(rim2, rim2[1:] + rim2[:1])):
+        ex, ey = bx - ax, by - ay
+        den = dx * ey - dy * ex
+        s = (ax * dy - ay * dx) / den if abs(den) > 1e-12 else -1.0
+        if 0.0 <= s <= 1.0 and (ax * ey - ay * ex) / den > reach:
+            reach, run = (ax * ey - ay * ex) / den, rim_in[i].lerp(rim_in[(i + 1) % len(rim_in)], s).normalized()
+    return rim_at + HX * (reach * dx) + rim_up * (reach * dy), run
+
+def hermite(p0, d0, p1, d1, f):
+    if f > 1.0:
+        return p1 + d1 * (f - 1.0)
+    return (p0 * (2 * f ** 3 - 3 * f ** 2 + 1) + d0 * (f ** 3 - 2 * f ** 2 + f) + p1 * (3 * f ** 2 - 2 * f ** 3)
+            + d1 * (f ** 3 - f ** 2))
+
+print(f"neck from chest {chest_w:.3f}x{chest_h:.3f} to the head's rim {max(abs(x) for x, _ in rim2):.3f}x"
+      f"{max(abs(y) for _, y in rim2):.3f} (half-width x half-height, m)")
 bm = bmesh.new()
 rings = []
-for i in range(NECK_RINGS):
-    f = i / (NECK_RINGS - 1)
-    s = f * f * (3 - 2 * f)
-    c, w, h = chest_c.lerp(head_c, s), chest_w + (head_w - chest_w) * s, chest_h + (head_h - chest_h) * s
-    c = c + fwd * ((chest_at.lerp(head_at, f) - c).dot(fwd))
-    rings.append([bm.verts.new(c + Vector((w * math.cos(t), 0, 0)) + up * (h * math.sin(t)))
-                  for t in (2 * math.pi * j / NECK_SEGS for j in range(NECK_SEGS))])
+ends = []
+for t in (2 * math.pi * j / NECK_SEGS for j in range(NECK_SEGS)):
+    p0 = chest_c + HX * (chest_w * math.cos(t)) + up * (chest_h * math.sin(t))
+    p1, run = rim_point(t)
+    ends.append((p0, fwd * (p1 - p0).length, p1, run * (p1 - p0).length))
+for f in [i / (NECK_RINGS - 1) for i in range(NECK_RINGS)] + [1 + NECK_PAST * k / 3 for k in (1, 2, 3)]:
+    rings.append([bm.verts.new(hermite(*e, f)) for e in ends])
 for a, b in zip(rings, rings[1:]):
     for j in range(NECK_SEGS):
         bm.faces.new((a[j], a[j - 1], b[j - 1], b[j]))
@@ -563,6 +663,31 @@ bpy.ops.object.mode_set(mode='EDIT')
 bpy.ops.mesh.select_all(action='SELECT')
 bpy.ops.mesh.symmetrize(direction='POSITIVE_X' if SIDE == "l" else 'NEGATIVE_X', threshold=1e-4)
 bpy.ops.object.mode_set(mode='OBJECT')
+# the neck's end inside the head is cut away at the head's rim, where the neck's cross-section is the rim's
+bm = bmesh.new()
+bm.from_mesh(obj.data)
+behind = lambda p: (p - rim_at).dot(rim_n)
+reach = 1.6 * max((HEAD_VERTS[i] - rim_at).length for i in HEAD_RIM)
+near = [f for f in bm.faces if (f.calc_center_median() - rim_at).length < reach]
+res = bmesh.ops.bisect_plane(bm, geom=list({v for f in near for v in f.verts}) + list({e for f in near for e in f.edges})
+                             + near, plane_co=rim_at, plane_no=rim_n)
+cut = {e for e in res["geom_cut"] if isinstance(e, bmesh.types.BMEdge)}
+seed = min((f for f in bm.faces if (f.calc_center_median() - rim_at).length < reach),
+           key=lambda f: behind(f.calc_center_median()))
+stub, todo = {seed}, [seed]
+while todo:
+    f = todo.pop()
+    if behind(f.calc_center_median()) > 0:
+        raise RuntimeError("the neck's end inside the head is not cut off cleanly")
+    for e in f.edges:
+        if e not in cut:
+            for g in e.link_faces:
+                if g not in stub:
+                    stub.add(g)
+                    todo.append(g)
+bmesh.ops.delete(bm, geom=list(stub), context='FACES')
+bm.to_mesh(obj.data)
+bm.free()
 apply_modifier(obj, 'DECIMATE', ratio=min(1.0, FACES / len(obj.data.polygons) / 2), use_collapse_triangulate=True,
                use_symmetry=True, symmetry_axis='X')
 # the decimation is only nearly symmetric: keep the chosen half and mirror it
@@ -582,7 +707,8 @@ bmesh.ops.reverse_faces(bm, faces=[g for g in mirrored["geom"] if isinstance(g, 
 bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=1e-6)
 bmesh.ops.triangulate(bm, faces=bm.faces[:])
 bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
-open_edges = sum(1 for e in bm.edges if not e.is_manifold)
+rim_edges = sum(1 for e in bm.edges if e.is_boundary)
+open_edges = sum(1 for e in bm.edges if not e.is_manifold and not e.is_boundary)
 bm.to_mesh(obj.data)
 bm.free()
 kd = KDTree(len(obj.data.vertices))
@@ -591,107 +717,63 @@ for i, v in enumerate(obj.data.vertices):
 kd.balance()
 asym = max(kd.find(Vector((-v.co.x, v.co.y, v.co.z)))[2] for v in obj.data.vertices)
 print(f"low poly: {len(obj.data.vertices)} verts, {len(obj.data.polygons)} tris, mirror error {asym:.1e} m, "
-      f"{open_edges} non-manifold edges")
+      f"{open_edges} non-manifold edges; neck's end cut at the head's rim ({len(stub)} faces), {rim_edges} edges round")
 for o in [o for o in bpy.data.objects if o not in (obj, arm)]:
     bpy.data.objects.remove(o, do_unlink=True)
 
-# ---------------------------------------------------------------- face
-# Crisp pieces set on the low-poly head: small oval ears on the sides at the back of the skull, standing out
-# sideways and looking forward-out, with darker insides; big black eyes each with a white glint (lit from the same
-# side on both); a rounded inverted triangle of a nose on the snout's tip and a small smile under it. Where each sits
-# is a direction in the head frame from the skull's centre (ears, eyes) or the snout's (nose); left pieces are built
-# and mirrored.
-EAR_AT, EAR_FACE = (0.92, -0.35, 0.18), (0.6, 0.75, 0.1)   # where on the skull; which way the ear's front looks
-EAR_R, EAR_OUT = (0.017, 0.021, 0.0065), 0.45              # half-axes (across, out of the skin, thick); centre's height over the skin (radii)
-EAR_IN_R = (0.0095, 0.012, 0.0025)
-EYE_AT, EYE_R, EYE_SINK = (0.55, 0.83, 0.2), 0.0105, 0.35  # ..., centre's depth under the skin (radii)
-GLINT_AT, GLINT_R = (-0.35, 0.75, 0.55), 0.003
-NOSE_AT, NOSE_R, NOSE_TAPER = (0, 1.0, 0.35), (0.015, 0.0105, 0.009), 0.6  # ..., half-axes (across, up, out)
-SMILE = [(0, -0.005), (0.0035, -0.0085), (0.0075, -0.0095), (0.011, -0.008), (0.014, -0.0045)]  # (across, up) from under the nose
-MOUTH_R = 0.0014
-KINDS = {"eye": 1, "glint": 2, "nose": 3, "mouth": 4, "ear": 5, "earin": 6}    # 0: skin
-
-bvh = BVHTree.FromObject(obj, bpy.context.evaluated_depsgraph_get())
-def on_skin(centre, d):
-    hit, n, _, _ = bvh.ray_cast(centre + d * 0.3 + HX * 1e-5, -d)   # a ray in the mirror plane slips between its edges
-    if hit is None:
-        raise RuntimeError(f"no skin along {tuple(d)} from {tuple(centre)}")
-    return hit, n
+# ---------------------------------------------------------------- head on
+# The head is put on with each point of the neck's cut welded to the nearest of the head's rim; where the rim has
+# points left between, the neck's face over them takes them in. Then the eyes: black beads where the model's eyes
+# were and of their size, each with a white glint (lit from the same side on both).
+GLINT_AT, GLINT_R = (-0.2, 0.8, 0.55), 0.0035
+KINDS = {"eye": 1, "glint": 2, "head": 3}    # 0: skin
 
 bm = bmesh.new()
 bm.from_mesh(obj.data)
 kind = bm.faces.layers.int.new("kind")
-def add(verts, name, mirror=True):
-    faces = list({f for v in verts for f in v.link_faces})
-    for f in faces:
-        f[kind] = KINDS[name]
-    if mirror:
-        twin = bmesh.ops.duplicate(bm, geom=verts + faces)["geom"]
-        for v in (g for g in twin if isinstance(g, bmesh.types.BMVert)):
-            v.co.x = -v.co.x
-        bmesh.ops.reverse_faces(bm, faces=[g for g in twin if isinstance(g, bmesh.types.BMFace)])
+uv_src = bm.loops.layers.uv.new("src")
+neck_rim = list({v for e in bm.edges if e.is_boundary for v in e.verts})
+hv = [bm.verts.new(p) for p in HEAD_VERTS]
+for idx, uvs in HEAD_FACES:
+    f = bm.faces.new([hv[i] for i in idx])
+    f[kind] = KINDS["head"]
+    for l, uv in zip(f.loops, uvs):
+        l[uv_src].uv = uv
+head_rim = [hv[i] for i in HEAD_RIM]
+weld = {v: min(head_rim, key=lambda h: (h.co - v.co).length) for v in neck_rim}
+gap = max((v.co - h.co).length for v, h in weld.items())
+bmesh.ops.weld_verts(bm, targetmap=weld)
+head_faces = {f for f in bm.faces if f[kind] == KINDS["head"]}
+holes = bmesh.ops.holes_fill(bm, edges=[e for e in bm.edges if e.is_boundary], sides=0)["faces"]
+spans = [e for f in holes for e in f.edges if not any(g in head_faces for g in e.link_faces)]
+bmesh.ops.dissolve_edges(bm, edges=spans)
+merged = [f for f in bm.faces if f not in head_faces and (f[kind] == KINDS["head"] or len(f.verts) > 3)]
+for f in merged:
+    f[kind] = 0
+bmesh.ops.triangulate(bm, faces=merged)
+bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+open_edges = sum(1 for e in bm.edges if not e.is_manifold)
+print(f"head on: the neck's {len(neck_rim)} rim points welded onto the head's {len(head_rim)} (moved up to "
+      f"{gap * 1000:.1f} mm), {len(holes)} gaps taken in, {open_edges} non-manifold edges")
 
-def tube(pts, r, across, sides=6):
-    rings = []
-    for i, p in enumerate(pts):
-        t = (pts[min(i + 1, len(pts) - 1)] - pts[max(i - 1, 0)]).normalized()
-        a = across.cross(t).normalized()
-        b = t.cross(a)
-        rings.append([bm.verts.new(p + (a * math.cos(2 * math.pi * j / sides) + b * math.sin(2 * math.pi * j / sides)) * r)
-                      for j in range(sides)])
-    for r0, r1 in zip(rings, rings[1:]):
-        for j in range(sides):
-            bm.faces.new((r0[j], r0[j - 1], r1[j - 1], r1[j]))
-    bm.faces.new(rings[0][::-1])
-    bm.faces.new(rings[-1])
-    verts = [v for ring in rings for v in ring]
-    bmesh.ops.recalc_face_normals(bm, faces=list({f for v in verts for f in v.link_faces}))
-    return verts
-
-skull_c, (sx, sf, su) = at_head(*HEAD["skull"][0]), HEAD["skull"][1]
-p, _ = on_skin(skull_c, head_dir(*EAR_AT))
-q = p - skull_c
-n = head_dir(q.dot(HX) / sx ** 2, q.dot(HF) / sf ** 2, q.dot(HU) / su ** 2)
-z = head_dir(*EAR_FACE)
-y = (n - z * n.dot(z)).normalized()
-ear_c = p + y * (EAR_R[1] * EAR_OUT)
-add(ellipsoid(bm, ear_c, EAR_R, (y.cross(z), y, z), 14, 7), "ear")
-add(ellipsoid(bm, ear_c + z * (EAR_R[2] * 0.75) - y * (EAR_R[1] * 0.1), EAR_IN_R, (y.cross(z), y, z), 12, 6), "earin")
-
-d = head_dir(*EYE_AT)
-p, _ = on_skin(skull_c, d)
-eye_c = p - d * (EYE_R * EYE_SINK)
-add(bmesh.ops.create_icosphere(bm, subdivisions=2, radius=EYE_R, matrix=Matrix.Translation(eye_c))["verts"], "eye")
-for c in (eye_c, Vector((-eye_c.x, eye_c.y, eye_c.z))):
-    add(bmesh.ops.create_icosphere(bm, subdivisions=1, radius=GLINT_R,
-                                   matrix=Matrix.Translation(c + head_dir(*GLINT_AT) * EYE_R))["verts"], "glint", mirror=False)
-
-z = head_dir(*NOSE_AT)
-p, _ = on_skin(at_head(*HEAD["snout"][0]), z)
-y = (HU - z * HU.dot(z)).normalized()
-x = y.cross(z)
-nose_c = Vector((0, p.y, p.z)) + z * (NOSE_R[2] * 0.3)
-nose = ellipsoid(bm, nose_c, NOSE_R, (x, y, z), 12, 8)
-for v in nose:
-    lv = (v.co - nose_c).dot(y)
-    if lv < 0:
-        v.co -= x * ((v.co - nose_c).dot(x) * NOSE_TAPER * -lv / NOSE_R[1])
-add(nose, "nose", mirror=False)
-
-under = nose_c - y * (NOSE_R[1] * 0.8)
-mouth = []
-for a, b in [(0, 0)] + SMILE:
-    hit, n = on_skin(under + x * a + y * b, z)
-    mouth.append(hit + n * (MOUTH_R * 0.5))
-    if a == 0:
-        mouth[-1].x = 0.0
-add(tube(mouth[:2], MOUTH_R, z), "mouth", mirror=False)
-add(tube(mouth[1:], MOUTH_R, z), "mouth")
+c, r = max(EYES, key=lambda e: e[0].x)
+for s in (1, -1):
+    eye_c = Vector((s * c.x, c.y, c.z))
+    m = Matrix((HX * r.x, PF * r.y, PU * r.z)).transposed().to_4x4()
+    m.translation = eye_c
+    for f in {f for v in bmesh.ops.create_icosphere(bm, subdivisions=2, radius=1.0, matrix=m)["verts"] for f in v.link_faces}:
+        f[kind] = KINDS["eye"]
+    d = head_dir(*GLINT_AT)
+    out = 1 / math.sqrt((d.dot(HX) / r.x) ** 2 + (d.dot(PF) / r.y) ** 2 + (d.dot(PU) / r.z) ** 2)
+    for f in {f for v in bmesh.ops.create_icosphere(bm, subdivisions=1, radius=GLINT_R,
+                                                   matrix=Matrix.Translation(eye_c + d * out))["verts"] for f in v.link_faces}:
+        f[kind] = KINDS["glint"]
 bm.to_mesh(obj.data)
 bm.free()
-face_verts = {v for p in obj.data.polygons if obj.data.attributes["kind"].data[p.index].value for v in p.vertices}
-print(f"face: ears at {tuple(round(a, 3) for a in ear_c)}, eyes at {tuple(round(a, 3) for a in eye_c)}, "
-      f"nose at {tuple(round(a, 3) for a in nose_c)}; {len(face_verts)} verts rigid on the head")
+face_verts = {v for p in obj.data.polygons if obj.data.attributes["kind"].data[p.index].value in (KINDS["eye"], KINDS["glint"])
+              for v in p.vertices}
+print(f"eyes at {tuple(round(a_, 3) for a_ in c)}, half-axes {tuple(round(a_, 4) for a_ in r)}; "
+      f"{len(face_verts)} verts rigid on the head")
 
 # ============================================================================ 5. skin weights
 # Bone heat bleeds the haunch bones across the belly and the tail's root into the haunches and the skin between the
@@ -790,49 +872,32 @@ if unweighted:
     raise RuntimeError(f"{len(unweighted)} vertices have no skin weights")
 
 # ============================================================================ 6. colours
-# Dark brown fur, the head pale with a paler muzzle, the throat pale on down the neck while its nape turns brown just
-# behind the head, dark brown ears with darker insides, paws and flippers near black, dark nose and mouth, black
-# eyes. Each face takes one palette cell (flat shading); the shade within a colour and the head's ragged edges come
-# from a hash of the face's mirrored position, so both sides match.
+# The head keeps the model's texture, on the atlas's left half. The rest is coloured from a palette on its right half:
+# dark brown fur, the throat pale on down the neck from the head while its nape turns brown just behind it, paws and
+# flippers near black, black eyes with white glints. Each face takes one palette cell (flat shading); the shade
+# within a colour comes from a hash of the face's mirrored position, so both sides match.
 PALETTE = {  # name: shades (8-bit sRGB)
     "body":   [(96, 68, 50), (103, 73, 53), (90, 63, 46), (108, 77, 56)],
     "back":   [(82, 57, 42), (88, 61, 45), (77, 53, 39), (92, 64, 47)],
-    "neck":   [(150, 122, 96), (158, 129, 101), (143, 116, 91), (164, 134, 106)],
-    "head":   [(204, 184, 156), (212, 193, 165), (197, 176, 148), (218, 199, 172)],
-    "muzzle": [(232, 220, 200), (238, 227, 208), (226, 213, 192), (242, 232, 214)],
-    "ear":    [(80, 60, 49), (85, 64, 52), (76, 57, 46), (89, 67, 54)],
-    "earin":  [(54, 40, 34)],
+    "neck":   [(138, 121, 103), (144, 127, 108), (132, 115, 97), (149, 131, 112)],
+    "head":   [(176, 163, 145), (182, 169, 151), (170, 157, 139), (187, 174, 156)],
     "paw":    [(60, 43, 33), (65, 47, 36), (56, 40, 31), (69, 50, 38)],
-    "nose":   [(46, 33, 29)],
-    "mouth":  [(58, 42, 36)],
     "eye":    [(16, 13, 13)],
     "glint":  [(250, 250, 247)],
 }
-GRID, TEX_SIZE = 8, 256
+GRID, TEX_H = 8, 1024   # palette cells across its square half; the atlas is two squares side by side
 KIND_NAME = {i: name for name, i in KINDS.items()}
 PALE = {"head.x": 1.0, "neck.x": 0.6, "c_subneck_1.x": 0.25}    # how pale each bone's flesh is
 THROAT = 0.45           # the neck's flesh facing down is this much paler, facing up this much darker
-MUZZLE, MUZZLE_GROW = ("chin", "pad"), 1.15     # the pale muzzle reaches this far round these (their radii)
 DARK = {f"{b}.{s}" for b in ("leg_stretch_dupli_001", "foot_dupli_001", "toes_01_dupli_001", "foot", "toes_01") for s in "lr"}
 CELL_OF = {key: i for i, key in enumerate((name, k) for name, shades in PALETTE.items() for k in range(len(shades)))}
 
 def cell_uv(name, k=0):
     i = CELL_OF[(name, k % len(PALETTE[name]))]
-    return ((i % GRID + 0.5) / GRID, (i // GRID + 0.5) / GRID)
+    return (0.5 + (i % GRID + 0.5) / GRID / 2, (i // GRID + 0.5) / GRID)
 
 def mirrored_hash(c):
     return hash((round(abs(c.x), 3), round(c.y, 3), round(c.z, 3))) & 0xFFFF
-
-def on_muzzle(c, grow):
-    q = c - hh
-    x, f, u = abs(q.dot(HX)), q.dot(HF), q.dot(HU)
-    for (cx, cf, cu), (rx, rf, ru), pitch in (HEAD[m] for m in MUZZLE):
-        a = math.radians(pitch)
-        df, du = f - cf, u - cu
-        lf, lu = df * math.cos(a) - du * math.sin(a), du * math.cos(a) + df * math.sin(a)
-        if ((x - cx) / rx) ** 2 + (lf / rf) ** 2 + (lu / ru) ** 2 < grow * grow:
-            return True
-    return False
 
 groups = {g.index: g.name for g in obj.vertex_groups}
 me = obj.data
@@ -840,11 +905,17 @@ vw = [{groups[g.group]: g.weight for g in v.groups} for v in me.vertices]
 kinds = [a.value for a in me.attributes["kind"].data]
 bm = bmesh.new()
 bm.from_mesh(me)
-uv = bm.loops.layers.uv.verify()
+src = bm.loops.layers.uv["src"]
+uv = bm.loops.layers.uv.new("UVMap")
 region_counts = {}
 for f in bm.faces:
     c = f.calc_center_median()
     k = mirrored_hash(c)
+    if kinds[f.index] == KINDS["head"]:
+        for loop in f.loops:
+            loop[uv].uv = (loop[src].uv.x / 2, loop[src].uv.y)
+        region_counts["texture"] = region_counts.get("texture", 0) + 1
+        continue
     if kinds[f.index]:
         name = KIND_NAME[kinds[f.index]]
     else:
@@ -857,7 +928,7 @@ for f in bm.faces:
         if sum(w.get(b, 0.0) for b in DARK) > 0.5:
             name = "paw"
         elif pale > 0.7:
-            name = "muzzle" if on_muzzle(c, MUZZLE_GROW + ((k >> 8) % 10 - 5) * 0.01) else "head"
+            name = "head"
         elif pale > 0.35:
             name = "neck"
         else:
@@ -865,22 +936,24 @@ for f in bm.faces:
     region_counts[name] = region_counts.get(name, 0) + 1
     for loop in f.loops:
         loop[uv].uv = cell_uv(name, k)
+bm.loops.layers.uv.remove(src)
 bm.to_mesh(me)
 bm.free()
 me.attributes.remove(me.attributes["kind"])
 print("faces per colour:", region_counts)
 
-img = bpy.data.images.new("sea_otter_basecolor", TEX_SIZE, TEX_SIZE, alpha=False)
-cell = TEX_SIZE // GRID
-px = [0.0] * (TEX_SIZE * TEX_SIZE * 4)
+head_img.scale(TEX_H, TEX_H)
+atlas = np.empty((TEX_H, 2 * TEX_H, 4), np.float32)   # byte image pixels are stored as sRGB, both halves alike
+px = np.empty(TEX_H * TEX_H * 4, np.float32)
+head_img.pixels.foreach_get(px)
+atlas[:, :TEX_H] = px.reshape(TEX_H, TEX_H, 4)
+cell = TEX_H // GRID
 for (name, k), i in CELL_OF.items():
-    col = [x / 255.0 for x in PALETTE[name][k]] + [1.0]  # byte image pixels are stored as sRGB
     cx, cy = i % GRID, i // GRID
-    for y in range(cy * cell, (cy + 1) * cell):
-        for x in range(cx * cell, (cx + 1) * cell):
-            j = (y * TEX_SIZE + x) * 4
-            px[j:j + 4] = col
-img.pixels = px
+    atlas[cy * cell:(cy + 1) * cell, TEX_H + cx * cell:TEX_H + (cx + 1) * cell] = [x / 255.0 for x in PALETTE[name][k]] + [1.0]
+atlas[..., 3] = 1.0
+img = bpy.data.images.new("sea_otter_basecolor", 2 * TEX_H, TEX_H, alpha=False)
+img.pixels.foreach_set(atlas.ravel())
 img.filepath_raw = os.path.join(UNITY_DIR, "sea_otter_basecolor.jpg")
 img.file_format = 'JPEG'
 img.save(quality=95)
@@ -893,7 +966,7 @@ bsdf = next(n_ for n_ in nt.nodes if n_.type == 'BSDF_PRINCIPLED')
 bsdf.inputs['Roughness'].default_value = 0.8
 tn = nt.nodes.new('ShaderNodeTexImage')
 tn.image = img
-tn.interpolation = 'Closest'
+tn.interpolation = 'Linear'
 nt.links.new(tn.outputs['Color'], bsdf.inputs['Base Color'])
 nt.nodes.active = tn
 me.materials.clear()
