@@ -106,6 +106,8 @@ namespace OtterLocomotion.Testing
             public float[] footWorldFwd;
             /// <summary>Per hind foot: the web middle's speed up through the water (m/s) and its normal's up component.</summary>
             public float[] footWorldUp, footNormalUp;
+            /// <summary>Per hind foot: which way the toes point, ankle to web middle: up and forward components.</summary>
+            public float[] footToesUp, footToesFwd;
             /// <summary>TailRudder: the tip's bend from the hips' line (deg, + = right) and lift above it (deg, + = toward the back), and how deep the tail sits in the hind legs (cm); NaN without one.</summary>
             public float tailBend, tailLift, tailHit;
             /// <summary>Side bend at the waist, the hips' heading to the chest's seen from above (deg, + = curled to the right), and
@@ -301,6 +303,8 @@ namespace OtterLocomotion.Testing
             s.footWorldFwd = new float[feet.Count];
             s.footWorldUp = new float[feet.Count];
             s.footNormalUp = new float[feet.Count];
+            s.footToesUp = new float[feet.Count];
+            s.footToesFwd = new float[feet.Count];
             for (int k = 0; k < feet.Count && hip != null; k++)
             {
                 var f = feet[k];
@@ -319,6 +323,9 @@ namespace OtterLocomotion.Testing
                 s.footSpeed[k] = speed;
                 s.footNormalFwd[k] = Vector3.Dot(normal, fwd);
                 s.footNormalUp[k] = normal.y;
+                Vector3 toes = (world - f.bone.position).normalized;
+                s.footToesUp[k] = toes.y;
+                s.footToesFwd[k] = Vector3.Dot(toes, fwd);
             }
             s.flipperPose = feet.Select(f => animator != null && System.Enum.TryParse<LimbId>(f.name, out var id) ? animator.FlipperState(id) : Vector4.zero).ToArray();
             s.kickYaw = feet.Select(f => animator != null && System.Enum.TryParse<LimbId>(f.name, out var id) ? animator.KickYaw(id) : 0f).ToArray();
@@ -440,6 +447,8 @@ namespace OtterLocomotion.Testing
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wpush");
             // the web middle's speed up through the water (m/s) and its normal's up component
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wup,").Append(f.name).Append("_nup");
+            // which way the toes point: up and forward components
+            foreach (var f in feet) sb.Append(',').Append(f.name).Append("_tup,").Append(f.name).Append("_tfwd");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedCap,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -478,6 +487,7 @@ namespace OtterLocomotion.Testing
                 sb.Append(',').Append(float.IsNaN(s.tailHit) ? "" : s.tailHit.ToString("F2", ci));
                 sb.Append(',').Append(float.IsNaN(s.tailLift) ? "" : s.tailLift.ToString("F1", ci));                foreach (var w in s.webPush) sb.Append(',').Append(w.ToString("F3", ci));
                 for (int k = 0; k < s.footWorldUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footWorldUp[k], s.footNormalUp[k]));
+                for (int k = 0; k < s.footToesUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footToesUp[k], s.footToesFwd[k]));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.speedCap, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
