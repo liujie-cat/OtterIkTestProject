@@ -9,9 +9,10 @@ on its back with its head tucked, forepaws raised by the face, hind flippers rai
 under its back, and is not quite symmetric. It is cut into head, arms and body, skinned on the same bones placed on
 its own pose (REF below, millimetres), then every bone carries its flesh onto the bind pose:
 D = T(bind head) F1 S F0^T T(-ref head), F0 / F1 the bone's frame (its axis and a side direction, REF / bind_side) in
-either pose, S the scale (S0 across, the length ratio along, SHAPE on top). A lofted neck joins the head back on; the
-carried mesh is fused on a voxel grid, made exactly symmetric, decimated to a low-poly flat-shaded model, given bead
-eyes, coloured from a palette and skinned on the bind pose.
+either pose, S the scale (S0 across, the length ratio along, SHAPE on top). The sculpt's head is swapped for a cute
+one built on the head bone (round skull, cheeks, a muzzle with whisker pads) and a lofted neck joins it on; the
+carried mesh is fused on a voxel grid, made exactly symmetric, decimated to a low-poly flat-shaded model, given ears,
+eyes, nose and mouth, coloured from a palette and skinned on the bind pose.
 
 Run (Blender 5.x) from the project root:
   blender -b --factory-startup --python Tools/Blender/build_sea_otter.py -- \
@@ -48,7 +49,7 @@ REF_FACES = 40000       # faces the reference is skinned with
 FUSE_VOXEL = 0.003      # m: the carried mesh is fused on this grid
 SMOOTH_ITER = 8         # smoothing passes over the fused mesh (irons out the seams between the bones' carries)
 SIDE = "r"              # the otter's half that is kept and mirrored (its arm and flipper carry more cleanly)
-FACES = 3200            # final triangles (body; the eyes come on top)
+FACES = 3360            # final triangles (skin; the face pieces come on top)
 FLAT_SHADING = True
 
 # ============================================================================ reference anatomy (mm)
@@ -63,7 +64,6 @@ HEAD_FACE = Vector((0.295, -0.327, 0.898))
 HEAD_CHIN = Vector((0.407, -0.807, -0.427))
 HEAD_AXIS = (HEAD_FACE * math.cos(math.radians(15)) + HEAD_CHIN * math.sin(math.radians(15))).normalized()
 HEAD_JOINT = Vector((35.6, 81.9, 68.8))
-EYES = [Vector((49.7, 74.9, 90.0)), Vector((37.6, 67.9, 90.5))]    # left, right
 
 def _v(*a):
     return Vector(a)
@@ -451,12 +451,46 @@ for k, sgn in (("arm_l", 1), ("arm_r", -1)):
         u = sgn * v.co.x
         if u < ARM_GAP + ARM_EASE:
             v.co.x = sgn * (ARM_GAP + ARM_EASE * math.exp((u - ARM_GAP - ARM_EASE) / ARM_EASE))
-eye_bind = [D["head.x"] @ e for e in EYES]
-print("eyes carried to", [tuple(round(a, 3) for a in e) for e in eye_bind])
+
+# ---------------------------------------------------------------- head
+# The sculpt's head is swapped for a cute one on the head bone, in its frame (x the otter's left, f forward along the
+# bone, u up across it; metres from the bone's head): a broad round skull, cheeks filling out its lower sides, a short
+# muzzle low on its front with two whisker pads. Ears, eyes, nose and mouth go on after the low-poly pass.
+SKULL = ((0, 0.050, 0.010), (0.072, 0.058, 0.056))      # centre, half-axes (x, f, u)
+CHEEK = ((0.040, 0.072, -0.016), (0.033, 0.033, 0.033))  # left; mirrored
+MUZZLE = ((0, 0.098, -0.018), (0.036, 0.026, 0.026))
+PAD = ((0.016, 0.104, -0.022), (0.021, 0.021, 0.021))   # left; mirrored
+hh, ht = bind["head.x"]
+HX, HF = Vector((1, 0, 0)), (ht - hh).normalized()
+HU = HF.cross(HX).normalized()
+
+def at_head(x, f, u):
+    return hh + HX * x + HF * f + HU * u
+
+def head_dir(x, f, u):
+    return (HX * x + HF * f + HU * u).normalized()
+
+def ellipsoid(bm, centre, radii, axes, segs, rings):
+    m = Matrix([a * r for a, r in zip(axes, radii)]).transposed().to_4x4()
+    m.translation = centre
+    verts = bmesh.ops.create_uvsphere(bm, u_segments=segs, v_segments=rings, radius=1.0, matrix=m)["verts"]
+    bmesh.ops.recalc_face_normals(bm, faces=list({f for v in verts for f in v.link_faces}))
+    return verts
+
+bpy.data.objects.remove(parts.pop("head"), do_unlink=True)
+bm = bmesh.new()
+for (x, f, u), radii in (SKULL, CHEEK, MUZZLE, PAD):
+    for s in ((1, -1) if x else (1,)):
+        ellipsoid(bm, at_head(s * x, f, u), radii, (HX, HF, HU), 48, 24)
+head = bpy.data.objects.new("Head", bpy.data.meshes.new("Head"))
+bm.to_mesh(head.data)
+bm.free()
+bpy.context.scene.collection.objects.link(head)
+parts["head"] = head
 
 # ---------------------------------------------------------------- neck
-# The head came off the chest it was tucked against; the neck between is a tube lofted from the chest's
-# cross-section to the head's, along the neck bones, drawn in by NECK_WAIST at its middle so the head stands out.
+# The head stands off the chest; the neck between is a tube lofted from the chest's cross-section to the head's,
+# along the neck bones, drawn in by NECK_WAIST at its middle so the head stands out.
 NECK_RINGS, NECK_SEGS, NECK_WAIST = 16, 32, 0.1
 def section(o, centre, axis, reach):
     """Centre, half-width and half-height of a part's flesh over a slab across an axis through a point."""
@@ -469,7 +503,7 @@ def section(o, centre, axis, reach):
     x0, x1, z0, z1 = q(xs, 0.03), q(xs, 0.97), q(zs, 0.03), q(zs, 0.97)
     return Vector(((x0 + x1) / 2, centre.y, (z0 + z1) / 2)), (x1 - x0) / 2, (z1 - z0) / 2
 
-chest_at, head_at = bind["spine_03.x"][0], D["head.x"] @ (HEAD_JOINT + HEAD_AXIS * 10)
+chest_at, head_at = bind["spine_03.x"][0], at_head(0, 0.04, 0)
 fwd = (head_at - chest_at).normalized()
 chest_c, chest_w, chest_h = section(parts["body"], chest_at, fwd, 0.01)
 head_c, head_w, head_h = section(parts["head"], head_at, fwd, 0.01)
@@ -555,29 +589,102 @@ print(f"low poly: {len(obj.data.vertices)} verts, {len(obj.data.polygons)} tris,
 for o in [o for o in bpy.data.objects if o not in (obj, arm)]:
     bpy.data.objects.remove(o, do_unlink=True)
 
-# ---------------------------------------------------------------- eyes
-# Small black beads where the sculpt's eyes are, set into the face, each with a white glint facing LIGHT.
-EYE_R, EYE_OUT = 0.006, 0.45            # bead radius (m); share of its diameter standing out of the face
-LIGHT = Vector((0, -0.6, 1)).normalized()
+# ---------------------------------------------------------------- face
+# Crisp pieces set on the low-poly head: round ears standing up and out from the top of the skull with darker
+# insides, big black eyes each with a white glint (lit from the same side on both), a rounded inverted triangle of a
+# nose on top of the muzzle and a small smile under it. Where each sits is a direction in the head frame from the
+# skull's centre (ears, eyes) or the muzzle's (nose); left pieces are built and mirrored.
+EAR_AT, EAR_FACE = (0.8, -0.2, 0.6), (0.3, 1.0, 0.15)  # where on the skull; which way the ear's front looks
+EAR_R, EAR_T, EAR_OUT = 0.025, 0.008, 0.4              # radius, half-thickness, centre's height over the skin (radii)
+EAR_IN_R, EAR_IN_T = 0.015, 0.003
+EYE_AT, EYE_R, EYE_SINK = (0.75, 1.0, 0.32), 0.0095, 0.35  # ..., centre's depth under the skin (radii)
+GLINT_AT, GLINT_R = (-0.35, 0.75, 0.55), 0.0028
+NOSE_AT, NOSE_R, NOSE_TAPER = (0, 1.0, 0.55), (0.015, 0.0105, 0.009), 0.45  # ..., half-axes (across, up, out)
+SMILE = [(0, -0.006), (0.004, -0.0095), (0.0085, -0.0105), (0.0125, -0.0085), (0.0155, -0.005)]  # (across, up) from under the nose
+MOUTH_R = 0.0014
+KINDS = {"eye": 1, "glint": 2, "nose": 3, "mouth": 4, "ear": 5, "earin": 6}    # 0: skin
+
 bvh = BVHTree.FromObject(obj, bpy.context.evaluated_depsgraph_get())
-hit, n, _, _ = bvh.find_nearest(eye_bind[1 if SIDE == "r" else 0])
+def on_skin(centre, d):
+    hit, n, _, _ = bvh.ray_cast(centre + d * 0.3 + HX * 1e-5, -d)   # a ray in the mirror plane slips between its edges
+    if hit is None:
+        raise RuntimeError(f"no skin along {tuple(d)} from {tuple(centre)}")
+    return hit, n
+
 bm = bmesh.new()
 bm.from_mesh(obj.data)
-kind = bm.faces.layers.int.new("kind")      # 0 skin, 1 eye, 2 glint
-bead = bmesh.ops.create_icosphere(bm, subdivisions=2, radius=EYE_R,
-                                  matrix=Matrix.Translation(hit + n * (EYE_R * (2 * EYE_OUT - 1))))["verts"]
-bead_faces = list({f for v in bead for f in v.link_faces})
-for f in bead_faces:
-    f[kind] = 1
-max(bead_faces, key=lambda f: f.normal.dot(LIGHT))[kind] = 2
-twin = bmesh.ops.duplicate(bm, geom=bead + bead_faces)["geom"]
-for v in (g for g in twin if isinstance(g, bmesh.types.BMVert)):
-    v.co.x = -v.co.x
-bmesh.ops.reverse_faces(bm, faces=[g for g in twin if isinstance(g, bmesh.types.BMFace)])
+kind = bm.faces.layers.int.new("kind")
+def add(verts, name, mirror=True):
+    faces = list({f for v in verts for f in v.link_faces})
+    for f in faces:
+        f[kind] = KINDS[name]
+    if mirror:
+        twin = bmesh.ops.duplicate(bm, geom=verts + faces)["geom"]
+        for v in (g for g in twin if isinstance(g, bmesh.types.BMVert)):
+            v.co.x = -v.co.x
+        bmesh.ops.reverse_faces(bm, faces=[g for g in twin if isinstance(g, bmesh.types.BMFace)])
+
+def tube(pts, r, across, sides=6):
+    rings = []
+    for i, p in enumerate(pts):
+        t = (pts[min(i + 1, len(pts) - 1)] - pts[max(i - 1, 0)]).normalized()
+        a = across.cross(t).normalized()
+        b = t.cross(a)
+        rings.append([bm.verts.new(p + (a * math.cos(2 * math.pi * j / sides) + b * math.sin(2 * math.pi * j / sides)) * r)
+                      for j in range(sides)])
+    for r0, r1 in zip(rings, rings[1:]):
+        for j in range(sides):
+            bm.faces.new((r0[j], r0[j - 1], r1[j - 1], r1[j]))
+    bm.faces.new(rings[0][::-1])
+    bm.faces.new(rings[-1])
+    verts = [v for ring in rings for v in ring]
+    bmesh.ops.recalc_face_normals(bm, faces=list({f for v in verts for f in v.link_faces}))
+    return verts
+
+skull_c, (sx, sf, su) = at_head(*SKULL[0]), SKULL[1]
+p, _ = on_skin(skull_c, head_dir(*EAR_AT))
+q = p - skull_c
+n = head_dir(q.dot(HX) / sx ** 2, q.dot(HF) / sf ** 2, q.dot(HU) / su ** 2)
+z = head_dir(*EAR_FACE)
+y = (n - z * n.dot(z)).normalized()
+ear_c = p + y * (EAR_R * EAR_OUT)
+add(ellipsoid(bm, ear_c, (EAR_R, EAR_R, EAR_T), (y.cross(z), y, z), 14, 7), "ear")
+add(ellipsoid(bm, ear_c + z * (EAR_T * 0.75) - y * (EAR_R * 0.1), (EAR_IN_R, EAR_IN_R, EAR_IN_T), (y.cross(z), y, z), 12, 6), "earin")
+
+d = head_dir(*EYE_AT)
+p, _ = on_skin(skull_c, d)
+eye_c = p - d * (EYE_R * EYE_SINK)
+add(bmesh.ops.create_icosphere(bm, subdivisions=2, radius=EYE_R, matrix=Matrix.Translation(eye_c))["verts"], "eye")
+for c in (eye_c, Vector((-eye_c.x, eye_c.y, eye_c.z))):
+    add(bmesh.ops.create_icosphere(bm, subdivisions=1, radius=GLINT_R,
+                                   matrix=Matrix.Translation(c + head_dir(*GLINT_AT) * EYE_R))["verts"], "glint", mirror=False)
+
+z = head_dir(*NOSE_AT)
+p, _ = on_skin(at_head(*MUZZLE[0]), z)
+y = (HU - z * HU.dot(z)).normalized()
+x = y.cross(z)
+nose_c = Vector((0, p.y, p.z)) + z * (NOSE_R[2] * 0.3)
+nose = ellipsoid(bm, nose_c, NOSE_R, (x, y, z), 12, 8)
+for v in nose:
+    lv = (v.co - nose_c).dot(y)
+    if lv < 0:
+        v.co -= x * ((v.co - nose_c).dot(x) * NOSE_TAPER * -lv / NOSE_R[1])
+add(nose, "nose", mirror=False)
+
+under = nose_c - y * (NOSE_R[1] * 0.8)
+mouth = []
+for a, b in [(0, 0)] + SMILE:
+    hit, n = on_skin(under + x * a + y * b, z)
+    mouth.append(hit + n * (MOUTH_R * 0.5))
+    if a == 0:
+        mouth[-1].x = 0.0
+add(tube(mouth[:2], MOUTH_R, z), "mouth", mirror=False)
+add(tube(mouth[1:], MOUTH_R, z), "mouth")
 bm.to_mesh(obj.data)
 bm.free()
-eye_verts = {v for p in obj.data.polygons if obj.data.attributes["kind"].data[p.index].value for v in p.vertices}
-print(f"eyes: 2 beads of {len(bead)} verts at {tuple(round(a, 3) for a in hit)}")
+face_verts = {v for p in obj.data.polygons if obj.data.attributes["kind"].data[p.index].value for v in p.vertices}
+print(f"face: ears at {tuple(round(a, 3) for a in ear_c)}, eyes at {tuple(round(a, 3) for a in eye_c)}, "
+      f"nose at {tuple(round(a, 3) for a in nose_c)}; {len(face_verts)} verts rigid on the head")
 
 # ============================================================================ 5. skin weights
 # Bone heat bleeds the haunch bones across the belly and the tail's root into the haunches and the skin between the
@@ -647,7 +754,7 @@ bm.from_mesh(obj.data)
 dl = bm.verts.layers.deform.verify()
 bm.verts.ensure_lookup_table()
 limit_reach(bm, dl)
-for i in eye_verts:
+for i in face_verts:
     bm.verts[i][dl].clear()
     bm.verts[i][dl][head_group] = 1.0
 unweighted = []
@@ -676,22 +783,28 @@ if unweighted:
     raise RuntimeError(f"{len(unweighted)} vertices have no skin weights")
 
 # ============================================================================ 6. colours
-# Dark brown fur, the head and throat pale (blending through the neck), paws and flippers near black, black nose and
-# eyes. Each face takes one palette cell (flat shading); the shade within a colour and the head's ragged edge come
-# from a hash of the face's mirrored position, so both sides match.
+# Dark brown fur, the head and throat pale (blending through the neck) with a paler muzzle, brown ears with darker
+# insides, paws and flippers near black, dark nose and mouth, black eyes. Each face takes one palette cell (flat
+# shading); the shade within a colour and the head's ragged edges come from a hash of the face's mirrored position,
+# so both sides match.
 PALETTE = {  # name: shades (8-bit sRGB)
-    "body":  [(96, 68, 50), (103, 73, 53), (90, 63, 46), (108, 77, 56)],
-    "back":  [(82, 57, 42), (88, 61, 45), (77, 53, 39), (92, 64, 47)],
-    "neck":  [(150, 122, 96), (158, 129, 101), (143, 116, 91), (164, 134, 106)],
-    "head":  [(204, 184, 156), (212, 193, 165), (197, 176, 148), (218, 199, 172)],
-    "paw":   [(60, 43, 33), (65, 47, 36), (56, 40, 31), (69, 50, 38)],
-    "nose":  [(34, 27, 25)],
-    "eye":   [(16, 13, 13)],
-    "glint": [(250, 250, 247)],
+    "body":   [(96, 68, 50), (103, 73, 53), (90, 63, 46), (108, 77, 56)],
+    "back":   [(82, 57, 42), (88, 61, 45), (77, 53, 39), (92, 64, 47)],
+    "neck":   [(150, 122, 96), (158, 129, 101), (143, 116, 91), (164, 134, 106)],
+    "head":   [(204, 184, 156), (212, 193, 165), (197, 176, 148), (218, 199, 172)],
+    "muzzle": [(232, 220, 200), (238, 227, 208), (226, 213, 192), (242, 232, 214)],
+    "ear":    [(134, 98, 71), (140, 103, 75), (128, 93, 67), (145, 107, 78)],
+    "earin":  [(72, 50, 39)],
+    "paw":    [(60, 43, 33), (65, 47, 36), (56, 40, 31), (69, 50, 38)],
+    "nose":   [(46, 33, 29)],
+    "mouth":  [(58, 42, 36)],
+    "eye":    [(16, 13, 13)],
+    "glint":  [(250, 250, 247)],
 }
 GRID, TEX_SIZE = 8, 256
-NOSE, NOSE_R = Vector((49.0, 62.0, 87.7)), 0.017    # the sculpt's nose (mm), and how far round it is black (m)
+KIND_NAME = {i: name for name, i in KINDS.items()}
 PALE = {"head.x": 1.0, "neck.x": 0.6, "c_subneck_1.x": 0.25}    # how pale each bone's flesh is
+MUZZLE_GROW = 1.15      # the pale muzzle reaches this far round the muzzle and pads (their radii)
 DARK = {f"{b}.{s}" for b in ("leg_stretch_dupli_001", "foot_dupli_001", "toes_01_dupli_001", "foot", "toes_01") for s in "lr"}
 CELL_OF = {key: i for i, key in enumerate((name, k) for name, shades in PALETTE.items() for k in range(len(shades)))}
 
@@ -702,8 +815,12 @@ def cell_uv(name, k=0):
 def mirrored_hash(c):
     return hash((round(abs(c.x), 3), round(c.y, 3), round(c.z, 3))) & 0xFFFF
 
-nose_at = D["head.x"] @ NOSE
-nose_at.x = 0.0
+def on_muzzle(c, grow):
+    q = c - hh
+    x, f, u = abs(q.dot(HX)), q.dot(HF), q.dot(HU)
+    return any(((x - cx) / rx) ** 2 + ((f - cf) / rf) ** 2 + ((u - cu) / ru) ** 2 < grow * grow
+               for (cx, cf, cu), (rx, rf, ru) in (MUZZLE, PAD))
+
 groups = {g.index: g.name for g in obj.vertex_groups}
 me = obj.data
 vw = [{groups[g.group]: g.weight for g in v.groups} for v in me.vertices]
@@ -716,9 +833,7 @@ for f in bm.faces:
     c = f.calc_center_median()
     k = mirrored_hash(c)
     if kinds[f.index]:
-        name = "glint" if kinds[f.index] == 2 else "eye"
-    elif (c - nose_at).length < NOSE_R:
-        name = "nose"
+        name = KIND_NAME[kinds[f.index]]
     else:
         w = {}
         for v in f.verts:
@@ -728,7 +843,7 @@ for f in bm.faces:
         if sum(w.get(b, 0.0) for b in DARK) > 0.5:
             name = "paw"
         elif pale > 0.7:
-            name = "head"
+            name = "muzzle" if on_muzzle(c, MUZZLE_GROW + ((k >> 8) % 10 - 5) * 0.01) else "head"
         elif pale > 0.35:
             name = "neck"
         else:
@@ -853,7 +968,8 @@ if PREVIEW_DIR:
     snap([obj], "rest", [("three_quarter", (1, -1.1, 0.7)), ("side", (1, 0, 0)), ("top", (0, 0, 1)), ("below", (0.3, -0.5, -1)),
                          ("back", (0.4, 1, 0.5))], color='TEXTURE')
     snap([obj], "rest", [("front", (0, -1, 0.15))], color='TEXTURE', scale=0.5, look=face_at)
-    snap([obj], "rest", [("face", (0.6, -1, 0.35))], color='TEXTURE', scale=0.35, look=face_at)
+    snap([obj], "rest", [("face", (0.6, -1, 0.35)), ("face_front", (0, -1, 0.12)), ("head_top", (0, -0.25, 1))],
+         color='TEXTURE', scale=0.3, look=face_at)
 
     # bones through a see-through skin
     sticks = bpy.data.meshes.new("sticks")
