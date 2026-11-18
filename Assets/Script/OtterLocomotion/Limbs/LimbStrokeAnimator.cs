@@ -52,40 +52,40 @@ namespace OtterLocomotion
     }
 
     /// <summary>
-    /// Hind foot kick, drawn in and kicked out like pedalling. In the hip's frame the ankle runs a smooth closed loop
-    /// between a tucked pose (knee bent, foot drawn up behind the hip) and a stretched one (leg out behind). The push
-    /// sweeps it back along the loop's outer side, a little wide of the body; the draw brings it forward along the inner
-    /// side, the knee folding the foot in toward the hip. Lighter kicks run a smaller loop about the same middle. The loop
-    /// rides on the hip bone, so it pitches and rolls with the spine. In time the push is quicker than the draw, and the
-    /// foot eases through the turnovers at either end of the loop without stopping.
+    /// Hind foot kick, drawn in and kicked out. In the hip's own up-and-down plane, about hip width apart, the ankle
+    /// runs a smooth closed loop between a tucked pose (knee bent up toward the belly, foot close behind the hip) and a
+    /// stretched one (leg out behind, toward the belly). The push kicks the foot out back and toward the belly side,
+    /// the surface when on the back, its web standing up square to the back (FlipperPose); the draw brings it forward
+    /// again edge-on along the belly side of the push. The whole loop stays on the belly side of the tail, which runs back from the
+    /// hips at their own level. Lighter kicks run a smaller loop about the same middle. The loop rides on the hip bone,
+    /// so it pitches and rolls with the spine. In time the push is quicker than the draw, and the foot eases through
+    /// the turnovers at either end of the loop without stopping.
     /// </summary>
     [Serializable]
     public class HindKick
     {
         [Header("Shape: ankle from the hip joint, in leg lengths; angles from straight back toward the belly")]
         [Tooltip("Tucked pose at the start of the push: hip joint to ankle over the leg's length, and its angle (deg). The foot stays behind the hip so the thigh never folds into the belly.")]
-        public float tuckedReach = 0.66f;
-        public float tuckedAngle = 72f;
-        [Tooltip("Stretched pose at the end of the push; a negative angle carries the foot past the hips' line toward the back, so each kick beats up and down through the water.")]
-        public float stretchedReach = 0.96f;
-        public float stretchedAngle = -5f;
-        [Tooltip("Out from the hip joint (leg lengths) when tucked, the knee opening outward, and when stretched, the webs clear of the tail's sides.")]
-        public float tuckedOut = 0.45f;
-        public float stretchedOut = 0.45f;
-        [Tooltip("How far the push bows out wide of the straight line from tucked to stretched (leg lengths).")]
-        public float pushBow = 0.2f;
-        [Tooltip("How far the knee folds the foot in toward the hip midway through the draw, as a fraction of its distance.")]
-        [Range(0f, 0.6f)] public float drawFold = 0.25f;
+        public float tuckedReach = 0.45f;
+        public float tuckedAngle = 60f;
+        [Tooltip("Stretched pose at the end of the push. Farther toward the belly than the tucked pose, so the push drives the foot back and toward the belly side.")]
+        public float stretchedReach = 0.97f;
+        public float stretchedAngle = 40f;
+        [Tooltip("Out from the hip joint (leg lengths) when tucked and when stretched: about hip width, the legs neither splayed nor crossing.")]
+        public float tuckedOut = 0.12f;
+        public float stretchedOut = 0.12f;
+        [Tooltip("How far the push bows away from the belly and the draw comes back toward it, off the straight line from tucked to stretched (leg lengths), so the loop is not flat.")]
+        public float pushBow = 0.05f;
+        [Range(0f, 0.6f)] public float drawFold = 0.12f;
+        [Tooltip("Where the knee points, from the hip joint: forward, toward the belly and out (leg lengths; the IK's pole). Drawn up toward the belly, not opened out to the side like a frog's.")]
+        public float kneeForward = 0.6f;
+        public float kneeBelly = 1f;
+        public float kneeOut = 0.15f;
         [Tooltip("Loop size at the lightest drive that kicks, as a fraction of the full loop.")]
         [Range(0.1f, 1f)] public float lightAmplitude = 0.5f;
         [Header("Timing")]
         [Tooltip("How fast the foot rounds the turnovers at the ends of the loop, as a share of its average pace over the cycle (0 = it stops there, 1 = it barely slows).")]
         [Range(0f, 1f)] public float turnover = 0.5f;
-        [Tooltip("Last share of the recovery in which the flipper turns square for the coming push.")]
-        [Range(0f, 0.4f)] public float cock = 0.2f;
-
-        /// <summary>Whether a phase is late enough in the recovery for the flipper to set up the coming push.</summary>
-        public bool Cocked(float phase, float powerFraction) => phase >= powerFraction + (1f - powerFraction) * (1f - cock);
         [Header("Limits")]
         [Tooltip("How far toward the midline a foot may swing, as a fraction of its rest distance from it; held off softly so the feet never cross.")]
         [Range(0f, 1f)] public float midlineReach = 0.6f;
@@ -111,10 +111,12 @@ namespace OtterLocomotion
         {
             Poses(amplitude, out var tuck, out var stretch);
             Vector3 mid = 0.5f * (tuck + stretch), half = 0.5f * (tuck - stretch);
-            // off the straight line between the poses: the push bows out wide of the body, the draw folds in toward the
-            // hip joint, so the loop is not flat; both blend in and out smoothly around it
-            Vector3 bow = new Vector3(0f, amplitude * pushBow, 0f);
-            Vector3 fold = -amplitude * drawFold * new Vector3(mid.x, 0f, mid.z);
+            // off the straight line between the poses: the push bows away from the belly, the draw comes back on its
+            // belly side, so the loop is not flat; both blend in and out smoothly around it
+            Vector3 along = stretch - tuck;
+            Vector3 belly = new Vector3(-along.z, 0f, along.x);
+            belly = belly.sqrMagnitude > 1e-10f ? belly.normalized * amplitude : Vector3.zero;
+            Vector3 bow = -belly * pushBow, fold = belly * drawFold;
             float a = 2f * Mathf.PI * s, cos = Mathf.Cos(a), sin = Mathf.Sin(a);
             return mid + half * cos + 0.5f * (bow - fold) * sin + 0.5f * (bow + fold) * (sin * sin);
         }
@@ -194,6 +196,8 @@ namespace OtterLocomotion
         [Tooltip("Time constant of the web turning to its pitch (s), and the fastest it turns (deg/s). With little way on the pitch flips right over at each end of the beat; flipping slower than the beat turns, the web spends the stroke pitched the wrong way and pushes the body back.")]
         public float pitchTime = 0.02f;
         public float maxPitchSpeed = 2500f;
+        [Tooltip("Most the fan twists in its own plane to trail its toes straight back (deg).")]
+        public float maxTwistDeg = 70f;
         [Tooltip("Web width as a multiple of its rest width.")]
         public float width = 1.3f;
         [Tooltip("Spine pitch asked for at full drive (deg; the hips 1.5 times this, the chest 0.4), and how far the wave runs behind from chest to hips (rad per joint). The harmonizer's chain stiffness and damping take off about three quarters.")]
@@ -202,30 +206,34 @@ namespace OtterLocomotion
     }
 
     /// <summary>
-    /// Turns the hind flippers at the ankle and toes, on top of the IK: through the push the web turns square to its sweep
-    /// and spreads, so it shoves water; drawing forward it folds and turns edge-on so it slips through. The web is a flat
-    /// fan, so either face can meet the sweep: each push holds the one the ankle could reach at the last push's fastest
-    /// moment, since the leg swings the foot a long way through the stroke.
+    /// Turns the hind flippers at the ankle and toes, on top of the IK. Kicking, the web paddles: it stands up from the
+    /// ankle with its toes toward the belly, the surface when on the back, clear of the tail, and through the push turns
+    /// its face square to the back and spreads, flicking back about the ankle as the foot kicks out, so it drives water
+    /// back faster than the foot alone moves; for the draw it turns a quarter round about its own toes, so it slices
+    /// forward edge-on, and folds. Turning about its own length it sweeps no water either way, where a foot this big
+    /// swung over from trailing to square at each push would sweep more water forward than the short push drives back.
+    /// In the fluke the web lies level, toes trailing back, and pitches into the water it meets.
     /// </summary>
     [Serializable]
     public class FlipperPose
     {
         public bool enabled = true;
-        [Tooltip("Most the web turns from its rest on the shin (deg) to square to the sweep, and to feather edge-on while drawing forward.")]
-        public float maxSquareDeg = 120f;
-        public float maxFeatherDeg = 60f;
+        [Tooltip("Through the push the standing web swings from leaning this far forward of straight up toward the belly to as far back (deg); it swings forward again edge-on through the draw.")]
+        public float flick = 35f;
+        [Tooltip("Stroke drive from which the flick is full; a lighter stroke flicks less, so it pushes lightly too.")]
+        [Range(0.05f, 1f)] public float flickDrive = 0.5f;
+        [Tooltip("Most the web turns from its rest on the shin (deg).")]
+        public float maxTurnDeg = 135f;
         [Tooltip("Share of the turn taken at the ankle (the IK chain's end bone); the toes take the rest. Only when the IK leaves the end bone's rotation alone.")]
         [Range(0f, 1f)] public float ankleShare = 0.5f;
-        [Tooltip("Most the fan twists in its own plane (deg) to keep its toes pointing the way they do at rest, out and back, so squaring up never swings them in toward the other foot.")]
-        public float maxTwistDeg = 70f;
-        [Tooltip("Feathering: above this speed (m/s, relative to the hip) the web lies along the way the leg swings it; slower, along the planned path this far ahead (fraction of the power stroke).")]
-        public float followSpeed = 0.15f;
-        public float lookAhead = 0.3f;
-        [Tooltip("Time constants (s) of the flipper turning square as it sets up the push, and relaxing after it; and the fastest it turns (deg/s).")]
-        public float turnTime = 0.04f;
-        public float relaxTime = 0.1f;
-        public float maxTurnSpeed = 800f;
-        [Tooltip("The flipper starts relaxing over this last fraction of the power stroke.")]
+        [Tooltip("Most the fan twists in its own plane (deg) to stand its toes up toward the belly, never out to the side.")]
+        public float maxTwistDeg = 180f;
+        [Tooltip("Time constant of the web turning between its push and draw (s), and the fastest it turns (deg/s).")]
+        public float turnTime = 0.02f;
+        public float maxTurnSpeed = 2500f;
+        [Tooltip("Time constant of the web standing up as a kick starts and lying back as it stops (s). Turned up from trailing it sweeps a lot of water, so turned over quickly it would shove the body.")]
+        public float standTime = 0.25f;
+        [Tooltip("The web starts folding over this last fraction of the power stroke.")]
         public float release = 0.1f;
         [Tooltip("Web width while pushing and while drawing forward, as multiples of its rest width.")]
         public float spread = 1.2f;
@@ -239,7 +247,7 @@ namespace OtterLocomotion
     /// (FlukeStroke); forepaws sweep along the allocated
     /// force direction, and rest folded on the chest when they have nothing to do, as on the back. Paths hang off the
     /// chest / hip bone, so they follow the spine's bend and roll. After the IK solve the hind flippers are turned at
-    /// the ankle and toes (FlipperPose) to push square through the power stroke and slip edge-on through the recovery.
+    /// the ankle and toes (FlipperPose) to paddle, square through the push and edge-on through the draw.
     /// Runs after the spine and before the IK solve. While enabled it switches off the older limb drivers that write
     /// the same targets (HindPaddleDriverRB, IKStrokeController), and switches them back on when disabled.
     /// </summary>
@@ -275,6 +283,9 @@ namespace OtterLocomotion
             public AdvancedTwoBoneIK ik;
             /// <summary>Whether the scene limits the chain's mid joint (knee / elbow) about its rest pose.</summary>
             public bool kneeLimited;
+            /// <summary>Hind leg: the IK's pole, which this places, and where the scene put it.</summary>
+            public Transform pole;
+            public Vector3 poleRestLocal;
 
             // hind flipper: the chain's end bone (the foot, hinged at the ankle) and the toe fan below it
             public Transform end, web;
@@ -283,28 +294,21 @@ namespace OtterLocomotion
             public Vector3 normalLocal, aimLocal;
             /// <summary>The ankle's turn from its rest on the shin, and how far it would have to turn to meet its goal unclamped (deg).</summary>
             public float turned, need;
-            /// <summary>Toe direction in the flipper's space and, at rest, in girdle space; and the fan's twist in its plane (deg).</summary>
-            public Vector3 toesLocal, toesRestLocal;
+            /// <summary>Toe direction in the flipper's space, and the fan's twist in its plane (deg).</summary>
+            public Vector3 toesLocal;
             public float twist;
-            /// <summary>Middle of the web in the flipper's space, and where the leg put it last frame (ankle at rest), in girdle space.</summary>
-            public Vector3 centerLocal, lastCenter;
-            public bool hasLastCenter;
+            /// <summary>Middle of the web in the flipper's space.</summary>
+            public Vector3 centerLocal;
             public Vector3 webScale;
             public int widthAxis;
-            /// <summary>Planned foot motion along the path this frame: direction in girdle space and speed (m/s); sweep = the push's overall direction.</summary>
-            public Vector3 motionLocal, sweepLocal;
-            public float motionSpeed;
-            /// <summary>1 while the flipper should push square (the power stroke, and cocked just before it), else 0.</summary>
+            /// <summary>1 through the power stroke, when the web turns square and spreads, else 0.</summary>
             public float push;
-            public bool cocked;
             public float width;
-            /// <summary>The face that meets this push (+1 = the dorsal face), the one that was nearer at the last push's fastest
-            /// moment, and that push's sweep and peak speed.</summary>
-            public float face, peakFace, peakSpeed;
-            public Vector3 lastSweepLocal;
-            public bool pushing, hasPeak;
-            /// <summary>The web's middle in the world last frame where the leg carried it, before its turn, and the fluke's
-            /// pitch of the web into that path (deg).</summary>
+            /// <summary>Kicking, the web's face that meets the push (+1 = the face dorsal at rest), 0 until it kicks; its
+            /// lean back from straight up toward the belly (deg); and how far it has stood up from its rest (0..1).</summary>
+            public float face, lean, stand;
+            /// <summary>The web's middle in the world last frame where the leg carried it, before its turn, and the
+            /// web's pitch into that path (deg).</summary>
             public Vector3 lastCarried;
             public bool hasLastCarried;
             public float flukePitch;
@@ -365,6 +369,8 @@ namespace OtterLocomotion
             ResumeOldDrivers();
             RestoreFlippers();
             FreeKnees(false);
+            foreach (var l in limbs)
+                if (l.valid && l.pole != null) l.pole.localPosition = l.poleRestLocal;
         }
 
         // The hind knee's limits are set about the rig's nearly straight rest pose, which stops it short of the tuck the
@@ -406,6 +412,8 @@ namespace OtterLocomotion
                     length = Vector3.Distance(a, b) + Vector3.Distance(b, c),
                     ik = ik,
                     kneeLimited = ik.mid.useEulerLimits,
+                    pole = OtterRig.IsFore((LimbId)i) ? null : ik.pole,
+                    poleRestLocal = ik.pole != null ? ik.pole.localPosition : Vector3.zero,
                 };
                 if (!OtterRig.IsFore((LimbId)i)) CaptureFlipper(ref limbs[i], ik);
             }
@@ -435,10 +443,8 @@ namespace OtterLocomotion
             l.normalLocal = web.InverseTransformDirection(n);
             l.aimLocal = l.girdle.InverseTransformDirection(n);
             l.toesLocal = web.InverseTransformDirection(toes);
-            l.toesRestLocal = l.girdle.InverseTransformDirection(toes);
             l.twist = 0f;
             l.centerLocal = center;
-            l.hasLastCenter = false;
             l.widthAxis = axis;
             l.width = 1f;
         }
@@ -502,55 +508,42 @@ namespace OtterLocomotion
                 Vector3 goal = l.restLocal + l.girdle.InverseTransformVector(StrokeOffset(i, l, st, phase));
                 l.currentLocal = Vector3.Lerp(l.currentLocal, goal, blend);
                 l.target.position = l.girdle.TransformPoint(l.currentLocal);
-                if (l.end != null) PlanFlipper(i, ref l, st, phase);
+                if (l.pole != null)
+                {
+                    KickAxes(l, out var joint, out var back, out var outward, out var belly);
+                    l.pole.position = joint + l.length * (-back * hindKick.kneeForward + belly * hindKick.kneeBelly + outward * hindKick.kneeOut);
+                }
+                if (l.end != null)
+                {
+                    float pushEnd = Mathf.Max(1e-3f, st.powerFraction * (1f - flipper.release));
+                    l.push = st.active && l.size > 1e-4f && phase < pushEnd ? 1f : 0f;
+                    float u = phase < pushEnd ? phase / pushEnd : 1f - (phase - pushEnd) / Mathf.Max(1e-3f, 1f - pushEnd);
+                    l.lean = flipper.flick * Mathf.Clamp01(st.drive / flipper.flickDrive) * (2f * Mathf.SmoothStep(0f, 1f, u) - 1f);
+                }
             }
-        }
-
-        // Which way the foot is about to move along its path, and whether it is pushing, for the flipper pass after the
-        // IK. The flipper aims along a stretch of path ahead rather than the path's tangent, so it turns smoothly as the
-        // loop curls; held cocked it already aims down the coming push.
-        private void PlanFlipper(int i, ref Limb l, in LimbStroke st, float phase)
-        {
-            float pf = st.powerFraction, window = flipper.lookAhead * pf;
-            bool cocked = hindKick.Cocked(phase, pf);
-            float from = cocked ? 0f : phase;
-            float to = from < pf ? Mathf.Min(from + window, pf) : from + window;
-            if (from < pf && to - from < 0.5f * window) from = to - 0.5f * window;
-            Vector3 travel = StrokeOffset(i, l, st, Mathf.Repeat(to, 1f)) - StrokeOffset(i, l, st, Mathf.Repeat(from, 1f));
-            l.motionSpeed = st.active ? travel.magnitude * Mathf.Max(0f, st.rate) / Mathf.Max(1e-4f, to - from) : 0f;
-            l.motionLocal = l.motionSpeed > 1e-4f ? l.girdle.InverseTransformDirection(travel.normalized) : Vector3.zero;
-            Vector3 push = StrokeOffset(i, l, st, pf) - StrokeOffset(i, l, st, 0f);
-            if (push.sqrMagnitude > 1e-10f) l.sweepLocal = l.girdle.InverseTransformDirection(push.normalized);
-            l.cocked = cocked;
-            bool pushing = phase < st.powerFraction * (1f - flipper.release) || cocked;
-            l.push = st.active && !st.parking && l.size > 1e-4f && pushing ? 1f : 0f;
         }
 
         private void PoseFlippers()
         {
             if (!isActiveAndEnabled || brain == null || !brain.HasLimbGeometry) return;
             var f = flipper;
-            float squaring = 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, f.turnTime));
-            float relaxing = 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, f.relaxTime));
-            float pitching = 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, fluke.pitchTime));
+            float kickTurn = 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, f.turnTime));
+            float flukeTurn = 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, fluke.pitchTime));
+            float standing = 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, f.standTime));
             for (int i = 0; i < OtterRig.LimbCount; i++)
             {
                 ref var l = ref limbs[i];
                 if (!l.valid || l.web == null) continue;
-                float turn = Fluke > 0.5f ? pitching : l.push > 0f ? squaring : relaxing;
+                float turn = Mathf.Lerp(kickTurn, flukeTurn, Fluke);
                 // the IK carries the foot rigidly on the shin unless it aligns the end bone itself
                 bool ankle = l.ik != null && !l.ik.alignEndRotation;
                 if (ankle) l.end.localRotation = l.endRest;
                 l.web.localRotation = l.webRest;
                 // how much of a kick the foot is making: none at rest, full from the lightest kick up
                 float kicking = f.enabled ? hindKick.Engagement(l.size) : 0f;
+                l.stand = Mathf.Lerp(l.stand, kicking, standing);
+                float posed = Mathf.Max(l.stand, Fluke);
                 Vector3 rest = l.web.TransformDirection(l.normalLocal);
-                // drawing forward the web lies along the way the leg actually swings it (it hangs on the shin well
-                // beyond the IK's end); the planned path steers it while the foot barely moves
-                Vector3 center = l.girdle.InverseTransformPoint(l.web.TransformPoint(l.centerLocal));
-                Vector3 swung = l.hasLastCenter ? l.girdle.TransformVector(center - l.lastCenter) / Mathf.Max(1e-4f, Time.deltaTime) : Vector3.zero;
-                l.lastCenter = center;
-                l.hasLastCenter = true;
                 // the web's path through still water as the leg carries it, before its own turn: the turn swings the web
                 // about the ankle the way it is already going, so pitching it by its posed path would run away
                 Vector3 carried = l.web.TransformPoint(l.centerLocal);
@@ -558,70 +551,46 @@ namespace OtterLocomotion
                 l.lastCarried = carried;
                 l.hasLastCarried = true;
                 FlukePitch(ref l, water);
-                bool swinging = swung.magnitude > f.followSpeed;
-                Vector3 motion = swinging ? swung.normalized : l.girdle.TransformDirection(l.motionLocal);
-                // where the web should face, within reach of its rest on the shin
                 Vector3 aim = l.girdle.TransformDirection(l.aimLocal);
-                Vector3 goal = rest;
-                l.need = 0f;
-                Vector3 sweep = l.girdle.TransformDirection(l.sweepLocal);
-                // cocked, the web waits to square until the foot stops drawing against the coming push through the
-                // water: squared while still drawing, it would brake the body
-                bool pushing = kicking > 0f && l.push > 0f && !(l.cocked && Vector3.Dot(water, sweep) < 0f);
-                if (pushing)
+                LevelAxes(l, out var back, out var belly);
+                KickAxes(l, out _, out _, out var outward, out _);
+                Vector3 toesNow = l.web.TransformDirection(l.toesLocal);
+                // the face to square to the push is the one the foot reaches standing up with the least turn, kept for as
+                // long as it stands
+                if (kicking <= 0f && l.stand < 0.01f) l.face = 0f;
+                else if (l.face == 0f)
                 {
-                    // cocked and through the push the web squares to the push's overall direction, so it is already set
-                    // when the push starts. The leg swings the foot a long way through the push, so one face is held for
-                    // the whole stroke: the one the ankle could reach at the last push's fastest moment
-                    if (!l.pushing)
-                    {
-                        if (l.hasPeak && Vector3.Dot(l.lastSweepLocal, l.sweepLocal) < 0f) l.hasPeak = false;
-                        l.face = l.hasPeak ? l.peakFace : Vector3.Dot(rest, sweep) >= 0f ? 1f : -1f;
-                        l.peakSpeed = 0f;
-                        l.lastSweepLocal = l.sweepLocal;
-                    }
-                    if (swung.magnitude > l.peakSpeed)
-                    {
-                        l.peakSpeed = swung.magnitude;
-                        l.peakFace = Vector3.Dot(rest, sweep) >= 0f ? 1f : -1f;
-                        l.hasPeak = true;
-                    }
-                    l.need = Vector3.Angle(rest, sweep * l.face);
-                    goal = Vector3.RotateTowards(rest, sweep * l.face, f.maxSquareDeg * Mathf.Deg2Rad, 0f);
+                    Quaternion now = Quaternion.LookRotation(toesNow, rest);
+                    l.face = Quaternion.Angle(now, Quaternion.LookRotation(belly, back)) <= Quaternion.Angle(now, Quaternion.LookRotation(belly, -back)) ? 1f : -1f;
                 }
-                else if (kicking > 0f && (swinging || l.motionSpeed > 0.05f))
-                {
-                    // feather: the least turn that lays the web along its motion
-                    Vector3 edge = Vector3.ProjectOnPlane(rest, motion);
-                    if (edge.sqrMagnitude > 1e-4f)
-                    {
-                        l.need = Vector3.Angle(rest, edge);
-                        goal = Vector3.RotateTowards(rest, edge.normalized, f.maxFeatherDeg * Mathf.Deg2Rad, 0f);
-                    }
-                }
-                l.pushing = pushing;
-                goal = Vector3.Slerp(rest, goal, kicking);
+                float lean = l.lean * Mathf.Deg2Rad;
+                Vector3 up = belly * Mathf.Cos(lean) + back * Mathf.Sin(lean);
+                Vector3 paddle = l.face * (l.push > 0f ? back * Mathf.Cos(lean) - belly * Mathf.Sin(lean) : outward);
+                Vector3 goal = l.face != 0f ? Vector3.Slerp(rest, paddle, l.stand) : rest;
                 if (Fluke > 1e-3f) goal = Vector3.Slerp(goal, FlukeNormal(l, rest, aim), Fluke);
+                l.need = Vector3.Angle(rest, goal);
                 // the aim eases toward the goal in the hip's space, and the ankle is solved fresh from the shin each
                 // frame, so the web holds its line while the shin swings under it
-                float turnSpeed = Fluke > 0.5f ? fluke.maxPitchSpeed : f.maxTurnSpeed;
+                float turnSpeed = Mathf.Lerp(f.maxTurnSpeed, fluke.maxPitchSpeed, Fluke);
                 Vector3 next = Vector3.RotateTowards(aim, Vector3.Slerp(aim, goal, turn), turnSpeed * Mathf.Deg2Rad * Time.deltaTime, 0f);
-                next = Vector3.RotateTowards(rest, next, Mathf.Min(Vector3.Angle(rest, next), f.maxSquareDeg + 15f) * Mathf.Deg2Rad, 0f);
+                next = Vector3.RotateTowards(rest, next, Mathf.Min(Vector3.Angle(rest, next), f.maxTurnDeg + 15f) * Mathf.Deg2Rad, 0f);
                 l.aimLocal = l.girdle.InverseTransformDirection(next);
                 l.turned = Vector3.Angle(rest, next);
                 // the ankle takes its share of the turn and the toes the rest, so neither joint folds over alone
                 Quaternion whole = Quaternion.FromToRotation(rest, next);
                 if (ankle) l.end.rotation = Quaternion.Slerp(Quaternion.identity, whole, f.ankleShare) * l.end.rotation;
                 l.web.rotation = Quaternion.FromToRotation(l.web.TransformDirection(l.normalLocal), next) * l.web.rotation;
-                // the least turn can swing the toes anywhere in the new plane; twist them back toward where they point at
-                // rest, or straight back along the fluke
-                Vector3 toesNow = l.web.TransformDirection(l.toesLocal);
-                Vector3 toesHome = Vector3.Slerp(l.girdle.TransformDirection(l.toesRestLocal), -l.girdle.TransformDirection(l.forwardLocal), Fluke);
+                // the least turn can swing the toes anywhere in the new plane; twist them up toward the belly, or to
+                // trail straight back along the fluke
+                toesNow = l.web.TransformDirection(l.toesLocal);
+                Vector3 toesHome = Vector3.Slerp(up, -l.girdle.TransformDirection(l.forwardLocal), Fluke);
                 Vector3 toesWant = Vector3.ProjectOnPlane(toesHome, next);
+                float maxTwist = Mathf.Lerp(f.maxTwistDeg, fluke.maxTwistDeg, Fluke);
                 float twistGoal = toesWant.sqrMagnitude > 1e-4f
-                    ? Mathf.Clamp(Vector3.SignedAngle(toesNow, toesWant, next), -f.maxTwistDeg, f.maxTwistDeg) * Mathf.Max(kicking, Fluke)
+                    ? Mathf.Clamp(Vector3.SignedAngle(toesNow, toesWant, next), -maxTwist, maxTwist) * posed
                     : l.twist;
-                l.twist = Mathf.MoveTowards(l.twist, Mathf.Lerp(l.twist, twistGoal, turn), f.maxTurnSpeed * Time.deltaTime);
+                float twistStep = Mathf.DeltaAngle(l.twist, twistGoal) * turn;
+                l.twist = Mathf.Repeat(l.twist + Mathf.Clamp(twistStep, -f.maxTurnSpeed * Time.deltaTime, f.maxTurnSpeed * Time.deltaTime) + 180f, 360f) - 180f;
                 l.web.rotation = Quaternion.AngleAxis(l.twist, next) * l.web.rotation;
 
                 float kickWidth = Mathf.Lerp(1f, Mathf.Lerp(f.fold, f.spread, l.push), kicking);
@@ -645,9 +614,8 @@ namespace OtterLocomotion
                 l.turned = 0f;
                 l.twist = 0f;
                 l.width = 1f;
-                l.hasLastCenter = false;
-                l.pushing = false;
-                l.hasPeak = false;
+                l.face = 0f;
+                l.stand = 0f;
                 l.hasLastCarried = false;
                 l.flukePitch = 0f;
             }
@@ -726,7 +694,7 @@ namespace OtterLocomotion
             float pitch = l.flukePitch * Mathf.Deg2Rad;
             Vector3 n = -belly * Mathf.Cos(pitch) - back * Mathf.Sin(pitch);
             if (Vector3.Dot(aim, n) < 0f) n = -n;
-            return Vector3.Angle(rest, n) <= flipper.maxSquareDeg ? n : -n;
+            return Vector3.Angle(rest, n) <= flipper.maxTurnDeg ? n : -n;
         }
 
         // How far out a hind foot's kick loop swings for the turn (HindTurn), from the side of the turn the leg is on now

@@ -413,8 +413,64 @@ for b in arm.data.bones:
     b.use_deform = b.name.split(".")[0] not in TWIST
 
 # ============================================================================ 4. skin weights
+# Bone heat bleeds the haunch bones across the belly and the tail's root into the haunches and the skin between the
+# legs, so the belly pulls with each kick and the rump with the tail. Each is cut back to the flesh around it: within
+# REACH (full, gone: distance from the bone, m) of a hind leg bone and on its own side of the midline, MIDLINE (m)
+# from it; within TAIL_REACH of a tail bone, its height counted TAIL_FLAT times its width as the tail is flat. What a
+# leg bone loses goes to the hip bone; what a tail bone loses, to the bones left on the vertex (the rest of the tail),
+# or to the hip bone when none are.
+REACH = {"c_thigh_b": (0.035, 0.06), "thigh_stretch": (0.035, 0.06)}
+MIDLINE = 0.015
+TAIL_REACH, TAIL_FLAT = (0.05, 0.07), 1.7
+
+def _fade(d, full, gone):
+    if d <= full:
+        return 1.0
+    if d >= gone:
+        return 0.0
+    t = (d - full) / (gone - full)
+    return 1.0 - t * t * (3.0 - 2.0 * t)
+
+def limit_reach(bm, dl):
+    rules = {}
+    for g in obj.vertex_groups:
+        b = arm.data.bones.get(g.name)
+        base, _, side = g.name.partition(".")
+        if b is None:
+            continue
+        a, c = arm.matrix_world @ b.head_local, arm.matrix_world @ b.tail_local
+        if base in REACH and side in ("l", "r"):
+            rules[g.index] = (a, c, REACH[base], 1.0 if side == "l" else -1.0, 1.0)
+        elif g.name in TAIL_BONES:
+            rules[g.index] = (a, c, TAIL_REACH, 0.0, TAIL_FLAT)
+    hip = obj.vertex_groups["root.x"].index
+    for v in bm.verts:
+        p = obj.matrix_world @ v.co
+        leg_cut = tail_cut = 0.0
+        for gi, (a, c, (full, gone), side, flat) in rules.items():
+            w = v[dl].get(gi, 0.0)
+            if w <= 0.0:
+                continue
+            ab = c - a
+            t = max(0.0, min(1.0, (p - a).dot(ab) / ab.length_squared))
+            off = p - (a + ab * t)
+            d = math.sqrt(off.x * off.x + flat * flat * max(0.0, off.length_squared - off.x * off.x))
+            keep = _fade(d, full, gone)
+            if side:
+                keep *= _fade(MIDLINE - p.x * side, 0.0, MIDLINE)
+            v[dl][gi] = w * keep
+            if side:
+                leg_cut += w * (1.0 - keep)
+            else:
+                tail_cut += w * (1.0 - keep)
+        if tail_cut > 0.0 and sum(x for x in v[dl].values()) < 0.05:
+            leg_cut += tail_cut
+        if leg_cut > 0.0:
+            v[dl][hip] = v[dl].get(hip, 0.0) + leg_cut
+
 def skin():
-    """Bone-heat weights, eyes rigid on the head, top-4 normalised; misses borrow a neighbour's weights."""
+    """Bone-heat weights, cut back to each bone's reach, eyes rigid on the head, top-4 normalised; misses borrow a
+    neighbour's weights."""
     for m in [m for m in obj.modifiers if m.type == 'ARMATURE']:
         obj.modifiers.remove(m)
     obj.vertex_groups.clear()
@@ -430,6 +486,7 @@ def skin():
     bm.from_mesh(me)
     dl = bm.verts.layers.deform.verify()
     bm.verts.ensure_lookup_table()
+    limit_reach(bm, dl)
     for i in eye_vert_ids:
         v = bm.verts[i]
         v[dl].clear()
