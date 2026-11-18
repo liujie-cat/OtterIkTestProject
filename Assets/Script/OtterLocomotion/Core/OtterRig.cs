@@ -34,6 +34,21 @@ namespace OtterLocomotion
         public static Transform FindActiveBone(Transform root, string name) =>
             root.GetComponentsInChildren<Transform>().FirstOrDefault(t => t.name == name && t.gameObject.activeInHierarchy);
 
+        /// <summary>The tail's bones, TailRoot first, each the "c_tail_" child of the one before.</summary>
+        public static List<Transform> TailBones(Transform root)
+        {
+            var bones = new List<Transform>();
+            for (var bone = FindActiveBone(root, TailRoot); bone != null && bones.Count < 12;)
+            {
+                bones.Add(bone);
+                Transform next = null;
+                foreach (Transform child in bone)
+                    if (child.name.StartsWith("c_tail_") && child.gameObject.activeInHierarchy) { next = child; break; }
+                bone = next;
+            }
+            return bones;
+        }
+
         /// <summary>The spine bone a limb hangs from (chest for forelimbs, hip for hind limbs); limb motion is measured in its space.</summary>
         public static Transform Girdle(Transform limbRoot)
         {
@@ -159,6 +174,39 @@ namespace OtterLocomotion
             if (distances.Count < 4) return false;
             distances.Sort();
             radius = distances[Mathf.Clamp(Mathf.RoundToInt(quantile * (distances.Count - 1)), 0, distances.Count - 1)];
+            return true;
+        }
+
+        /// <summary>
+        /// The half-width and half-height about a bone's line from <paramref name="from"/> to <paramref name="to"/>
+        /// (world), height along <paramref name="up"/>: the given quantile of how far the vertices that follow the bone
+        /// and lie alongside that stretch sit from it each way (metres).
+        /// </summary>
+        public static bool TryHalfExtents(Transform bone, Vector3 from, Vector3 to, Vector3 up, out float halfWidth, out float halfHeight, float quantile = 0.85f)
+        {
+            halfWidth = halfHeight = 0f;
+            var world = FollowingVertices(bone);
+            Vector3 axis = to - from;
+            Vector3 side = Vector3.Cross(up, axis);
+            if (world == null || axis.sqrMagnitude < 1e-10f || side.sqrMagnitude < 1e-10f) return false;
+            side.Normalize();
+            Vector3 height = Vector3.Cross(axis, side).normalized;
+            var across = new List<float>();
+            var heights = new List<float>();
+            foreach (var p in world)
+            {
+                float t = Vector3.Dot(p - from, axis) / axis.sqrMagnitude;
+                if (t < 0f || t > 1f) continue;
+                Vector3 d = p - (from + axis * t);
+                across.Add(Mathf.Abs(Vector3.Dot(d, side)));
+                heights.Add(Mathf.Abs(Vector3.Dot(d, height)));
+            }
+            if (across.Count < 4) return false;
+            across.Sort();
+            heights.Sort();
+            int i = Mathf.Clamp(Mathf.RoundToInt(quantile * (across.Count - 1)), 0, across.Count - 1);
+            halfWidth = across[i];
+            halfHeight = heights[i];
             return true;
         }
 

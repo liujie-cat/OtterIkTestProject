@@ -69,9 +69,9 @@ namespace OtterLocomotion
         [Tooltip("Stretched pose at the end of the push; a negative angle carries the foot past the hips' line toward the back, so each kick beats up and down through the water.")]
         public float stretchedReach = 0.96f;
         public float stretchedAngle = -5f;
-        [Tooltip("Out from the hip joint (leg lengths) when tucked, the knee opening outward, and when stretched, the foot in beside the tail.")]
-        public float tuckedOut = 0.3f;
-        public float stretchedOut = 0.1f;
+        [Tooltip("Out from the hip joint (leg lengths) when tucked, the knee opening outward, and when stretched, the webs clear of the tail's sides.")]
+        public float tuckedOut = 0.45f;
+        public float stretchedOut = 0.45f;
         [Tooltip("How far the push bows out wide of the straight line from tucked to stretched (leg lengths).")]
         public float pushBow = 0.2f;
         [Tooltip("How far the knee folds the foot in toward the hip midway through the draw, as a fraction of its distance.")]
@@ -183,7 +183,7 @@ namespace OtterLocomotion
         public float reach = 0.96f;
         public float angle = 25f;
         [Tooltip("How far out the feet sit (leg lengths, within the reach; negative = in toward the tail). The webs sweep up past the tail's root, so they must clear its sides.")]
-        public float outward = 0.4f;
+        public float outward = 0.5f;
         [Header("Wave")]
         [Tooltip("How far the legs swing up and down about the hips on top of the hips' own pitch (deg), and how far behind the spine wave's beat they run (cycles).")]
         public float sweep = 44f;

@@ -25,7 +25,7 @@ namespace OtterLocomotion
         [Tooltip("The push across its path on a web slicing through at a slant, per square metre, per radian of slant, at 1 m/s (N): half the water's density times about pi/2 for a plate about as long as it is wide.")]
         public float slicePush = 800f;
         [Tooltip("Web area as a multiple of the one measured from the mesh.")]
-        public float areaScale = 1.25f;
+        public float areaScale = 1.4f;
         [Tooltip("Fastest a web is taken to move (m/s), against jumps in its pose.")]
         public float maxWebSpeed = 4f;
         [Tooltip("Count the body's swing about its centre in a turn as web motion through the water. MovementControllerRB " +

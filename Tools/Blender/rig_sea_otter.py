@@ -131,6 +131,15 @@ RELAXED = {
 TAIL_START_Y = 0.23
 TAIL_DIRECTION = Vector((0, math.cos(math.radians(15)), -math.sin(math.radians(15))))
 TAIL_BLEND = 0.10
+# A sea otter's tail is short, thick and flat, not the source's long round one: the unbent tail is drawn in along
+# its line to TAIL_LENGTH, and across it is made TAIL_WIDTH x TAIL_HEIGHT of the thickness it has at TAIL_ROOT_AT
+# (half-width / half-height over radius), that wide down to TAIL_FULL of its length and rounding off to TAIL_END of
+# it at the tip. The change eases in over TAIL_EASE from where the tail leaves the rump.
+TAIL_LENGTH = 0.6
+TAIL_WIDTH, TAIL_HEIGHT = 0.85, 0.45
+TAIL_ROOT_AT = 0.06
+TAIL_FULL, TAIL_END = 0.6, 0.5
+TAIL_EASE = 0.05
 
 def P(p):
     return Vector(p) * SCALE
@@ -279,6 +288,50 @@ for v in tail:
     v.co = S[i] + q @ (v.co - C[i])
 print(f"tail: centre line {len(centre)} points, length={tail_len:.3f} (source units), "
       f"base droop {math.degrees(T[0].angle(TAIL_DIRECTION)):.1f} deg -> {TAIL_DIRECTION[:]}, tip -> {tuple(round(a, 3) for a in S[-1])}")
+
+# ---------------------------------------------------------------- sea otter tail
+kd = KDTree(len(S))
+for i, c in enumerate(S):
+    kd.insert(c, i)
+kd.balance()
+SIDE = Vector((1, 0, 0))
+DORSAL = SIDE.cross(TAIL_DIRECTION)
+# the tail's own surface: what the unbending reached over the tail from the rump, not stray feet behind the hips
+skin_ids = [i for i in dist if i in tail_ids]
+near = {}
+for i in skin_ids:
+    co = bm.verts[i].co
+    _, k, _ = kd.find(co)
+    off = co - S[k]
+    near[i] = (s_of[k], off.dot(SIDE), off.dot(DORSAL), off.dot(TAIL_DIRECTION))
+
+def fit(values):
+    """Straight-line fit of (s, value) pairs: the mean value along the tail, clamped off zero toward the tip."""
+    n = len(values)
+    ms = sum(s for s, _ in values) / n
+    mv = sum(v for _, v in values) / n
+    var = sum((s - ms) ** 2 for s, _ in values)
+    k = sum((s - ms) * (v - mv) for s, v in values) / var if var > 0 else 0.0
+    floor = 0.25 * max(mv - k * ms, mv)
+    return lambda s: max(mv + k * (s - ms), floor)
+
+wide = fit([(s, abs(x)) for s, x, _, _ in near.values()])
+high = fit([(s, abs(y)) for s, _, y, _ in near.values()])
+root = 0.5 * (wide(TAIL_ROOT_AT) + high(TAIL_ROOT_AT))
+for i in skin_ids:
+    s, x, y, a = near[i]
+    e = min(max(s / TAIL_EASE, 0.0), 1.0)
+    e = e * e * (3 - 2 * e)
+    q = min(max((s / tail_len - TAIL_FULL) / (1 - TAIL_FULL), 0.0), 1.0)
+    end = root * (TAIL_END + (1 - TAIL_END) * math.sqrt(1 - q * q))
+    kx = 1 + e * (end * TAIL_WIDTH / wide(s) - 1)
+    ky = 1 + e * (end * TAIL_HEIGHT / high(s) - 1)
+    bm.verts[i].co = S[0] + TAIL_DIRECTION * (s * TAIL_LENGTH + a * (1 + e * (TAIL_LENGTH - 1))) + SIDE * (x * kx) + DORSAL * (y * ky)
+S = [S[0] + (p - S[0]) * TAIL_LENGTH for p in S]
+s_of = [s * TAIL_LENGTH for s in s_of]
+print(f"sea otter tail: {len(skin_ids)} verts, length {tail_len:.3f} -> {tail_len * TAIL_LENGTH:.3f}; mean |x| {wide(0):.3f}..{wide(tail_len):.3f}, "
+      f"|y| {high(0):.3f}..{high(tail_len):.3f} -> |x| {root * TAIL_WIDTH:.3f}, |y| {root * TAIL_HEIGHT:.3f}")
+tail_len *= TAIL_LENGTH
 TAIL_PATH = (S, s_of)
 
 # ---------------------------------------------------------------- scale, eyes

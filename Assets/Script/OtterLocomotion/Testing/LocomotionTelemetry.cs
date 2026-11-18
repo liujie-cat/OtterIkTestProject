@@ -533,7 +533,7 @@ namespace OtterLocomotion.Testing
             }
             var legShapes = movement.GetComponent<HindLegColliders>();
             if (tail != null && legShapes != null && legShapes.Ready)
-                sb.AppendLine($"# collision: tail {(tail.collide ? "keeps out of" : "passes through")} the hind legs; tail radius {tail.Describe()} cm; legs {legShapes.Describe()} cm");
+                sb.AppendLine($"# collision: tail {(tail.collide ? "keeps out of" : "passes through")} the hind legs; tail bends at {tail.joints} joints, radius {tail.Describe()} cm; legs {legShapes.Describe()} cm");
             if (webThrust != null && webThrust.isActiveAndEnabled)
                 sb.AppendLine($"# web thrust: water push {webThrust.waterPush:F0} face-on, {webThrust.slicePush:F0} slicing N/(m^2 (m/s)^2), area x{webThrust.areaScale:F2}, " +
                               $"HL {webThrust.Area(LimbId.HL) * 1e4f:F1} cm^2, HR {webThrust.Area(LimbId.HR) * 1e4f:F1} cm^2");
