@@ -182,7 +182,7 @@ namespace OtterLocomotion
         [Header("Legs held out behind, from the hip joint")]
         [Tooltip("Ankle distance over the leg's length, and its angle toward the belly from straight back (deg): the legs run back under the sides of the tail, whose root sits just behind and above the hip joints and is wider than they are apart, so held straight back they would run through it.")]
         public float reach = 0.96f;
-        public float angle = 25f;
+        public float angle = 40f;
         [Tooltip("How far out the feet sit (leg lengths, within the reach; negative = in toward the tail). The webs sweep up past the tail's root, so they must clear its sides.")]
         public float outward = 0.5f;
         [Header("Wave")]

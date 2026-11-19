@@ -10,8 +10,9 @@ namespace OtterLocomotion
     /// slicing through at a slant a short, broad plate like a web is pushed across its path much harder than its
     /// face-on share alone, as a hydrofoil is, so the fluke's pitched beat drives as the paddling does. A web
     /// sweeping back faster than the body moves forward drives the body on; one dragged forward, a recovery not
-    /// feathered edge-on or a foot left trailing, holds it back. Only the push along the body's heading is kept;
-    /// OtterControls turns the body.
+    /// feathered edge-on or a foot left trailing, holds it back. Only the part of a web under the water's surface
+    /// pushes; out in the air it takes nothing. Only the push along the body's heading is kept; OtterControls turns
+    /// the body.
     /// </summary>
     [DefaultExecutionOrder(380)]
     [DisallowMultipleComponent]
@@ -156,8 +157,9 @@ namespace OtterLocomotion
                 if (spread <= 0f) spread = 1f;
                 float face = Vector3.Dot(v, n);
                 float along = (v - face * n).magnitude;
-                // the water pushes back against the face's motion: |v|^2 (slicePush sin cos + waterPush sin^2) of its slant
-                Vector3 f = -(waterPush * Mathf.Abs(face) + slicePush * along) * w.area * areaScale * spread * face * n;
+                // the water pushes back against the face's motion: |v|^2 (slicePush sin cos + waterPush sin^2) of its slant,
+                // on the share of the web under the surface
+                Vector3 f = -(waterPush * Mathf.Abs(face) + slicePush * along) * w.area * areaScale * spread * w.wet * face * n;
                 w.push = Vector3.Dot(f, heading);
                 total += heading * w.push;
             }
