@@ -7,22 +7,18 @@ namespace OtterLocomotion
     //   body frame: x = forward (surge), y = right (sway)
     //   roll / bank: degrees about the forward axis, + = right side down
 
-    public enum SpeedBand { Rest, Aim, Swim, Sprint }
-
     public enum Posture { Prone, Supine }
 
-    /// <summary>What the player asks for this physics step.</summary>
+    /// <summary>What the player asks for this physics step, from the gear the controls are in.</summary>
     public struct LocomotionIntent
     {
-        public SpeedBand band;
-        /// <summary>Desired direction on XZ (unit). Meaningful while band != Rest.</summary>
+        public Gear gear;
+        public Gait gait;
+        public Posture posture;
+        /// <summary>Direction to swim on XZ (unit).</summary>
         public Vector3 heading;
-        /// <summary>Requested forward speed before posture caps (m/s).</summary>
+        /// <summary>Forward speed asked for (m/s).</summary>
         public float requestedSpeed;
-        /// <summary>How far the player pushes: arrow length as a fraction of the outer ring (0..1), 0 at rest.</summary>
-        public float reach;
-
-        public bool Steering => band != SpeedBand.Rest;
     }
 
     /// <summary>Measured rigid-body state on the surface plane.</summary>
@@ -51,8 +47,8 @@ namespace OtterLocomotion
     {
         public float headingTargetDeg, headingErrorDeg;
         public float yawRateTarget, yawRateLimit;
-        /// <summary>Speed the body is being brought to (after posture cap and slew) and the cap itself.</summary>
-        public float speedTarget, speedCap;
+        /// <summary>Speed the body is being brought to (after slew) and the speed asked for.</summary>
+        public float speedTarget, requestedSpeed;
         public float surgeForce, swayForce, yawMoment;
         public float bankTargetDeg;
 

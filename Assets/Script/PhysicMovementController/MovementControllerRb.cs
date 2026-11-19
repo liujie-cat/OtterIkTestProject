@@ -142,36 +142,30 @@ public class MovementControllerRB : MonoBehaviour
     [Header("Debug")]
     [SerializeField] private bool drawGizmos = true;
 
-    /// <summary>Stands in for the mouse (scripted playback, tests): button held + screen position in pixels.</summary>
-    public interface IPointerSource
+    /// <summary>The controls that have taken over from this one's ring input.</summary>
+    public interface ISteeringSource
     {
-        bool Held { get; }
-        Vector2 ScreenPosition { get; }
-    }
-
-    /// <summary>When set, input comes from this pointer instead of the mouse; everything downstream is unchanged.</summary>
-    public IPointerSource PointerOverride { get; set; }
-
-    /// <summary>Times the propulsion by the limbs' strokes rather than this controller's own kick rhythm.</summary>
-    public interface IPropulsionTiming
-    {
-        /// <summary>This physics step's share of the average thrust: high while the limbs push, 0 between pushes, about 1 on average.</summary>
-        float Thrust { get; }
-        /// <summary>This step's share of the usual facing response: high while the turning strokes push, low between them.</summary>
-        float Turn { get; }
+        bool Dragging { get; }
+        MoveZone Zone { get; }
+        /// <summary>Direction asked for on XZ (unit).</summary>
+        Vector3 Heading { get; }
+        /// <summary>Where the head and spine aim, and how much (0..1).</summary>
+        Vector3 AimPoint { get; }
+        float AimBlend { get; }
+        /// <summary>Speed asked for now, and when swimming and sprinting (m/s).</summary>
+        float TargetSpeed { get; }
+        float SwimSpeed { get; }
+        float SprintSpeed { get; }
     }
 
     /// <summary>
-    /// When set, the thrust the kick rhythm would deliver (each kick's impulse over its cycle) is spread over the
-    /// strokes as a force, and the body swings round toward the steer direction mostly while they push. The rhythm
-    /// still runs for its timing and events.
+    /// When set, this component stays disabled and its getters report the source instead, so the scripts that read
+    /// them follow the new controls.
     /// </summary>
-    public IPropulsionTiming PropulsionTiming { get; set; }
-    public Camera InputCamera => inputCamera;
+    public ISteeringSource SteeringSource { get; set; }
     public DualRingUIControllerRB RingUI => ui;
 
     // ---------------- Runtime input ----------------
-    private bool overrideHeld;
     private bool isDragging;
     private Vector2 dirScreenSm;
     private float radiusPxSm;
@@ -262,31 +256,14 @@ public class MovementControllerRB : MonoBehaviour
 
     private void HandleInput()
     {
-        bool down, up;
-        Vector3 pointer;
-        if (PointerOverride != null)
-        {
-            bool held = PointerOverride.Held;
-            down = held && !overrideHeld;
-            up = !held && overrideHeld;
-            overrideHeld = held;
-            pointer = PointerOverride.ScreenPosition;
-        }
-        else
-        {
-            down = Input.GetMouseButtonDown(0);
-            up = Input.GetMouseButtonUp(0);
-            pointer = Input.mousePosition;
-        }
-
-        if (down)
+        if (Input.GetMouseButtonDown(0))
         {
             isDragging = true;
-            Vector2 rawDir = GetDirFromCenter(pointer, out float rawR);
+            Vector2 rawDir = GetDirFromCenter(Input.mousePosition, out float rawR);
             dirScreenSm = rawDir;
             radiusPxSm = rawR;
         }
-        else if (up)
+        else if (Input.GetMouseButtonUp(0))
         {
             bool hadDrag = isDragging;
             isDragging = false;
@@ -302,7 +279,7 @@ public class MovementControllerRB : MonoBehaviour
 
         if (!isDragging) return;
 
-        Vector2 newDir = GetDirFromCenter(pointer, out float newR);
+        Vector2 newDir = GetDirFromCenter(Input.mousePosition, out float newR);
 
         float dt = Time.deltaTime;
         float k = inputSmoothing <= 0f ? 1f : (1f - Mathf.Exp(-inputSmoothing * dt));
@@ -430,7 +407,6 @@ public class MovementControllerRB : MonoBehaviour
             smoothing *= w;
         }
 
-        if (PropulsionTiming != null) smoothing *= Mathf.Max(0f, PropulsionTiming.Turn);
         if (smoothing <= 0f) return;
 
         // Dragging: face steerDir. Released: face releaseAlignDir for a short window.
@@ -522,6 +498,7 @@ public class MovementControllerRB : MonoBehaviour
     /// </summary>
     public float GetAimBlend01()
     {
+        if (SteeringSource != null) return SteeringSource.AimBlend;
         if (isDragging) return 1f;
         if (!releaseAlignActive) return 0f;
 
@@ -537,6 +514,7 @@ public class MovementControllerRB : MonoBehaviour
     /// </summary>
     public Vector3 GetAimWorldDir()
     {
+        if (SteeringSource != null) return SteeringSource.Heading;
         if (isDragging) return steerDir;
         if (releaseAlignActive) return releaseAlignSteerDir;
         return worldDir;
@@ -610,7 +588,7 @@ public class MovementControllerRB : MonoBehaviour
                     // Apply impulse at the START of Kick phase
                     if (allowPropulsion)
                     {
-                        if (PropulsionTiming == null) rb.AddForce(steerDir * impulse, ForceMode.Impulse);
+                        rb.AddForce(steerDir * impulse, ForceMode.Impulse);
                         lastKickImpulse = impulse;
                     }
                     else
@@ -646,9 +624,6 @@ public class MovementControllerRB : MonoBehaviour
                     break;
             }
         }
-
-        if (PropulsionTiming != null && allowPropulsion)
-            rb.AddForce(steerDir * (impulse / T * Mathf.Max(0f, PropulsionTiming.Thrust)), ForceMode.Force);
 
         // Keep nextKickTime valid even mid-phase
         if (nextKickTime < Time.time)
@@ -781,20 +756,12 @@ public class MovementControllerRB : MonoBehaviour
 
     // ---------------- Public API (compat) ----------------
 
-    public bool IsDragging() => isDragging;
-    public MoveZone GetZone() => zone;
+    public bool IsDragging() => SteeringSource?.Dragging ?? isDragging;
+    public MoveZone GetZone() => SteeringSource?.Zone ?? zone;
 
-    /// <summary>Arrow length as a fraction of the outer ring's radius: 0 when not dragging, 1 at the ring and beyond.</summary>
-    public float GetReach01()
-    {
-        if (!isDragging) return 0f;
-        float outerPx = (ui != null) ? ui.OuterRadiusPx : 260f;
-        return Mathf.Clamp01(radiusPxSm / Mathf.Max(1f, outerPx));
-    }
-
-    public Vector3 GetCarrotWorld() => carrotWorld;
-    public Vector3 GetWorldDir() => worldDir;
-    public Vector3 GetSteerDir() => steerDir;
+    public Vector3 GetCarrotWorld() => SteeringSource?.AimPoint ?? carrotWorld;
+    public Vector3 GetWorldDir() => SteeringSource?.Heading ?? worldDir;
+    public Vector3 GetSteerDir() => SteeringSource?.Heading ?? steerDir;
 
     public Vector3 GetVelocity()
     {
@@ -809,12 +776,12 @@ public class MovementControllerRB : MonoBehaviour
     public float GetSpeedAlongIntent()
     {
         Vector3 v = GetVelocity();
-        return Vector3.Dot(v, steerDir);
+        return Vector3.Dot(v, GetSteerDir());
     }
 
-    public float GetTargetSpeed() => targetSpeed;
-    public float GetSwimSpeed() => swimAvgSpeed;
-    public float GetSprintSpeed() => sprintTargetSpeed;
+    public float GetTargetSpeed() => SteeringSource?.TargetSpeed ?? targetSpeed;
+    public float GetSwimSpeed() => SteeringSource?.SwimSpeed ?? swimAvgSpeed;
+    public float GetSprintSpeed() => SteeringSource?.SprintSpeed ?? sprintTargetSpeed;
 
     // Derived telemetry (NOT settings)
     public float GetLastKickRate() => lastKickRate;

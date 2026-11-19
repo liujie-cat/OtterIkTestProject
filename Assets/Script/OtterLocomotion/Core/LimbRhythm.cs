@@ -29,17 +29,12 @@ namespace OtterLocomotion
     [Serializable]
     public class RhythmSettings
     {
-        [Tooltip("Hind feet kicking together: big kicks when swimming fast, beating with the prone body wave; the fluke's push grows with the square of its beat.")]
+        [Tooltip("Hind feet kicking together: cruising and sprinting on the belly, in the dolphin wave, and a click's kick from rest.")]
         [FormerlySerializedAs("hind")]
         public RhythmProfile hindTogether = new RhythmProfile(0.7f, 3f, 0.3f, 3f);
-        [Tooltip("Hind feet taking turns: smaller kicks at low speed (turning on the spot, swimming on the back).")]
+        [Tooltip("Hind feet taking turns: swimming slowly on the back, and turning on the spot when parked.")]
         public RhythmProfile hindAlternate = new RhythmProfile(0.6f, 2f, 0.4f, 3f);
         public RhythmProfile fore = new RhythmProfile(1.6f, 3.2f, 0.4f, 1.5f);
-        [Tooltip("Hind feet kick together once the speed target (body lengths/s) reaches this, and take turns again below hindApartSpeedBL; in between they keep their gait.")]
-        public float hindTogetherSpeedBL = 1f;
-        public float hindApartSpeedBL = 0.92f;
-        [Tooltip("Prone, the hind feet beat together as one fluke whenever the speed target (body lengths/s) is above this, from a standing start too; only turning on the spot do they paddle. Paddling hard prone bends the hips down and drives the kicks into the depths.")]
-        public float proneFlukeSpeedBL = 0.05f;
 
         [Header("Drive = allocated force / full-drive force")]
         [Tooltip("Allocated force (N) at which a limb strokes at full size and rate.")]
@@ -86,58 +81,85 @@ namespace OtterLocomotion
         /// <summary>Drive when this stroke began, for detecting a fresh demand.</summary>
         public float strokeDrive;
         public int strokes;
+        /// <summary>Strength of a click's kick waiting for this limb's next power stroke, or driving this one; 0 without one.</summary>
+        public float kick;
+        /// <summary>This power stroke is a click's kick.</summary>
+        public bool kicking;
         public bool InPower => active && phase < powerFraction;
     }
 
     /// <summary>
     /// Per-limb phase oscillators (a small central pattern generator) driven by the allocation: how hard a limb is
     /// asked to push sets its stroke strength and rate, the force direction sets its stroke direction, fixed when each
-    /// power phase begins. Left and right of a girdle pull toward alternating strokes; the hind feet kick together
-    /// when swimming fast. A limb with nothing to do finishes its cycle and rests; a fresh demand in the late recovery
-    /// hurries the rest of it through, and a limb starting from rest pushes immediately.
+    /// power phase begins. Left and right of a girdle pull toward alternating strokes; the hind feet kick together in
+    /// the gaits on the belly. A limb with nothing to do finishes its cycle and rests; a fresh demand in the late
+    /// recovery hurries the rest of it through, and a limb starting from rest pushes immediately. A click's kick
+    /// (Kick) makes the next power stroke of both hind feet at least that strong and straight back; from rest they
+    /// draw up and kick it together, once.
     /// </summary>
     public sealed class LimbRhythm
     {
         public readonly LimbStroke[] limbs = new LimbStroke[OtterRig.LimbCount];
         public event Action<LimbId, LimbStroke> PowerStarted;
-        /// <summary>Hind feet kicking together (fast swimming, or swimming prone) rather than taking turns.</summary>
+        /// <summary>Hind feet kicking together (the belly gaits, or a kick from rest) rather than taking turns.</summary>
         public bool HindTogether { get; private set; }
 
+        private static readonly Vector2 Back = new Vector2(-1f, 0f);
         private readonly bool[] want = new bool[OtterRig.LimbCount];
         private readonly bool[] startedNow = new bool[OtterRig.LimbCount];
         private readonly float[] stepPhase = new float[OtterRig.LimbCount];
-        private bool fast;
+        /// <summary>Both hind feet were at rest when a kick came, so they kick it together whatever the gait.</summary>
+        private bool kickFromRest;
 
         public void Reset()
         {
             Array.Clear(limbs, 0, limbs.Length);
             HindTogether = false;
-            fast = false;
+            kickFromRest = false;
         }
 
         private static int Partner(int limb) => limb ^ 1;
         private static bool IsLeft(int limb) => (limb & 1) == 0;
         private static float Wrap(float x) => x - Mathf.Round(x);
 
-        /// <param name="speedTargetBL">The demand layer's speed target (body lengths/s), which picks the hind gait.</param>
-        public void Step(RhythmSettings s, ControlAllocator allocation, float speedTargetBL, bool prone, float dt)
+        /// <summary>A click's kick for the hind feet, strength 0..1; taken up on the next Step.</summary>
+        public void Kick(float strength)
         {
-            if (speedTargetBL >= s.hindTogetherSpeedBL) fast = true;
-            else if (speedTargetBL < s.hindApartSpeedBL) fast = false;
-            HindTogether = prone ? speedTargetBL > s.proneFlukeSpeedBL : fast;
+            int hl = (int)LimbId.HL, hr = (int)LimbId.HR;
+            if (!limbs[hl].active && !limbs[hr].active) kickFromRest = true;
+            foreach (int i in new[] { hl, hr })
+            {
+                limbs[i].kick = Mathf.Max(limbs[i].kick, strength);
+                limbs[i].kicking = false;
+            }
+        }
+
+        /// <param name="gait">The controls' hind gait: together on the belly, taking turns on the back.</param>
+        public void Step(RhythmSettings s, ControlAllocator allocation, Gait gait, float dt)
+        {
+            ref var hindL = ref limbs[(int)LimbId.HL];
+            ref var hindR = ref limbs[(int)LimbId.HR];
+            // parked, the kick's pair recovers together and comes to rest together
+            if (hindL.kick <= 0f && hindR.kick <= 0f && (gait != Gait.Rest || (!hindL.active && !hindR.active))) kickFromRest = false;
+            HindTogether = gait == Gait.ProneTogether || gait == Gait.Dolphin || kickFromRest;
 
             for (int i = 0; i < OtterRig.LimbCount; i++)
             {
                 ref var l = ref limbs[i];
-                l.powerFraction = Profile(s, i).powerFraction;
                 Vector2 force = allocation.limbs[i].force;
                 float full = OtterRig.IsFore((LimbId)i) ? s.foreFullForce : s.hindFullForce;
                 float magnitude = force.magnitude;
                 l.targetDrive = full > 1e-4f ? Mathf.Clamp01(magnitude / full) : 0f;
                 if (magnitude > 1e-4f) l.targetDirection = -force / magnitude;
-                else if (l.targetDirection == Vector2.zero) l.targetDirection = new Vector2(-1f, 0f);
+                else if (l.targetDirection == Vector2.zero) l.targetDirection = Back;
+                // a kick pushes straight back, unless the allocation asks for a harder stroke of its own
+                if (l.kick > l.targetDrive)
+                {
+                    l.targetDrive = l.kick;
+                    l.targetDirection = Back;
+                }
 
-                want[i] = l.targetDrive >= (l.active && !l.parking ? s.releaseDrive : s.engageDrive);
+                want[i] = l.kick > 0f || l.targetDrive >= (l.active && !l.parking ? s.releaseDrive : s.engageDrive);
                 float goal = want[i] ? l.targetDrive : 0f;
                 float tau = goal > l.drive ? s.driveRiseTime : s.driveFallTime;
                 l.drive += (goal - l.drive) * (1f - Mathf.Exp(-dt / Mathf.Max(1e-3f, tau)));
@@ -170,11 +192,17 @@ namespace OtterLocomotion
                 rate = Mathf.Max(0.2f * profile.minHz, rate);
 
                 float window = (1f - l.powerFraction) * s.resetWindow;
+                bool freshKick = l.kick > 0f && !l.kicking;
                 if (!l.parking && !startedNow[i] && l.phase >= l.powerFraction && l.phase >= 1f - window &&
-                    (l.targetDrive > l.strokeDrive + s.resetDriveJump || Vector2.Angle(l.targetDirection, l.direction) > s.resetAngleDeg))
+                    (freshKick || l.targetDrive > l.strokeDrive + s.resetDriveJump || Vector2.Angle(l.targetDirection, l.direction) > s.resetAngleDeg))
                     rate = Mathf.Max(rate, window / Mathf.Max(1e-3f, s.resetTime));
                 l.phase += rate * dt;
                 l.rate = rate;
+                if (l.kicking && l.phase >= l.powerFraction)
+                {
+                    l.kick = 0f;
+                    l.kicking = false;
+                }
 
                 if (l.phase < 1f) continue;
                 l.phase -= Mathf.Floor(l.phase);
@@ -185,7 +213,7 @@ namespace OtterLocomotion
                     l.phase = 0f;
                     l.rate = 0f;
                 }
-                else BeginStroke(i);
+                else BeginStroke(s, i);
             }
         }
 
@@ -204,7 +232,10 @@ namespace OtterLocomotion
         {
             ref var l = ref limbs[i];
             ref var p = ref limbs[Partner(i)];
-            float phase = 0f;
+            l.powerFraction = Profile(s, i).powerFraction;
+            // a kick from rest draws the foot up through the late recovery first: pushing straight from the rest pose
+            // the stroke's loop grows out ahead of the foot and sweeps the web forward, backing the body
+            float phase = l.kick > 0f ? 1f - (1f - l.powerFraction) * s.resetWindow : 0f;
             if (p.active)
             {
                 float slot = Mathf.Repeat(p.phase - PartnerLead(i), 1f);
@@ -219,14 +250,17 @@ namespace OtterLocomotion
             startedNow[i] = true;
             l.direction = l.targetDirection;
             l.strokeDrive = l.targetDrive;
-            if (phase < l.powerFraction) BeginStroke(i);
+            if (phase < l.powerFraction) BeginStroke(s, i);
         }
 
-        private void BeginStroke(int i)
+        // a stroke keeps the split it began with: changing gait mid-stroke would throw a recovering foot back into its push
+        private void BeginStroke(RhythmSettings s, int i)
         {
             ref var l = ref limbs[i];
+            l.powerFraction = Profile(s, i).powerFraction;
             l.direction = l.targetDirection;
             l.strokeDrive = l.targetDrive;
+            l.kicking = l.kick > 0f;
             l.strokes++;
             PowerStarted?.Invoke((LimbId)i, l);
         }

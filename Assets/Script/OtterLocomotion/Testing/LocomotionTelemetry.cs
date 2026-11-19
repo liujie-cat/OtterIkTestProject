@@ -8,16 +8,17 @@ using UnityEngine;
 namespace OtterLocomotion.Testing
 {
     /// <summary>
-    /// Records an OtterInputPlayback run every frame (after IK): intent, body heading/speed, head and chest response,
-    /// and each limb's IK target offset from its rest. WriteFiles() saves a CSV and a per-segment summary to Logs/:
-    /// when the head, limbs, spine and body first react, how fast and how cleanly turns complete, speed rise, stopping.
+    /// Records an OtterInputPlayback run every frame (after IK): buttons, gear and gait, body heading/speed, head and
+    /// chest response, and each limb's IK target offset from its rest. WriteFiles() saves a CSV and a per-segment
+    /// summary to Logs/: the gestures and the controls' events, when the head, limbs, spine and body first react, how
+    /// fast and how cleanly turns complete, speed rise, a click's push and glide, stopping.
     /// </summary>
     [DefaultExecutionOrder(1000)]
     [DisallowMultipleComponent]
     public class LocomotionTelemetry : MonoBehaviour
     {
         public OtterInputPlayback playback;
-        public MovementControllerRB movement;
+        public OtterControls controls;
         [Tooltip("Optional: also records posture and the demand layer's output.")]
         public OtterLocomotionBrain brain;
         public string label = "baseline";
@@ -77,11 +78,13 @@ namespace OtterLocomotion.Testing
 
         private struct Sample
         {
-            public float t, dt, intentYaw, steerYaw, bodyYaw, yawRate, speedFwd, speedLat, targetSpeed, demand;
-            public float headYaw, chestBend, chestRoll, reach;
+            public float t, dt, intentYaw, bodyYaw, yawRate, speedFwd, speedLat, targetSpeed, aim;
+            public float headYaw, chestBend, chestRoll;
             public int seg;
-            public bool held, kick;
-            public MovementControllerRB.MoveZone zone;
+            /// <summary>Mouse buttons; a hind power stroke began this frame; a click's kick is being kicked.</summary>
+            public bool left, right, kick, kicking;
+            public Gear gear;
+            public Gait gait;
             public float[] limb, limbOut;
             public int[] limbSide;
             /// <summary>Per hind foot: |web normal · direction of motion| relative to the hip (1 = pushing flat-on, 0 = edge-on, -1 = still), and fore-aft speed (m/s, + = forward).</summary>
@@ -116,7 +119,7 @@ namespace OtterLocomotion.Testing
             /// <summary>Per hind foot: WebThrust's push on the body along its heading (N, + = forward), 0 without it.</summary>
             public float[] webPush;
             public Posture posture;
-            public float supine, roll, speedTarget, speedCap, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
+            public float supine, roll, speedTarget, requestedSpeed, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
             public bool allocated;
             public Vector3 achieved;
             public Vector2[] limbForce;
@@ -136,8 +139,18 @@ namespace OtterLocomotion.Testing
             public string reason;
         }
 
+        /// <summary>A gesture, or one of the controls' kicks, jumps and shifts.</summary>
+        private struct InputEvent
+        {
+            public float t;
+            public int seg;
+            public string text;
+            public bool kick;
+        }
+
         private int checkCount, passCount;
         private readonly List<PostureEvent> postureEvents = new List<PostureEvent>();
+        private readonly List<InputEvent> inputEvents = new List<InputEvent>();
         private readonly List<Limb> limbs = new List<Limb>();
         private readonly List<Foot> feet = new List<Foot>();
         private readonly List<Sample> samples = new List<Sample>();
@@ -154,11 +167,11 @@ namespace OtterLocomotion.Testing
 
         private void Start()
         {
-            if (movement == null) movement = FindObjectOfType<MovementControllerRB>();
+            if (controls == null) controls = FindObjectOfType<OtterControls>();
             if (playback == null) playback = FindObjectOfType<OtterInputPlayback>();
-            if (movement == null || playback == null)
+            if (controls == null || playback == null)
             {
-                Debug.LogWarning("[LocomotionTelemetry] Needs a MovementControllerRB and an OtterInputPlayback.", this);
+                Debug.LogWarning("[LocomotionTelemetry] Needs OtterControls and an OtterInputPlayback.", this);
                 enabled = false;
                 return;
             }
@@ -184,25 +197,30 @@ namespace OtterLocomotion.Testing
             }
             limbs.Sort((a, b) => string.CompareOrdinal(a.name, b.name));
             feet.Sort((a, b) => string.CompareOrdinal(a.name, b.name));
-            var b0 = movement.transform;
+            var b0 = controls.transform;
             footInfo = string.Join(" | ", feet.Select(f =>
             {
                 Vector3 n = f.bone.TransformDirection(f.normalLocal), l = f.bone.TransformDirection(f.lengthLocal);
                 return $"{f.name} web normal (fwd {Vector3.Dot(n, b0.forward):F2}, right {Vector3.Dot(n, b0.right):F2}, up {Vector3.Dot(n, b0.up):F2})" +
                        $" toes (fwd {Vector3.Dot(l, b0.forward):F2}, right {Vector3.Dot(l, b0.right):F2}, up {Vector3.Dot(l, b0.up):F2})";
             }));
-            hip = OtterRig.FindActiveBone(movement.transform, OtterRig.Hip);
-            chest = OtterRig.FindActiveBone(movement.transform, OtterRig.Chest);
-            head = OtterRig.FindActiveBone(movement.transform, OtterRig.Head);
-            movement.OnKickCycleStart += OnKick;
-            if (brain == null) brain = movement.GetComponent<OtterLocomotionBrain>();
-            animator = movement.GetComponent<LimbStrokeAnimator>();
-            spineWave = movement.GetComponent<SpineKickWave>();
-            tail = movement.GetComponent<TailRudder>();
-            sway = movement.GetComponent<SpineKickSway>();
-            webThrust = movement.GetComponent<WebThrust>();
+            hip = OtterRig.FindActiveBone(controls.transform, OtterRig.Hip);
+            chest = OtterRig.FindActiveBone(controls.transform, OtterRig.Chest);
+            head = OtterRig.FindActiveBone(controls.transform, OtterRig.Head);
+            if (brain == null) brain = controls.GetComponent<OtterLocomotionBrain>();
+            animator = controls.GetComponent<LimbStrokeAnimator>();
+            spineWave = controls.GetComponent<SpineKickWave>();
+            tail = controls.GetComponent<TailRudder>();
+            sway = controls.GetComponent<SpineKickSway>();
+            webThrust = controls.GetComponent<WebThrust>();
             if (spineWave != null) spineWave.Pulsed += OnPulse;
-            if (brain != null) brain.Posture.Changed += OnPosture;
+            if (brain != null)
+            {
+                brain.Posture.Changed += OnPosture;
+                brain.Rhythm.PowerStarted += OnPower;
+            }
+            controls.Gestured += OnGesture;
+            controls.Control += OnControl;
         }
 
         private static LineRenderer MakeTrail(Transform girdle, Color color)
@@ -235,24 +253,47 @@ namespace OtterLocomotion.Testing
                     Destroy(f.trail.sharedMaterial);
                     Destroy(f.trail.gameObject);
                 }
-            if (movement != null) movement.OnKickCycleStart -= OnKick;
             if (spineWave != null) spineWave.Pulsed -= OnPulse;
-            if (brain != null) brain.Posture.Changed -= OnPosture;
+            if (brain != null)
+            {
+                brain.Posture.Changed -= OnPosture;
+                brain.Rhythm.PowerStarted -= OnPower;
+            }
+            if (controls != null)
+            {
+                controls.Gestured -= OnGesture;
+                controls.Control -= OnControl;
+            }
         }
+
+        private bool Recording => playback != null && playback.SegmentIndex >= 0 && !playback.Finished;
 
         private void OnPosture(Posture posture, string reason)
         {
-            if (playback != null && playback.SegmentIndex >= 0 && !playback.Finished)
-                postureEvents.Add(new PostureEvent { t = Time.time, seg = playback.SegmentIndex, posture = posture, reason = reason });
+            if (Recording) postureEvents.Add(new PostureEvent { t = Time.time, seg = playback.SegmentIndex, posture = posture, reason = reason });
         }
 
-        private void OnKick(MovementControllerRB.KickCycleEvent e) => kickThisFrame = true;
+        private void OnGesture(Gesture g)
+        {
+            if (Recording) inputEvents.Add(new InputEvent { t = Time.time, seg = playback.SegmentIndex, text = g.ToString() });
+        }
+
+        private void OnControl(ControlEvent e)
+        {
+            if (Recording) inputEvents.Add(new InputEvent { t = Time.time, seg = playback.SegmentIndex, text = "=> " + e, kick = e.kind == ControlEventKind.Kick });
+        }
+
+        private void OnPower(LimbId limb, LimbStroke stroke)
+        {
+            if (!OtterRig.IsFore(limb)) kickThisFrame = true;
+        }
+
         private void OnPulse() => pulseThisFrame = true;
 
         private void LateUpdate()
         {
             if (playback == null || playback.SegmentIndex < 0 || playback.Finished) return;
-            var body = movement.transform;
+            var body = controls.transform;
             float dt = Mathf.Max(Time.deltaTime, 1e-5f);
             float yaw = body.eulerAngles.y;
             if (hasPrevYaw) yaw = prevYaw + Mathf.DeltaAngle(prevYaw, yaw);
@@ -261,15 +302,17 @@ namespace OtterLocomotion.Testing
             hasPrevYaw = true;
 
             Vector3 fwd = Flat(body.forward), right = Vector3.Cross(Vector3.up, fwd);
-            Vector3 v = movement.GetVelocity();
+            var rb = body.GetComponent<Rigidbody>();
+            Vector3 v = rb != null ? Vector3.ProjectOnPlane(rb.velocity, Vector3.up) : Vector3.zero;
+            var gears = controls.Gears;
             var s = new Sample
             {
-                t = Time.time, dt = dt, seg = playback.SegmentIndex, held = playback.Held, zone = movement.GetZone(),
-                intentYaw = Yaw(movement.GetWorldDir()), steerYaw = Yaw(movement.GetSteerDir()),
+                t = Time.time, dt = dt, seg = playback.SegmentIndex, left = controls.LeftHeld, right = controls.RightHeld,
+                gear = gears.Gear, gait = gears.Gait, intentYaw = Yaw(gears.Heading), aim = gears.AimBlend,
                 bodyYaw = yaw, yawRate = yawRate,
                 speedFwd = Vector3.Dot(v, fwd), speedLat = Vector3.Dot(v, right),
-                // the brain asks for its own speeds, capped by posture; the movement controller's belong to its impulse kicks
-                targetSpeed = brain != null && brain.isActiveAndEnabled ? brain.Demand.speedCap : movement.GetTargetSpeed(), demand = movement.GetDemand01(), kick = kickThisFrame, reach = movement.GetReach01(),
+                targetSpeed = brain != null && brain.isActiveAndEnabled ? brain.Demand.requestedSpeed : 0f, kick = kickThisFrame,
+                kicking = brain != null && brain.Rhythm.limbs.Any(l => l.kicking),
                 // bones point at their child along local +Y, so .up is the head/chest/hip direction
                 headYaw = head ? Vector3.SignedAngle(fwd, Flat(head.up), Vector3.up) : 0f,
                 chestBend = hip && chest ? Vector3.SignedAngle(Flat(hip.up), Flat(chest.up), Vector3.up) : 0f,
@@ -351,7 +394,7 @@ namespace OtterLocomotion.Testing
                 s.supine = brain.Posture.SupineFraction;
                 s.roll = brain.Posture.RollDeg;
                 s.speedTarget = d.speedTarget;
-                s.speedCap = d.speedCap;
+                s.requestedSpeed = d.requestedSpeed;
                 s.yawRateTarget = d.yawRateTarget;
                 s.surgeForce = d.surgeForce;
                 s.swayForce = d.swayForce;
@@ -415,7 +458,9 @@ namespace OtterLocomotion.Testing
         private string Csv()
         {
             var ci = CultureInfo.InvariantCulture;
-            var sb = new StringBuilder("t,seg,held,zone,intentYaw,steerYaw,bodyYaw,yawRate,speedFwd,speedLat,targetSpeed,kick,demand,headYaw,chestBend,chestRoll,reach");
+            // left/right = mouse buttons; intentYaw = the heading the controls ask for; aim = how much the head and spine aim (0..1);
+            // kick = a hind power stroke began; kicking = a click's kick is being kicked
+            var sb = new StringBuilder("t,seg,left,right,gear,gait,intentYaw,aim,bodyYaw,yawRate,speedFwd,speedLat,targetSpeed,kick,kicking,headYaw,chestBend,chestRoll");
             foreach (var l in limbs) sb.Append(',').Append(l.name).Append("_cm");
             // horizontal offset away from the body midline, + = outward; side = which side of the midline the limb is on
             // now (+1 right), which swaps left and right while on the back
@@ -449,7 +494,7 @@ namespace OtterLocomotion.Testing
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wup,").Append(f.name).Append("_nup");
             // which way the toes point: up and forward components
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_tup,").Append(f.name).Append("_tfwd");
-            if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedCap,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
+            if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedAsked,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
             {
@@ -462,10 +507,9 @@ namespace OtterLocomotion.Testing
             float t0 = samples.Count > 0 ? samples[0].t : 0f;
             foreach (var s in samples)
             {
-                sb.Append(string.Format(ci, "{0:F4},{1},{2},{3},{4:F2},{5:F2},{6:F2},{7:F1},{8:F3},{9:F3},{10:F2},{11},{12:F2},{13:F2},{14:F2},{15:F2}",
-                    s.t - t0, s.seg, s.held ? 1 : 0, s.zone, s.intentYaw, s.steerYaw, s.bodyYaw, s.yawRate, s.speedFwd, s.speedLat,
-                    s.targetSpeed, s.kick ? 1 : 0, s.demand, s.headYaw, s.chestBend, s.chestRoll));
-                sb.Append(',').Append(s.reach.ToString("F2", ci));
+                sb.Append(string.Format(ci, "{0:F4},{1},{2},{3},{4},{5},{6:F2},{7:F2},{8:F2},{9:F1},{10:F3},{11:F3},{12:F2},{13},{14},{15:F2},{16:F2},{17:F2}",
+                    s.t - t0, s.seg, s.left ? 1 : 0, s.right ? 1 : 0, s.gear, s.gait, s.intentYaw, s.aim, s.bodyYaw, s.yawRate, s.speedFwd, s.speedLat,
+                    s.targetSpeed, s.kick ? 1 : 0, s.kicking ? 1 : 0, s.headYaw, s.chestBend, s.chestRoll));
                 foreach (var x in s.limb) sb.Append(',').Append(x.ToString("F2", ci));
                 foreach (var x in s.limbOut) sb.Append(',').Append(x.ToString("F2", ci));
                 foreach (var x in s.limbSide) sb.Append(',').Append(x);
@@ -490,7 +534,7 @@ namespace OtterLocomotion.Testing
                 for (int k = 0; k < s.footToesUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footToesUp[k], s.footToesFwd[k]));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
-                        s.posture, s.supine, s.roll, s.speedTarget, s.speedCap, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
+                        s.posture, s.supine, s.roll, s.speedTarget, s.requestedSpeed, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
                 if (allocated)
                 {
                     sb.Append(string.Format(ci, ",{0:F2},{1:F2},{2:F3},{3}", s.achieved.x, s.achieved.y, s.achieved.z, s.saturated));
@@ -541,7 +585,7 @@ namespace OtterLocomotion.Testing
                     sb.AppendLine($"#   {(LimbId)i}: joint from centre (fwd {a.x:F1}, right {a.y:F1}, up {a.z:F1}) cm, limb {g.length * 100f:F1} cm");
                 }
             }
-            var legShapes = movement.GetComponent<HindLegColliders>();
+            var legShapes = controls.GetComponent<HindLegColliders>();
             if (tail != null && legShapes != null && legShapes.Ready)
                 sb.AppendLine($"# collision: tail {(tail.collide ? "keeps out of" : "passes through")} the hind legs; tail bends at {tail.joints} joints, radius {tail.Describe()} cm; legs {legShapes.Describe()} cm");
             if (webThrust != null && webThrust.isActiveAndEnabled)
@@ -554,20 +598,19 @@ namespace OtterLocomotion.Testing
                 var spec = playback.segments[seg];
                 var first = samples[idx[0]];
                 float t0 = first.t;
-                sb.AppendLine($"\n[{seg}] {spec.name}  ({spec.zone}, {spec.duration:F1}s)");
-                int kicks = idx.Count(i => samples[i].kick);
-                if (kicks > 0) sb.AppendLine($"  kicks {kicks}");
+                var last = samples[idx[idx.Count - 1]];
+                string toward = spec.Points ? $" {spec.headingDeg.ToString("+0;-0;0", CultureInfo.InvariantCulture)} deg" : "";
+                sb.AppendLine($"\n[{seg}] {spec.name}  ({spec.action}{toward}, {spec.duration:F1}s)  {first.gear} {first.gait} -> {last.gear} {last.gait}");
+                var events = inputEvents.Where(e => e.seg == seg).ToList();
+                if (events.Count > 0)
+                    sb.AppendLine("  input: " + string.Join(", ", events.Select(e => $"{e.text} {(e.t - t0).ToString("F2", CultureInfo.InvariantCulture)}")));
 
-                if (spec.zone != OtterInputPlayback.Zone.Release)
-                {
-                    float delta = Mathf.DeltaAngle(first.bodyYaw, playback.TargetYaw(seg));
-                    if (Mathf.Abs(delta) >= turnMinDeg) TurnMetrics(sb, idx, t0, first, delta);
-                    else if (first.targetSpeed > 0f || samples[idx[idx.Count - 1]].targetSpeed > 0f) SpeedMetrics(sb, idx, t0);
-                }
-                else if (Mathf.Abs(first.speedFwd) > stopSpeed)
-                {
-                    StopMetrics(sb, idx, t0);
-                }
+                bool turns = spec.action == OtterInputPlayback.Action.Drag || spec.action == OtterInputPlayback.Action.Click;
+                float delta = turns ? Mathf.DeltaAngle(first.bodyYaw, playback.TargetYaw(seg)) : 0f;
+                if (Mathf.Abs(delta) >= turnMinDeg) TurnMetrics(sb, idx, t0, first, delta);
+                else if (last.targetSpeed > 0f) SpeedMetrics(sb, idx, t0);
+                else if (Mathf.Abs(first.speedFwd) > stopSpeed) StopMetrics(sb, idx, t0);
+                if (events.Any(e => e.kick)) KickMetrics(sb, idx, t0, events.First(e => e.kick).t);
                 if (brain != null) DemandMetrics(sb, idx, seg, t0);
                 RhythmMetrics(sb, idx);
                 FootMetrics(sb, idx);
@@ -765,7 +808,7 @@ namespace OtterLocomotion.Testing
             var fPeak = PeakBy(x => x.surgeForce);
             var yPeak = PeakBy(x => x.swayForce);
             var bPeak = PeakBy(x => x.bank);
-            sb.AppendLine($"  demand: end {last.posture} (supine {last.supine:F2}), speed target {last.speedTarget:F2} cap {last.speedCap:F2}; " +
+            sb.AppendLine($"  demand: end {last.posture} (supine {last.supine:F2}), speed target {last.speedTarget:F2} asked {last.requestedSpeed:F2}; " +
                           $"peak r* {rPeak.yawRateTarget:F0} deg/s, Mz {mPeak.yawMoment:F3} N·m, Fx {fPeak.surgeForce:F1} N (mean {seq.Average(x => x.surgeForce):F1}), " +
                           $"Fy {yPeak.swayForce:F1} N, bank {bPeak.bank:F0} deg at {(bPeak.t - t0).ToString("F2", ci)} s");
 
@@ -929,6 +972,32 @@ namespace OtterLocomotion.Testing
             sb.AppendLine("  targets: " + string.Join(" | ",
                 Check($"mean within ±{speedMeanTolerance:P0} of target ({mean / Mathf.Max(target, 1e-3f):P0})", Mathf.Abs(mean - target) <= speedMeanTolerance * target),
                 Check($"ripple <= ±{speedRippleMax:P0} (±{ripple:P0})", ripple <= speedRippleMax)));
+        }
+
+        // A click's kick: when the feet push off after the click and for how long, how fast it takes the body and how far it glides on it.
+        private void KickMetrics(StringBuilder sb, List<int> idx, float t0, float clickTime)
+        {
+            var ci = CultureInfo.InvariantCulture;
+            var seq = idx.Select(i => samples[i]).Where(s => s.t >= clickTime).ToList();
+            var kicking = seq.Where(s => s.kicking).ToList();
+            if (kicking.Count == 0)
+            {
+                sb.AppendLine("  kick: the feet never kicked it");
+                return;
+            }
+            float from = kicking[0].t, to = kicking[kicking.Count - 1].t;
+            var after = seq.Where(s => s.t >= from).ToList();
+            var peak = after.OrderByDescending(s => s.speedFwd).First();
+            float glide = 0f;
+            float? stopped = null;
+            foreach (var s in after.Where(s => s.t >= peak.t))
+            {
+                if (Mathf.Abs(s.speedFwd) < stopSpeed) { stopped = s.t; break; }
+                glide += Mathf.Abs(s.speedFwd) * s.dt;
+            }
+            sb.AppendLine($"  kick: pushed off {(from - clickTime).ToString("F2", ci)} s after the click, for {(to - from).ToString("F2", ci)} s; " +
+                          $"peak {peak.speedFwd:F2} m/s at {(peak.t - t0).ToString("F2", ci)}; glided {glide:F2} m" +
+                          (stopped.HasValue ? $", stopped at {(stopped.Value - t0).ToString("F2", ci)}" : ", still moving"));
         }
 
         private void StopMetrics(StringBuilder sb, List<int> idx, float t0)

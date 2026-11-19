@@ -6,31 +6,15 @@ namespace OtterLocomotion
     [Serializable]
     public class PostureSettings
     {
-        public Posture initial = Posture.Supine;
-        [Tooltip("Top speed on the back between the rings (body lengths/s). After rolling onto the back the speed target eases down to this.")]
-        public float supineMaxSpeedBL = 0.8f;
-        [Tooltip("How fast the speed target may rise on the back (body lengths/s^2). With proneSprintFraction it sets how " +
-                 "long a sprint kicks on the back before rolling over.")]
+        [Tooltip("How fast the speed target may rise on the back (body lengths/s^2); on the belly the demand layer's own limit holds.")]
         public float supineRiseRateBL = 0.6f;
-        [Tooltip("Switch posture automatically. Manual toggles always work.")]
-        public bool autoSwitch = true;
-        [Tooltip("Sprinting (arrow beyond the outer ring) lifts the top speed on the back: the otter speeds up on its back " +
-                 "and rolls onto its belly once its speed target reaches this fraction of the sprint speed.")]
-        [Range(0f, 1f)] public float proneSprintFraction = 0.55f;
-        [Tooltip("Prone, it holds its belly through every turn and slow-down, wherever the arrow goes, and rolls onto its back only once it has swum and then come to a stop: slower than this (body lengths/s)...")]
-        public float supineEnterSpeedBL = 0.12f;
-        [Tooltip("...for this long (s), long enough that a quick pivot on the spot keeps it prone.")]
-        public float supineSettleTime = 1f;
         [Tooltip("Nominal roll-over time (s), used until the limbs drive the roll themselves.")]
         public float flipDuration = 0.6f;
     }
 
     /// <summary>
-    /// Prone/supine posture. Between the rings the otter swims on its back. Sprinting, it first speeds up on its back
-    /// and rolls prone once the speed target reaches proneSprintFraction of the sprint speed. Prone it stays prone,
-    /// however it turns, slows or steers, until it has swum and then come to a stop; then it rolls onto its back.
-    /// Automatic switches fire only on crossings, so a manual toggle holds until the next one. The speed cap follows
-    /// the roll progress, and the demand layer eases the speed target down to it.
+    /// Prone/supine posture: the controls' gear asks for one (on the back parked and swimming slowly, on the belly
+    /// cruising and sprinting) and the body rolls over to it, over the side it is turning toward.
     /// </summary>
     public sealed class PostureMachine
     {
@@ -59,65 +43,23 @@ namespace OtterLocomotion
         /// <summary>(new posture, reason) whenever a roll starts.</summary>
         public event Action<Posture, string> Changed;
 
-        private float previousSprint;
-        private bool hasPrevious;
-        /// <summary>Has swum since it last lay prone at rest, so coming to a stop is a crossing.</summary>
-        private bool swam;
-        private float slowTimer;
-
-        public void Reset(PostureSettings s)
+        public void Reset(Posture initial)
         {
-            Current = s.initial;
+            Current = initial;
             FlipProgress = 1f;
             RollSide = 1;
             LastReason = "initial";
-            hasPrevious = false;
-            swam = false;
-            slowTimer = 0f;
         }
 
-        /// <param name="speedTarget">The demand layer's speed target from the previous step (m/s).</param>
-        /// <param name="bodyLength">Metres per body length, the settings' unit of speed.</param>
-        public void Step(PostureSettings s, in LocomotionIntent intent, in BodyState body, bool togglePressed, float speedTarget, float yawRateDemand, float bodyLength, float dt)
+        /// <param name="reason">Why it is asked for, for the log.</param>
+        public void Step(PostureSettings s, Posture wanted, string reason, float yawRateDemand, float dt)
         {
-            // how far a sprint has built up, 0 outside the sprint zone
-            float sprint = intent.band == SpeedBand.Sprint ? speedTarget / Mathf.Max(0.1f, intent.requestedSpeed) : 0f;
-            if (togglePressed)
-            {
-                swam = false;
-                Begin(Current == Posture.Prone ? Posture.Supine : Posture.Prone, "manual", yawRateDemand);
-            }
-            else if (s.autoSwitch)
-            {
-                if (hasPrevious && sprint >= s.proneSprintFraction && previousSprint < s.proneSprintFraction)
-                    Begin(Posture.Prone, $"sprint built up to {Mathf.RoundToInt(sprint * 100f)}% of sprint speed", yawRateDemand);
-                if (Current == Posture.Prone && !IsFlipping)
-                {
-                    if (body.Speed >= s.supineEnterSpeedBL * bodyLength)
-                    {
-                        swam = true;
-                        slowTimer = 0f;
-                    }
-                    else if (swam && (slowTimer += dt) >= s.supineSettleTime)
-                    {
-                        swam = false;
-                        Begin(Posture.Supine, "came to a stop", yawRateDemand);
-                    }
-                }
-                else
-                {
-                    swam = false;
-                    slowTimer = 0f;
-                }
-            }
-            previousSprint = sprint;
-            hasPrevious = true;
+            if (wanted != Current) Begin(wanted, reason, yawRateDemand);
             if (FlipProgress < 1f) FlipProgress = Mathf.Min(1f, FlipProgress + dt / Mathf.Max(0.05f, s.flipDuration));
         }
 
         private void Begin(Posture target, string reason, float yawRateDemand)
         {
-            if (target == Current) return;
             if (IsFlipping)
             {
                 // reverse mid-roll: unwind the way it came, so the roll angle stays continuous

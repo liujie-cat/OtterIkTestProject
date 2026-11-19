@@ -15,17 +15,19 @@ namespace OtterLocomotion.EditorTools
 {
     /// <summary>
     /// Brings the test scene to what the current code expects: the sea otter rig in place of the cat, IK targets on
-    /// the rest pose, and the locomotion components on the swimming body with their references and code-default
-    /// settings. Every step checks first and changes only what is off, so it can be run at any time. One Undo step.
+    /// the rest pose, the locomotion components on the swimming body with their references and code-default
+    /// settings, and the old ring controls off. Every step checks first and changes only what is off, so it can be run
+    /// at any time. One Undo step.
     /// </summary>
     static class OtterTestSceneSetup
     {
         internal const string ScenePath = "Assets/Scenes/TestLimbIK/TestAdvancedSpineSystem.unity";
         const string LogFile = "OtterTestScene_Refresh.txt";
 
-        /// <summary>Components the new locomotion needs on the body, in the order they are added.</summary>
+        /// <summary>Components the new locomotion needs on the body, in the order they are added (the controls first: the brain finds them as it wakes).</summary>
         internal static readonly (Type type, string title)[] Managed =
         {
+            (typeof(OtterControls), "操作"),
             (typeof(OtterLocomotionBrain), "运动大脑"),
             (typeof(LimbStrokeAnimator), "四肢划水"),
             (typeof(PostureFlipSync), "翻身同步"),
@@ -64,8 +66,22 @@ namespace OtterLocomotion.EditorTools
         [MenuItem("Tools/Otter Locomotion/Report Test Scene", true)]
         static bool NotPlaying() => !EditorApplication.isPlayingOrWillChangePlaymode;
 
+        /// <summary>The swimming body: the active object with the old controller, which the new controls switch off.</summary>
         internal static MovementControllerRB FindBody() =>
-            Object.FindObjectsByType<MovementControllerRB>(FindObjectsSortMode.None).FirstOrDefault(m => m.isActiveAndEnabled);
+            Object.FindObjectsByType<MovementControllerRB>(FindObjectsInactive.Exclude, FindObjectsSortMode.None).FirstOrDefault(m => m.gameObject.activeInHierarchy);
+
+        static DualRingUIControllerRB RingUI(MovementControllerRB body) =>
+            body.RingUI != null ? body.RingUI : Object.FindObjectsByType<DualRingUIControllerRB>(FindObjectsInactive.Include, FindObjectsSortMode.None).FirstOrDefault();
+
+        /// <summary>What of the old ring controls is still on: the controller, its ring UI.</summary>
+        static List<string> OldControlsOn(MovementControllerRB body)
+        {
+            var on = new List<string>();
+            if (body.enabled) on.Add("旧控制器 MovementControllerRB");
+            var ring = RingUI(body);
+            if (ring != null && ring.gameObject.activeSelf) on.Add($"环形 UI '{ring.name}'");
+            return on;
+        }
 
         static bool IsTestSceneOpen => SceneManager.GetActiveScene().path == ScenePath;
 
@@ -96,9 +112,16 @@ namespace OtterLocomotion.EditorTools
             }
 
             var body = FindBody();
+            if (body != null)
+            {
+                var on = OldControlsOn(body);
+                checks.Add(on.Count == 0
+                    ? new Check("旧操作", Level.Ok, "环形控制器和环形 UI 已停用（文件保留）")
+                    : new Check("旧操作", Level.Fix, "还开着: " + string.Join(", ", on) + "，刷新时停用"));
+            }
             foreach (var (type, title) in Managed)
             {
-                if (body == null) { checks.Add(new Check(title, Level.Blocked, "没有激活的 MovementControllerRB")); continue; }
+                if (body == null) { checks.Add(new Check(title, Level.Blocked, "没有带 MovementControllerRB 的激活物体")); continue; }
                 var component = body.GetComponent(type);
                 if (component == null) { checks.Add(new Check(title, Level.Fix, $"'{body.name}' 上还没有，刷新时添加")); continue; }
                 if (component is Behaviour b && !b.enabled)
@@ -162,9 +185,22 @@ namespace OtterLocomotion.EditorTools
             }
 
             var body = FindBody();
-            if (body == null) log.AppendLine("!! 没有激活的 MovementControllerRB，跳过运动组件");
+            if (body == null) log.AppendLine("!! 没有带 MovementControllerRB 的激活物体，跳过运动组件");
             else
             {
+                if (body.enabled)
+                {
+                    Undo.RecordObject(body, "Retire ring controls");
+                    body.enabled = false;
+                    log.AppendLine("旧操作: 停用 MovementControllerRB");
+                }
+                var ring = RingUI(body);
+                if (ring != null && ring.gameObject.activeSelf)
+                {
+                    Undo.RecordObject(ring.gameObject, "Retire ring controls");
+                    ring.gameObject.SetActive(false);
+                    log.AppendLine($"旧操作: 隐藏环形 UI '{ring.name}'");
+                }
                 foreach (var (type, title) in Managed)
                 {
                     var component = body.GetComponent(type);

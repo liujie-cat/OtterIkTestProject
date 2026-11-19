@@ -13,7 +13,7 @@ namespace OtterLocomotion
     [DisallowMultipleComponent]
     public class WaterReference : MonoBehaviour
     {
-        [Tooltip("Water surface height (m); MovementControllerRB holds the body at its plane.")]
+        [Tooltip("Water surface height (m); OtterControls holds the body at its plane.")]
         public float surfaceY = 0f;
         [Header("Surface grid")]
         public float surfaceCell = 0.25f;

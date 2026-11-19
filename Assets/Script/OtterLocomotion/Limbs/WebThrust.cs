@@ -10,15 +10,13 @@ namespace OtterLocomotion
     /// face-on share alone, as a hydrofoil is, so the fluke's pitched beat drives as the paddling does. A web
     /// sweeping back faster than the body moves forward drives the body on; one dragged forward, a recovery not
     /// feathered edge-on or a foot left trailing, holds it back. Only the push along the body's heading is kept;
-    /// MovementControllerRB still turns the body. While this is on, StrokePropulsion asks the movement controller for
-    /// no thrust of its own.
+    /// OtterControls turns the body.
     /// </summary>
     [DefaultExecutionOrder(380)]
     [DisallowMultipleComponent]
     public class WebThrust : MonoBehaviour
     {
         [Tooltip("Found on this object when empty.")]
-        public MovementControllerRB movement;
         public LimbStrokeAnimator animator;
         [Tooltip("Water's push on a web per square metre at 1 m/s face-on (N): half the water's density times a flat plate's drag coefficient is about 600.")]
         public float waterPush = 600f;
@@ -28,7 +26,7 @@ namespace OtterLocomotion
         public float areaScale = 1.4f;
         [Tooltip("Fastest a web is taken to move (m/s), against jumps in its pose.")]
         public float maxWebSpeed = 4f;
-        [Tooltip("Count the body's swing about its centre in a turn as web motion through the water. MovementControllerRB " +
+        [Tooltip("Count the body's swing about its centre in a turn as web motion through the water. OtterControls " +
                  "turns the body rigidly, sweeping the hind feet sideways far faster than a real otter's, whose hindquarters " +
                  "follow its path through the bend; a web slanted to that sweep is pushed back and the otter stalls in every " +
                  "turn. Off, the webs move through the water with the body's travel and their own strokes.")]
@@ -71,7 +69,6 @@ namespace OtterLocomotion
 
         private void Awake()
         {
-            if (movement == null) movement = GetComponent<MovementControllerRB>();
             if (animator == null) animator = GetComponent<LimbStrokeAnimator>();
         }
 
@@ -95,7 +92,7 @@ namespace OtterLocomotion
 
         private void Setup()
         {
-            body = movement != null ? movement.GetComponent<Rigidbody>() : GetComponent<Rigidbody>();
+            body = GetComponent<Rigidbody>();
             var chains = OtterRig.FindLimbChains(transform);
             int k = 0;
             foreach (var limb in new[] { LimbId.HL, LimbId.HR })

@@ -41,8 +41,6 @@ namespace OtterLocomotion
         [Header("Aim")]
         [Tooltip("How long (s) the head and spine keep aiming where a drag or a click pointed, fading out.")]
         public float aimFade = 0.6f;
-        [Tooltip("A drag closer to the otter than this (m) leaves its heading as it was.")]
-        public float minAimDistance = 0.05f;
     }
 
     public enum ControlEventKind { Kick, Jump, Shift }
@@ -103,7 +101,8 @@ namespace OtterLocomotion
         public float SpeedBL { get; private set; }
 
         public bool JumpEligible => Gear == Gear.Sprint && Dolphin;
-        public Posture Posture => Gear <= Gear.Slow ? Posture.Supine : Posture.Prone;
+        public Posture Posture => PostureOf(Gear);
+        public static Posture PostureOf(Gear gear) => gear <= Gear.Slow ? Posture.Supine : Posture.Prone;
         public Gait Gait => Gear switch
         {
             Gear.Park => Gait.Rest,
@@ -130,8 +129,8 @@ namespace OtterLocomotion
             aimUntil = float.NegativeInfinity;
         }
 
-        /// <param name="pointer">The pointer on the water now, which a drag turns toward.</param>
-        public void Step(GearSettings s, GestureSettings gs, List<Gesture> gestures, float time, Vector3 pointer, in GearBody b, List<ControlEvent> events)
+        /// <param name="pointer">The pointer on the water now, which a drag turns toward once it is off the otter.</param>
+        public void Step(GearSettings s, GestureSettings gs, List<Gesture> gestures, float time, Vector3 pointer, bool pointerOnOtter, in GearBody b, List<ControlEvent> events)
         {
             foreach (var g in gestures)
             {
@@ -215,13 +214,12 @@ namespace OtterLocomotion
                     Shift(Gear.Cruise, "slowed out of the wave", time, events);
             }
 
-            if (Steering)
+            if (Steering && !pointerOnOtter)
             {
-                Vector3 to = Flat(pointer - b.position, Vector3.zero);
-                if ((pointer - b.position).magnitude >= s.minAimDistance && to != Vector3.zero) Heading = to;
+                Heading = Flat(pointer - b.position, Heading);
                 AimPoint = pointer;
-                aimUntil = time;
             }
+            if (Steering) aimUntil = time;
             AimBlend = Steering ? 1f : s.aimFade > 0f ? Mathf.Clamp01(1f - (time - aimUntil) / s.aimFade) : 0f;
 
             bool turning = Vector3.Angle(Flat(b.forward, Heading), Heading) > s.parkDriftAngle;

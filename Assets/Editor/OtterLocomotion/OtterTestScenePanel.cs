@@ -12,7 +12,7 @@ namespace OtterLocomotion.EditorTools
     {
         const string ResetSettingsPref = "OtterLocomotion.TestScene.ResetSettings";
         const string SavePref = "OtterLocomotion.TestScene.Save";
-        static readonly (string label, string title)[] Playbacks = { ("baseline", "基线回放"), ("posture", "姿态回放") };
+        static readonly (string label, string title)[] Playbacks = { ("baseline", "基线回放"), ("turns", "转向回放"), ("speeds", "速度回放") };
 
         List<OtterTestSceneSetup.Check> checks = new List<OtterTestSceneSetup.Check>();
         bool stale = true;

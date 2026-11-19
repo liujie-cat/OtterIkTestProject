@@ -4,7 +4,7 @@ namespace OtterLocomotion
 {
     /// <summary>
     /// A long, slender body slips through the water nose first far more easily than sideways. WaterDrag resists every
-    /// direction alike, so when MovementControllerRB swings the body round its old travel carries on sideways and the
+    /// direction alike, so when OtterControls swings the body round its old travel carries on sideways and the
     /// otter drifts and stalls through every turn; this adds the body's extra resistance across its length, so it
     /// carves round behind its heading as a real otter does.
     /// </summary>

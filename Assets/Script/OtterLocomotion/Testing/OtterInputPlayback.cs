@@ -5,48 +5,57 @@ using UnityEngine;
 namespace OtterLocomotion.Testing
 {
     /// <summary>
-    /// Scripted ring input for repeatable locomotion tests. Each segment holds the pointer in a ring zone toward a
-    /// heading relative to the otter's facing when playback started (+ = clockwise seen from above, i.e. right).
-    /// Feeds MovementControllerRB through its pointer override, so the controller's own smoothing, zones and
-    /// release behaviour apply exactly as with the mouse. Locks the frame rate so runs repeat.
+    /// Scripted mouse input for repeatable locomotion tests. Each segment does one thing with the buttons, as the
+    /// player would: a click, double click or long press on the water, a drag from the otter, a right tap or hold;
+    /// pointing toward a yaw relative to the otter's facing when playback started (+ = clockwise seen from above,
+    /// i.e. right). Feeds OtterControls through its pointer override, so its gestures and gears apply exactly as
+    /// with the mouse. Locks the frame rate so runs repeat.
     /// </summary>
     [DefaultExecutionOrder(-100)]
     [DisallowMultipleComponent]
-    public class OtterInputPlayback : MonoBehaviour, MovementControllerRB.IPointerSource
+    public class OtterInputPlayback : MonoBehaviour, OtterControls.IPointer
     {
-        public enum Zone { Release, Aim, Swim, Sprint }
+        public enum Action { Idle, Click, DoubleClick, Hold, Drag, RightTap, RightHold }
 
         [Serializable]
         public struct Segment
         {
             public string name;
             public float duration;
-            public Zone zone;
-            [Tooltip("Heading relative to the otter's facing at playback start (degrees, + = right).")]
+            public Action action;
+            [Tooltip("Where it points: yaw relative to the otter's facing at playback start (degrees, + = right).")]
             public float headingDeg;
-            [Tooltip("Press the posture toggle as the segment starts.")]
-            public bool pressFlip;
-            [Tooltip("Arrow length as a fraction of the outer ring's radius; 0 = the middle of the zone.")]
-            public float reach;
+            [Tooltip("How far from the otter it points (body lengths); 0 = the action's usual distance.")]
+            public float distanceBL;
 
-            public Segment(string name, float duration, Zone zone, float headingDeg, bool pressFlip = false, float reach = 0f)
+            public Segment(string name, float duration, Action action, float headingDeg = 0f, float distanceBL = 0f)
             {
                 this.name = name;
                 this.duration = duration;
-                this.zone = zone;
+                this.action = action;
                 this.headingDeg = headingDeg;
-                this.pressFlip = pressFlip;
-                this.reach = reach;
+                this.distanceBL = distanceBL;
             }
+
+            public bool Points => action == Action.Click || action == Action.DoubleClick || action == Action.Hold || action == Action.Drag;
         }
 
-        public MovementControllerRB movement;
+        public OtterControls controls;
         [Tooltip("Empty = the built-in baseline script.")]
         public List<Segment> segments = new List<Segment>();
         [Tooltip("Fixed frames per second while playing back (Time.captureFramerate); 0 leaves the frame rate free.")]
         public int captureFramerate = 60;
+        [Tooltip("Buttons up at the start of each segment (s), so its press is a new one; a drag following a drag carries on instead.")]
+        public float lead = 0.05f;
+        [Tooltip("How long a click holds the button down, and the gap between a double click's two clicks (s).")]
+        public float tap = 0.08f;
+        public float gap = 0.1f;
+        [Tooltip("Usual distance from the otter (body lengths) of a click or long press, and of a drag's pointer.")]
+        public float clickDistanceBL = 2f;
+        public float dragDistanceBL = 1.5f;
 
-        public bool Held { get; private set; }
+        public bool Left { get; private set; }
+        public bool Right { get; private set; }
         public Vector2 ScreenPosition { get; private set; }
         public bool Finished { get; private set; }
         public int SegmentIndex { get; private set; } = -1;
@@ -58,106 +67,105 @@ namespace OtterLocomotion.Testing
         private float startTime;
         private int previousCaptureFramerate;
 
-        /// <summary>Straight runs, swim and sprint turns of 90 and 170 degrees, a coast to stop and an in-place pivot.</summary>
+        /// <summary>
+        /// Every gear and gesture of the controls once: parked clicks and a drag, the double clicks up to slow and to
+        /// cruising, turns and clicks in each, the long-press sprint into the wave, a jump, the glide out of it, the
+        /// right tap down and the brake to a stop.
+        /// </summary>
         public static List<Segment> BaselineScript() => new List<Segment>
         {
-            new Segment("idle", 1.0f, Zone.Release, 0f),
-            new Segment("swim straight", 2.5f, Zone.Swim, 0f),
-            new Segment("swim turn left 90", 3.0f, Zone.Swim, -90f),
-            new Segment("swim turn right 170", 3.5f, Zone.Swim, 80f),
-            new Segment("sprint straight", 2.5f, Zone.Sprint, 80f),
-            new Segment("sprint turn left 80", 3.0f, Zone.Sprint, 0f),
-            new Segment("release, coast to stop", 2.5f, Zone.Release, 0f),
-            new Segment("aim pivot right 90", 2.5f, Zone.Aim, 90f),
-            new Segment("release", 1.5f, Zone.Release, 90f),
+            new Segment("parked: idle", 1.0f, Action.Idle),
+            new Segment("parked: click ahead, one kick", 2.0f, Action.Click, 0f),
+            new Segment("parked: click right 90, turn and kick", 2.5f, Action.Click, 90f),
+            new Segment("parked: drag left 90, small arc", 2.5f, Action.Drag, 0f),
+            new Segment("parked: double click, slow", 3.0f, Action.DoubleClick, 0f),
+            new Segment("slow: straight on the back", 2.5f, Action.Idle),
+            new Segment("slow: drag right 90", 3.0f, Action.Drag, 90f),
+            new Segment("slow: click left 45, kick", 2.0f, Action.Click, 45f),
+            new Segment("slow: double click, cruise", 3.0f, Action.DoubleClick, 45f),
+            new Segment("cruise: straight on the belly", 2.5f, Action.Idle),
+            new Segment("cruise: drag left 90", 3.0f, Action.Drag, -45f),
+            new Segment("cruise: long press, sprint", 3.5f, Action.Hold, -45f),
+            new Segment("sprint: let go in the wave", 0.3f, Action.Idle),
+            new Segment("sprint: double click, jump", 1.2f, Action.DoubleClick, -45f),
+            new Segment("sprint: glide out of the wave", 3.0f, Action.Idle),
+            new Segment("cruise: right tap, slow", 3.0f, Action.RightTap),
+            new Segment("slow: right hold, brake", 2.0f, Action.RightHold),
+            new Segment("parked: rest", 1.5f, Action.Idle),
         };
 
-        /// <summary>
-        /// Small (20°) and large (120° / 160°) turns each way inside the inner ring (in place), between the rings
-        /// (swimming, on the back) and outside the outer ring (sprinting, prone), plus a gentle sweep in 15° steps.
-        /// </summary>
+        /// <summary>Small (20°) and large (120° / 160°) drags each way in every gear, plus a gentle sweep in 15° steps cruising.</summary>
         public static List<Segment> TurnScript() => new List<Segment>
         {
-            new Segment("rest", 1.5f, Zone.Release, 0f),
-            new Segment("in ring: small left 20", 1.5f, Zone.Aim, -20f),
-            new Segment("in ring: small right 20", 1.5f, Zone.Aim, 0f),
-            new Segment("in ring: large right 120", 2.5f, Zone.Aim, 120f),
-            new Segment("in ring: large left 160", 3.0f, Zone.Aim, -40f),
-            new Segment("release", 1.0f, Zone.Release, -40f),
-            new Segment("swim: straight", 2.5f, Zone.Swim, -40f),
-            new Segment("swim: small left 20", 2.0f, Zone.Swim, -60f),
-            new Segment("swim: small right 20", 2.0f, Zone.Swim, -40f),
-            new Segment("swim: large right 120", 3.0f, Zone.Swim, 80f),
-            new Segment("swim: large left 160", 3.5f, Zone.Swim, -80f),
-            new Segment("swim: sweep right 15 (1/4)", 0.7f, Zone.Swim, -65f),
-            new Segment("swim: sweep right 15 (2/4)", 0.7f, Zone.Swim, -50f),
-            new Segment("swim: sweep right 15 (3/4)", 0.7f, Zone.Swim, -35f),
-            new Segment("swim: sweep right 15 (4/4)", 0.7f, Zone.Swim, -20f),
-            new Segment("sprint: straight", 2.5f, Zone.Sprint, -20f),
-            new Segment("sprint: small left 20", 2.0f, Zone.Sprint, -40f),
-            new Segment("sprint: small right 20", 2.0f, Zone.Sprint, -20f),
-            new Segment("sprint: large right 120", 3.0f, Zone.Sprint, 100f),
-            new Segment("sprint: large left 160", 3.5f, Zone.Sprint, -60f),
-            new Segment("release, coast", 2.5f, Zone.Release, -60f),
+            new Segment("parked: rest", 1.0f, Action.Idle),
+            new Segment("parked: small left 20", 1.5f, Action.Drag, -20f),
+            new Segment("parked: small right 20", 1.5f, Action.Drag, 0f),
+            new Segment("parked: large right 120", 2.5f, Action.Drag, 120f),
+            new Segment("parked: large left 160", 3.0f, Action.Drag, -40f),
+            new Segment("parked: let go", 1.0f, Action.Idle),
+            new Segment("parked: double click, slow", 2.5f, Action.DoubleClick, -40f),
+            new Segment("slow: small left 20", 2.0f, Action.Drag, -60f),
+            new Segment("slow: small right 20", 2.0f, Action.Drag, -40f),
+            new Segment("slow: large right 120", 3.0f, Action.Drag, 80f),
+            new Segment("slow: large left 160", 3.5f, Action.Drag, -80f),
+            new Segment("slow: let go", 1.0f, Action.Idle),
+            new Segment("slow: double click, cruise", 3.0f, Action.DoubleClick, -80f),
+            new Segment("cruise: small right 20", 2.0f, Action.Drag, -60f),
+            new Segment("cruise: small left 20", 2.0f, Action.Drag, -80f),
+            new Segment("cruise: large right 120", 3.0f, Action.Drag, 40f),
+            new Segment("cruise: large left 160", 3.5f, Action.Drag, -120f),
+            new Segment("cruise: sweep right 15 (1/4)", 0.7f, Action.Drag, -105f),
+            new Segment("cruise: sweep right 15 (2/4)", 0.7f, Action.Drag, -90f),
+            new Segment("cruise: sweep right 15 (3/4)", 0.7f, Action.Drag, -75f),
+            new Segment("cruise: sweep right 15 (4/4)", 0.7f, Action.Drag, -60f),
+            new Segment("cruise: let go", 1.0f, Action.Idle),
+            new Segment("cruise: long press, sprint", 3.0f, Action.Hold, -60f),
+            new Segment("sprint: large right 120 in the wave", 2.0f, Action.Drag, 60f),
+            new Segment("sprint: let go, glide", 2.5f, Action.Idle),
         };
 
-        /// <summary>Long straight runs at each speed: on the back, the sprint's build-up and roll, prone sprint, prone cruise, then the glide to a stop.</summary>
+        /// <summary>Long straight runs in each gear: a parked kick's glide, slow on the back, cruising, the sprint into the wave, its glide, the brake.</summary>
         public static List<Segment> SpeedScript() => new List<Segment>
         {
-            new Segment("idle", 1.0f, Zone.Release, 0f),
-            new Segment("swim on the back", 5.0f, Zone.Swim, 0f),
-            new Segment("sprint: build up on the back, roll, sprint prone", 6.0f, Zone.Sprint, 0f),
-            new Segment("back into the swim ring: prone cruise", 5.0f, Zone.Swim, 0f),
-            new Segment("release: glide, stop, supine", 4.0f, Zone.Release, 0f),
+            new Segment("parked: idle", 1.0f, Action.Idle),
+            new Segment("parked: click ahead, kick and glide", 3.0f, Action.Click, 0f),
+            new Segment("parked: double click, slow", 0.6f, Action.DoubleClick, 0f),
+            new Segment("slow: on the back", 5.0f, Action.Idle),
+            new Segment("slow: double click, cruise", 0.6f, Action.DoubleClick, 0f),
+            new Segment("cruise: on the belly", 5.0f, Action.Idle),
+            new Segment("cruise: long press, sprint into the wave", 6.0f, Action.Hold, 0f),
+            new Segment("sprint: let go, slow out of the wave", 4.0f, Action.Idle),
+            new Segment("cruise: right hold, brake", 2.0f, Action.RightHold),
+            new Segment("parked: rest", 2.0f, Action.Idle),
         };
 
         public static List<Segment> Script(string name) => name switch
         {
-            "posture" => PostureScript(),
             "turns" => TurnScript(),
             "speeds" => SpeedScript(),
             _ => BaselineScript(),
         };
 
-        /// <summary>Exercises every posture rule: the sprint build-up, prone held through pulling back and turning until it stops, manual toggles while swimming and at rest.</summary>
-        public static List<Segment> PostureScript() => new List<Segment>
-        {
-            new Segment("rest (expect supine)", 1.5f, Zone.Release, 0f),
-            new Segment("swim mid-ring: stays supine, eases to cap", 3.0f, Zone.Swim, 0f),
-            new Segment("arrow out to 98%, still between the rings: stays supine", 2.0f, Zone.Swim, 0f, reach: 0.98f),
-            new Segment("sprint: speeds up on its back, then prone", 2.5f, Zone.Sprint, 0f),
-            new Segment("arrow back into the swim ring: stays prone", 2.5f, Zone.Swim, 0f),
-            new Segment("prone swim turn right 120: stays prone", 3.0f, Zone.Swim, 120f),
-            new Segment("aim in the inner ring: stops, then supine", 3.5f, Zone.Aim, 120f),
-            new Segment("F while swimming -> prone, held", 2.5f, Zone.Swim, 120f, pressFlip: true),
-            new Segment("release: glide, then supine", 3.0f, Zone.Release, 120f),
-            new Segment("F at rest -> prone", 1.5f, Zone.Release, 120f, pressFlip: true),
-            new Segment("aim pivot left 90: stays prone (it has not swum)", 2.5f, Zone.Aim, 30f),
-            new Segment("sprint: already prone", 2.0f, Zone.Sprint, 30f),
-            new Segment("sprint turn left 120: stays prone", 3.0f, Zone.Sprint, -90f),
-            new Segment("release: stops, then supine", 2.5f, Zone.Release, -90f),
-        };
-
         private void Start()
         {
-            if (movement == null) movement = FindObjectOfType<MovementControllerRB>();
-            if (movement == null)
+            if (controls == null) controls = FindObjectOfType<OtterControls>();
+            if (controls == null)
             {
-                Debug.LogWarning("[OtterInputPlayback] No MovementControllerRB found; playback disabled.", this);
+                Debug.LogWarning("[OtterInputPlayback] No OtterControls found; playback disabled.", this);
                 enabled = false;
                 return;
             }
             if (segments.Count == 0) segments = BaselineScript();
-            StartYaw = movement.transform.eulerAngles.y;
+            StartYaw = controls.transform.eulerAngles.y;
             previousCaptureFramerate = Time.captureFramerate;
             if (captureFramerate > 0) Time.captureFramerate = captureFramerate;
-            movement.PointerOverride = this;
+            controls.PointerOverride = this;
             startTime = Time.time;
         }
 
         private void Update()
         {
-            if (Finished || movement == null) return;
+            if (Finished || controls == null) return;
             float t = Time.time - startTime;
             int index = 0;
             float end = 0f;
@@ -168,7 +176,7 @@ namespace OtterLocomotion.Testing
             }
             if (index >= segments.Count)
             {
-                Held = false;
+                Left = Right = false;
                 Finished = true;
                 return;
             }
@@ -176,49 +184,52 @@ namespace OtterLocomotion.Testing
             {
                 SegmentIndex = index;
                 SegmentStartTime = Time.time;
-                if (segments[index].pressFlip)
-                {
-                    var brain = movement.GetComponent<OtterLocomotionBrain>();
-                    if (brain != null) brain.RequestPostureToggle();
-                }
             }
+
             var s = segments[index];
-            Held = s.zone != Zone.Release;
-            if (Held) ScreenPosition = ToScreen(TargetYaw(index), s.zone, s.reach);
+            float u = Time.time - SegmentStartTime;
+            bool carryOn = s.action == Action.Drag && index > 0 && segments[index - 1].action == Action.Drag;
+            bool wasLeft = Left;
+            bool InTap(float from) => u >= from && u < from + tap;
+            Left = s.action switch
+            {
+                Action.Click => InTap(lead),
+                Action.DoubleClick => InTap(lead) || InTap(lead + tap + gap),
+                Action.Hold => u >= lead,
+                Action.Drag => carryOn || u >= lead,
+                _ => false,
+            };
+            Right = s.action switch
+            {
+                Action.RightTap => InTap(lead),
+                Action.RightHold => u >= lead,
+                _ => false,
+            };
+
+            Vector3 at = controls.transform.position;
+            if (s.Points)
+            {
+                float distance = s.distanceBL > 0f ? s.distanceBL : s.action == Action.Drag ? dragDistanceBL : clickDistanceBL;
+                var brain = controls.brain;
+                float length = brain != null && brain.BodyLength > 0f ? brain.BodyLength : 0.4f;
+                at += Quaternion.Euler(0f, TargetYaw(index), 0f) * Vector3.forward * (distance * length);
+            }
+            // a drag takes hold of the otter as the button goes down
+            if (s.action == Action.Drag && Left && !wasLeft) at = controls.GrabPoint;
+            ScreenPosition = ToScreen(at);
         }
 
         private void OnDisable()
         {
-            if (movement != null && ReferenceEquals(movement.PointerOverride, this)) movement.PointerOverride = null;
+            if (controls != null && ReferenceEquals(controls.PointerOverride, this)) controls.PointerOverride = null;
             Time.captureFramerate = previousCaptureFramerate;
         }
 
-        // Inverse of MovementControllerRB.ScreenDirToWorldXZ: the screen direction whose flattened camera-space image
-        // points along the world yaw, at the requested reach or else the middle of the requested ring zone.
-        private Vector2 ToScreen(float yawDeg, Zone zone, float reach)
+        private Vector2 ToScreen(Vector3 world)
         {
-            var ui = movement.RingUI;
-            var cam = movement.InputCamera != null ? movement.InputCamera : Camera.main;
-            Vector3 w = Quaternion.Euler(0f, yawDeg, 0f) * Vector3.forward;
-            Vector2 dir = Vector2.up;
-            if (cam != null)
-            {
-                Vector3 r = cam.transform.right, u = cam.transform.up;
-                float det = r.x * u.z - u.x * r.z;
-                if (Mathf.Abs(det) > 1e-6f)
-                    dir = new Vector2((w.x * u.z - u.x * w.z) / det, (r.x * w.z - w.x * r.z) / det).normalized;
-            }
-            float inner = ui != null ? ui.InnerRadiusPx : 120f;
-            float outer = ui != null ? ui.OuterRadiusPx : 260f;
-            float radius = reach > 0f ? outer * reach : zone switch
-            {
-                Zone.Aim => inner * 0.5f,
-                Zone.Swim => (inner + outer) * 0.5f,
-                Zone.Sprint => outer * 1.25f,
-                _ => 0f,
-            };
-            Vector2 center = ui != null ? ui.ScreenCenterPx : new Vector2(Screen.width * 0.5f, Screen.height * 0.5f);
-            return center + dir * radius;
+            var cam = controls.inputCamera != null ? controls.inputCamera : Camera.main;
+            world.y = controls.waterLevel;
+            return cam != null ? (Vector2)cam.WorldToScreenPoint(world) : Vector2.zero;
         }
     }
 }

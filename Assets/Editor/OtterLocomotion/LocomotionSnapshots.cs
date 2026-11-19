@@ -64,34 +64,36 @@ namespace OtterLocomotion.EditorTools
         /// <summary>Moments to capture: segment index and seconds into it, matching OtterInputPlayback's scripts, in order and not overlapping.</summary>
         public static Shot[] For(string script) => script switch
         {
-            "posture" => new Shot[0],
             "speeds" => new[]
             {
-                new Shot(1, 4.0f, "1_supine_cruise_feet", 8, 0.06f),
-                new Shot(2, 1.04f, "2_prone_accel_feet", 8, 0.04f),
-                new Shot(2, 5.0f, "2_prone_sprint_feet", 8, 0.04f),
-                new Shot(3, 4.0f, "3_prone_cruise_feet", 8, 0.05f),
+                new Shot(1, 0.1f, "1_park_kick_feet", 8, 0.06f),
+                new Shot(3, 4.0f, "3_slow_feet", 8, 0.06f),
+                new Shot(5, 4.0f, "5_cruise_feet", 8, 0.05f),
+                new Shot(6, 0.5f, "6_sprint_kick_feet", 8, 0.04f),
+                new Shot(6, 5.0f, "6_sprint_wave_feet", 8, 0.04f),
             },
             "turns" => new[]
             {
-                new Shot(2, 0.15f, "02_ring_small_right_feet", 8, 0.06f),
-                new Shot(3, 0.15f, "03_ring_large_right_feet", 8, 0.08f),
-                new Shot(6, 1.5f, "06_swim_straight_feet", 8, 0.1f),
-                new Shot(7, 0.2f, "07_swim_small_left_feet", 8, 0.1f),
-                new Shot(9, 0.3f, "09_swim_large_right_feet", 8, 0.1f),
-                new Shot(15, 1.6f, "15_sprint_straight_feet", 8, 0.08f),
-                new Shot(18, 0.3f, "18_sprint_large_right_feet", 8, 0.08f),
+                new Shot(3, 0.15f, "03_park_large_right_feet", 8, 0.08f),
+                new Shot(9, 0.3f, "09_slow_large_right_feet", 8, 0.1f),
+                new Shot(15, 0.3f, "15_cruise_large_right_feet", 8, 0.1f),
+                new Shot(23, 0.3f, "23_sprint_large_right_feet", 8, 0.08f),
             },
             _ => new[]
             {
-                new Shot(1, 1.5f, "1_swim_straight"),
-                new Shot(1, 1.55f, "1_swim_straight_feet", 8, 0.1f),
-                new Shot(1, 1.28f, "1_swim_snap_feet", 8, 0.025f),
-                new Shot(2, 0.30f, "2_swim_turn_a"), new Shot(2, 0.42f, "2_swim_turn_b"), new Shot(2, 0.54f, "2_swim_turn_c"),
-                new Shot(4, 1.6f, "4_sprint_straight_feet", 8, 0.08f),
-                new Shot(5, 0.30f, "5_sprint_turn_a"), new Shot(5, 0.45f, "5_sprint_turn_b"),
-                new Shot(7, 0.15f, "7_pivot_a"), new Shot(7, 0.30f, "7_pivot_b"), new Shot(7, 0.45f, "7_pivot_c"),
-                new Shot(7, 0.5f, "7_pivot_feet", 8, 0.06f),
+                new Shot(1, 0.1f, "01_park_kick_feet", 8, 0.06f),
+                new Shot(2, 0.3f, "02_park_click_turn_a"), new Shot(2, 0.6f, "02_park_click_turn_b"), new Shot(2, 0.9f, "02_park_click_turn_c"),
+                new Shot(5, 1.5f, "05_slow_straight"),
+                new Shot(5, 1.55f, "05_slow_straight_feet", 8, 0.1f),
+                new Shot(6, 0.3f, "06_slow_turn_a"), new Shot(6, 0.6f, "06_slow_turn_b"),
+                new Shot(8, 0.3f, "08_roll_prone_a"), new Shot(8, 0.6f, "08_roll_prone_b"), new Shot(8, 0.9f, "08_roll_prone_c"),
+                new Shot(9, 1.5f, "09_cruise_straight"),
+                new Shot(9, 1.55f, "09_cruise_straight_feet", 8, 0.08f),
+                new Shot(10, 0.3f, "10_cruise_turn_a"), new Shot(10, 0.6f, "10_cruise_turn_b"),
+                new Shot(11, 0.4f, "11_sprint_kick_feet", 8, 0.06f),
+                new Shot(11, 2.4f, "11_sprint_wave_feet", 8, 0.08f),
+                new Shot(11, 3.2f, "11_sprint_wave"),
+                new Shot(15, 0.3f, "15_roll_supine_a"), new Shot(15, 0.6f, "15_roll_supine_b"),
             },
         };
 

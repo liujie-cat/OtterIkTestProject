@@ -37,7 +37,7 @@ namespace OtterLocomotion.EditorTools
                     gestures.Clear();
                     Vector3 at = onOtter ? Vector3.zero : point;
                     pointer.Step(gs, time, left, right, at, onOtter, gestures);
-                    gears.Step(settings, gs, gestures, time, at, Body, events);
+                    gears.Step(settings, gs, gestures, time, at, onOtter, Body, events);
                     time += Frame;
                 }
                 return this;

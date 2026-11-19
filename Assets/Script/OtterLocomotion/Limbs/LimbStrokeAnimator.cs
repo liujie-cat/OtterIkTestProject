@@ -481,7 +481,7 @@ namespace OtterLocomotion
         private void Update()
         {
             if (brain == null || !brain.HasLimbGeometry) return;
-            float goal = fluke.enabled && brain.Rhythm.HindTogether ? 1f - brain.Posture.SupineFraction : 0f;
+            float goal = fluke.enabled && brain.Intent.gait == Gait.Dolphin ? 1f - brain.Posture.SupineFraction : 0f;
             Fluke = Mathf.Lerp(Fluke, goal, 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, fluke.blendTime)));
             // the hind feet keep one beat when they kick together; the left one's unless it is resting
             var a = brain.Rhythm.limbs[(int)LimbId.HL];

@@ -8,10 +8,9 @@ namespace OtterLocomotion
 {
     /// <summary>
     /// Runs the locomotion pipeline once per physics step, in causal order:
-    /// intent + measured state -> posture -> demand -> allocation -> stroke rhythm (-> forces, in a later stage).
-    /// Intent comes from MovementControllerRB's ring input. Nothing here moves the body yet: it computes what the body
-    /// would need, which limb would supply it and each limb's stroke cycle (drawn by LimbStrokeAnimator), so it can
-    /// run alongside the existing controller.
+    /// intent + measured state -> posture -> demand -> allocation -> stroke rhythm. Intent comes from OtterControls'
+    /// gears. It does not push the body itself: the strokes it times (drawn by LimbStrokeAnimator) push it through
+    /// the water (WebThrust), and OtterControls turns it at the yaw rate asked for here.
     /// </summary>
     [DefaultExecutionOrder(150)]
     [DisallowMultipleComponent]
@@ -19,18 +18,17 @@ namespace OtterLocomotion
     {
         [Header("References (found on this object when empty)")]
         public Rigidbody body;
-        public MovementControllerRB intentSource;
+        public OtterControls controls;
         public WaterDrag waterDrag;
-
-        [Header("Speeds (body lengths per second)")]
-        [Tooltip("Speed asked for between the rings, swimming prone (on the back it is capped at postureSettings.supineMaxSpeedBL), and beyond the outer ring, in body lengths per second so it scales with the otter. The webs push the body to it through the water (WebThrust), so the kicks set how fast it goes. MovementControllerRB's own target speeds belong to its impulse kicks and are not used.")]
-        public float swimSpeedBL = 1.2f;
-        public float sprintSpeedBL = 2f;
         [Tooltip("Body length (m) assumed when the head or tail bone is not found.")]
         public float fallbackBodyLength = 0.4f;
 
+        [Header("Kicks")]
+        [Tooltip("A click's kick waits until the body faces within this angle (deg) of where it was clicked, or kickWait seconds at most.")]
+        public float kickAlignDeg = 30f;
+        public float kickWait = 0.6f;
+
         [Header("Posture")]
-        public KeyCode postureToggleKey = KeyCode.F;
         public PostureSettings postureSettings = new PostureSettings();
 
         [Header("Demand")]
@@ -78,15 +76,15 @@ namespace OtterLocomotion
         private readonly LimbRhythm rhythm = new LimbRhythm();
         private readonly LimbGeometry[] geometry = new LimbGeometry[OtterRig.LimbCount];
         private Vector3 centerOfMass;
-        private bool toggleRequested;
-
-        /// <summary>Same as pressing the posture key; for scripted input.</summary>
-        public void RequestPostureToggle() => toggleRequested = true;
+        private ControlEvent pendingKick;
+        private bool kickPending;
+        private float kickQueuedAt;
+        private string shiftReason = "initial";
 
         private void Awake()
         {
             if (body == null) body = GetComponent<Rigidbody>();
-            if (intentSource == null) intentSource = GetComponent<MovementControllerRB>();
+            if (controls == null) controls = GetComponent<OtterControls>();
             if (waterDrag == null) waterDrag = GetComponent<WaterDrag>();
             postureMachine.Changed += OnPostureChanged;
         }
@@ -99,12 +97,28 @@ namespace OtterLocomotion
 
         private void OnEnable()
         {
+            if (controls != null) controls.Control += OnControl;
             if (body == null) return;
             estimator.Reset(body);
-            postureMachine.Reset(postureSettings);
+            postureMachine.Reset(GearMachine.PostureOf(controls != null ? controls.initialGear : Gear.Park));
             demandLayer.Reset(estimator.State);
             allocator.Reset();
             rhythm.Reset();
+            kickPending = false;
+        }
+
+        private void OnDisable()
+        {
+            if (controls != null) controls.Control -= OnControl;
+        }
+
+        private void OnControl(ControlEvent e)
+        {
+            if (e.kind == ControlEventKind.Shift) shiftReason = e.reason;
+            if (e.kind != ControlEventKind.Kick) return;
+            pendingKick = e;
+            kickPending = true;
+            kickQueuedAt = Time.time;
         }
 
         // Body frame: x forward, y right, z up, metres from the rigidbody origin.
@@ -150,11 +164,6 @@ namespace OtterLocomotion
             BodyLength = head != null && tail != null ? Vector3.Distance(head.position, tail.position) * headLengthRatio : 0f;
         }
 
-        private void Update()
-        {
-            if (Input.GetKeyDown(postureToggleKey)) toggleRequested = true;
-        }
-
         private void FixedUpdate()
         {
             if (body == null) return;
@@ -164,43 +173,39 @@ namespace OtterLocomotion
             Intent = ReadIntent();
 
             float length = Parameters.bodyLength;
-            postureMachine.Step(postureSettings, Intent, state, toggleRequested, Demand.speedTarget, Demand.yawRateTarget, length, dt);
-            toggleRequested = false;
+            string reason = Intent.posture != postureMachine.Current ? $"{Intent.gear} ({shiftReason})" : null;
+            postureMachine.Step(postureSettings, Intent.posture, reason, Demand.yawRateTarget, dt);
 
-            // sprinting lifts the top speed on the back, so the otter speeds up on its back until it rolls over
             float supine = postureMachine.SupineFraction;
-            float supineCapped = Intent.band == SpeedBand.Sprint ? Intent.requestedSpeed : Mathf.Min(Intent.requestedSpeed, postureSettings.supineMaxSpeedBL * length);
-            float speedCap = Mathf.Lerp(Intent.requestedSpeed, supineCapped, supine);
             float riseRate = Mathf.Lerp(demandSettings.speedRiseRateBL, postureSettings.supineRiseRateBL, supine) * length;
             float kickSpeed = Mathf.Lerp(demandSettings.proneKickSpeedBL, demandSettings.supineKickSpeedBL, supine) * length;
-            var demand = demandLayer.Step(demandSettings, Intent, state, Parameters, speedCap, riseRate, kickSpeed, 2f * rhythmSettings.hindFullForce, dt);
+            var demand = demandLayer.Step(demandSettings, Intent, state, Parameters, riseRate, kickSpeed, 2f * rhythmSettings.hindFullForce, dt);
 
             if (!HasLimbGeometry) return;
             float speedTargetBL = demand.speedTarget / length;
             actuators.Build(actuatorSettings, geometry, centerOfMass, postureMachine.RollDeg, postureMachine.SupineFraction, Parameters.mass, speedTargetBL);
             allocator.Solve(allocatorSettings, actuators, demand, Parameters);
-            rhythm.Step(rhythmSettings, allocator, speedTargetBL, supine < 0.5f, dt);
+            // a click's kick pushes off once the body faces where it was clicked
+            if (kickPending && (Vector3.Angle(state.forward, pendingKick.direction) <= kickAlignDeg || Time.time - kickQueuedAt >= kickWait))
+            {
+                rhythm.Kick(pendingKick.strength);
+                kickPending = false;
+            }
+            rhythm.Step(rhythmSettings, allocator, Intent.gait, dt);
         }
 
         private LocomotionIntent ReadIntent()
         {
-            if (intentSource == null || !intentSource.IsDragging())
-                return new LocomotionIntent { band = SpeedBand.Rest, heading = estimator.State.forward };
-            var band = intentSource.GetZone() switch
-            {
-                MovementControllerRB.MoveZone.Aim => SpeedBand.Aim,
-                MovementControllerRB.MoveZone.Swim => SpeedBand.Swim,
-                MovementControllerRB.MoveZone.Sprint => SpeedBand.Sprint,
-                _ => SpeedBand.Rest,
-            };
-            Vector3 dir = intentSource.GetWorldDir();
-            dir.y = 0f;
+            if (controls == null || !controls.isActiveAndEnabled)
+                return new LocomotionIntent { gear = Gear.Park, gait = Gait.Rest, posture = postureMachine.Current, heading = estimator.State.forward };
+            var g = controls.Gears;
             return new LocomotionIntent
             {
-                band = band,
-                heading = dir.sqrMagnitude > 1e-8f ? dir.normalized : estimator.State.forward,
-                requestedSpeed = (band == SpeedBand.Swim ? swimSpeedBL : band == SpeedBand.Sprint ? sprintSpeedBL : 0f) * Parameters.bodyLength,
-                reach = intentSource.GetReach01(),
+                gear = g.Gear,
+                gait = g.Gait,
+                posture = g.Posture,
+                heading = g.Heading,
+                requestedSpeed = g.SpeedBL * Parameters.bodyLength,
             };
         }
 
@@ -272,7 +277,7 @@ namespace OtterLocomotion
             string flip = postureMachine.IsFlipping ? $" rolling {postureMachine.FlipProgress:P0}" : "";
             Handles.Label(o + Vector3.up * 0.3f,
                 $"{postureMachine.Current}{flip}  roll {postureMachine.RollDeg:F0}\n" +
-                $"{Intent.band}  u {s.surge:F2} -> {d.speedTarget:F2} (cap {d.speedCap:F2})\n" +
+                $"{Intent.gear} {Intent.gait}  u {s.surge:F2} -> {d.speedTarget:F2} (asked {d.requestedSpeed:F2})\n" +
                 $"heading err {d.headingErrorDeg:F0}  r {s.yawRate:F0} -> {d.yawRateTarget:F0} (lim {d.yawRateLimit:F0})\n" +
                 $"demand  Fx {d.surgeForce:F1} N  Fy {d.swayForce:F1} N  Mz {d.yawMoment:F2} N·m  bank {d.bankTargetDeg:F0}" +
                 allocation);
