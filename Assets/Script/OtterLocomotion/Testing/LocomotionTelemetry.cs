@@ -166,7 +166,7 @@ namespace OtterLocomotion.Testing
         private TailRudder tail;
         private SpineKickSway sway;
         private WebThrust webThrust;
-        private string footInfo = "";
+        private string footInfo = "", floatInfo = "";
         private bool kickThisFrame, pulseThisFrame;
         private float prevYaw;
         private bool hasPrevYaw;
@@ -213,6 +213,14 @@ namespace OtterLocomotion.Testing
             hip = OtterRig.FindActiveBone(controls.transform, OtterRig.Hip);
             chest = OtterRig.FindActiveBone(controls.transform, OtterRig.Chest);
             head = OtterRig.FindActiveBone(controls.transform, OtterRig.Head);
+            var water = FindObjectOfType<WaterReference>();
+            float Above(float y) => (y - (water != null ? water.surfaceY : 0f)) * 100f;
+            var skins = controls.GetComponentsInChildren<SkinnedMeshRenderer>().Where(r => r.enabled && r.gameObject.activeInHierarchy).ToArray();
+            var rb0 = controls.GetComponent<Rigidbody>();
+            floatInfo = $"body {Above(b0.position.y):F1}" + (rb0 != null ? $", centre of mass {Above(rb0.worldCenterOfMass.y):F1}" : "") +
+                        (hip != null ? $", hip {Above(hip.position.y):F1}" : "") + (chest != null ? $", chest {Above(chest.position.y):F1}" : "") +
+                        (head != null ? $", head {Above(head.position.y):F1}" : "") +
+                        (skins.Length > 0 ? $", skin {Above(skins.Min(r => r.bounds.min.y)):F1}..{Above(skins.Max(r => r.bounds.max.y)):F1}" : "");
             var headGuide = FindObjectOfType<HeadIKGuideFromArrowRB>();
             if (headGuide != null) guide = headGuide.GetHeadIKGuide();
             if (brain == null) brain = controls.GetComponent<OtterLocomotionBrain>();
@@ -582,6 +590,7 @@ namespace OtterLocomotion.Testing
             sb.AppendLine("# times in seconds from segment start, a turn's from when the controls ask for it; 'lead' = body reaction time minus limb reaction time (+ = limbs first);" +
                           " with the stroke rhythm the limb time is the first turning power stroke");
             sb.AppendLine(feet.Count > 0 ? $"# hind feet at start (body axes): {footInfo}" : "# hind feet: no web found in the skinned mesh");
+            sb.AppendLine($"# afloat at start (cm above the water surface): {floatInfo}");
             if (brain != null && brain.HasLimbGeometry)
             {
                 var p = brain.Parameters;

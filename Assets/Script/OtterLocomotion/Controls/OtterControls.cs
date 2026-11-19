@@ -7,11 +7,11 @@ namespace OtterLocomotion
     /// <summary>
     /// The player's controls (行动操作): the mouse's gestures (PointerGestures) shift the gears (GearMachine), which set
     /// the gait, heading and speed the brain swims to; a click's kick, a jump and each shift go out as Control events.
-    /// A right click on the otter picks it up and a left click on it lets go; picked up, the pointer is its guide point,
-    /// which the head looks at and the body turns after. Everything else is done on the water. Turns the body toward
-    /// the heading at the brain's yaw rate target and brakes it while the right button is held. Takes over from
-    /// MovementControllerRB: that stays off, its ring UI hidden, and its getters report these controls to the older
-    /// head, spine and camera scripts.
+    /// A right click inside the ring round the otter picks it up and a left click inside it lets go; picked up, the
+    /// pointer outside the ring is its guide point, which the head looks at and the body turns after. Everything else
+    /// is done on the water. Turns the body toward the heading at the brain's yaw rate target and brakes it while the
+    /// right button is held. Takes over from MovementControllerRB: that stays off, its ring UI hidden, and its getters
+    /// report these controls to the older head, spine and camera scripts.
     /// </summary>
     [DefaultExecutionOrder(200)]
     [DisallowMultipleComponent]
@@ -30,10 +30,8 @@ namespace OtterLocomotion
         public OtterLocomotionBrain brain;
         public StrokePropulsion strokes;
         public MovementControllerRB legacy;
-        [Tooltip("Water surface height (m): the body floats at it and clicks land on it.")]
-        public float waterLevel = 0f;
-        [Tooltip("A press this far (m) outside the body's outline still lands on the otter.")]
-        public float grabMargin = 0.03f;
+        [Tooltip("The ring round the otter, from the middle of its back (body lengths): a press inside it lands on the otter, and selected, the pointer guides it from outside it.")]
+        public float ringRadiusBL = 0.6f;
         public Gear initialGear = Gear.Park;
         public GestureSettings gestures = new GestureSettings();
         public GearSettings gears = new GearSettings();
@@ -52,25 +50,32 @@ namespace OtterLocomotion
         /// <summary>Kicks, jumps and gear shifts, as they happen.</summary>
         public event Action<ControlEvent> Control;
         public event Action<Gesture> Gestured;
-        /// <summary>The pointer on the water, and whether it is on the otter, this frame.</summary>
+        /// <summary>The pointer at PointerY, and whether it is on the otter (inside the ring), this frame.</summary>
         public Vector3 PointerPoint { get; private set; }
         public bool PointerOverOtter { get; private set; }
         public bool LeftHeld { get; private set; }
         public bool RightHeld { get; private set; }
-        /// <summary>A point on the otter, on the water: the middle of its back.</summary>
+        /// <summary>
+        /// The level the pointer is read on, and the ring and guide drawn: through the middle of the otter's back, where
+        /// it is seen. It rides well above the water, and under a camera looking down at a slant a press on its back
+        /// would land on the water beside it.
+        /// </summary>
+        public float PointerY => transform.position.y + backHeight;
+        /// <summary>The middle of its back, at the pointer's level: the ring's centre.</summary>
         public Vector3 GrabPoint => chest != null && hip != null
-            ? Flat(0.5f * (chest.position + hip.position)) + Vector3.up * waterLevel
-            : Flat(transform.position) + Vector3.up * waterLevel;
-        /// <summary>The head, on the water: where the guide is seen from.</summary>
-        public Vector3 HeadPoint => (head != null ? Flat(head.position) : Flat(transform.position + transform.forward * (0.4f * BodyLength))) + Vector3.up * waterLevel;
+            ? Flat(0.5f * (chest.position + hip.position)) + Vector3.up * PointerY
+            : Flat(transform.position) + Vector3.up * PointerY;
+        public float RingRadius => ringRadiusBL * BodyLength;
+        /// <summary>The head, at the pointer's level: where the guide is seen from.</summary>
+        public Vector3 HeadPoint => (head != null ? Flat(head.position) : Flat(transform.position + transform.forward * (0.4f * BodyLength))) + Vector3.up * PointerY;
 
         private readonly PointerGestures pointer = new PointerGestures();
         private readonly GearMachine machine = new GearMachine();
         private readonly List<Gesture> gestureList = new List<Gesture>();
         private readonly List<ControlEvent> events = new List<ControlEvent>();
         private Rigidbody body;
-        private Transform head, chest, hip, tailRoot;
-        private float halfWidth;
+        private Transform head, chest, hip;
+        private float backHeight;
 
         private float BodyLength =>
             brain != null && brain.BodyLength > 0f ? brain.BodyLength : brain != null ? brain.fallbackBodyLength : 0.4f;
@@ -96,9 +101,8 @@ namespace OtterLocomotion
             head = OtterRig.FindActiveBone(transform, OtterRig.Head);
             chest = OtterRig.FindActiveBone(transform, OtterRig.Chest);
             hip = OtterRig.FindActiveBone(transform, OtterRig.Hip);
-            tailRoot = OtterRig.FindActiveBone(transform, OtterRig.TailRoot);
-            halfWidth = chest != null && hip != null && OtterRig.TryHalfExtents(hip, chest.position, hip.position, Vector3.up, out float w, out _)
-                ? w : 0.12f * BodyLength;
+            // once, at rest: the pointer's level should not bob with the strokes
+            backHeight = chest != null && hip != null ? 0.5f * (chest.position.y + hip.position.y) - transform.position.y : 0f;
         }
 
         private void OnEnable()
@@ -137,7 +141,7 @@ namespace OtterLocomotion
                 RightHeld = Input.GetMouseButton(1);
                 screen = Input.mousePosition;
             }
-            if (TryWaterPoint(screen, out var point)) PointerPoint = point;
+            if (TryPointerPoint(screen, out var point)) PointerPoint = point;
             PointerOverOtter = OverOtter(PointerPoint);
 
             gestureList.Clear();
@@ -179,33 +183,18 @@ namespace OtterLocomotion
             return new GearBody { position = body.position, head = HeadPoint, forward = transform.forward, speedBL = v.magnitude / BodyLength };
         }
 
-        private bool TryWaterPoint(Vector2 screen, out Vector3 point)
+        private bool TryPointerPoint(Vector2 screen, out Vector3 point)
         {
             point = default;
             var cam = inputCamera != null ? inputCamera : Camera.main;
             if (cam == null) return false;
             var ray = cam.ScreenPointToRay(screen);
-            if (!new Plane(Vector3.up, new Vector3(0f, waterLevel, 0f)).Raycast(ray, out float distance)) return false;
+            if (!new Plane(Vector3.up, new Vector3(0f, PointerY, 0f)).Raycast(ray, out float distance)) return false;
             point = ray.GetPoint(distance);
             return true;
         }
 
-        // within the body's outline seen from above: its half-width about the line from head to tail root
-        private bool OverOtter(Vector3 point)
-        {
-            if (head == null || chest == null || hip == null) return Flat(point - body.position).magnitude <= halfWidth + grabMargin;
-            Vector3 p = Flat(point);
-            float nearest = float.PositiveInfinity;
-            Transform[] line = tailRoot != null ? new[] { head, chest, hip, tailRoot } : new[] { head, chest, hip };
-            for (int i = 0; i + 1 < line.Length; i++)
-            {
-                Vector3 a = Flat(line[i].position), b = Flat(line[i + 1].position);
-                Vector3 ab = b - a;
-                float t = ab.sqrMagnitude > 1e-8f ? Mathf.Clamp01(Vector3.Dot(p - a, ab) / ab.sqrMagnitude) : 0f;
-                nearest = Mathf.Min(nearest, Vector3.Distance(p, a + ab * t));
-            }
-            return nearest <= halfWidth + grabMargin;
-        }
+        private bool OverOtter(Vector3 point) => Flat(point - GrabPoint).magnitude <= RingRadius;
 
         private static Vector3 Flat(Vector3 v) => new Vector3(v.x, 0f, v.z);
 

@@ -28,7 +28,7 @@ namespace OtterLocomotion.EditorTools
         internal static readonly (Type type, string title)[] Managed =
         {
             (typeof(OtterControls), "操作"),
-            (typeof(GuideArrow), "引导箭头"),
+            (typeof(ControlsOverlay), "选中圈和箭头"),
             (typeof(OtterLocomotionBrain), "运动大脑"),
             (typeof(LimbStrokeAnimator), "四肢划水"),
             (typeof(PostureFlipSync), "翻身同步"),
