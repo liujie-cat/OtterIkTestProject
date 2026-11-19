@@ -9,7 +9,9 @@ namespace OtterLocomotion
     /// <summary>
     /// Puts the hind legs' strokes on the spine, so the body moves with the legs. Kicking, each push the rhythm starts
     /// sends a wave packet along the spine (the harmonizer's ExpSpineKickWavePacketProvider), sized by the push and
-    /// lasting until the next one, so the body undulates in time with the feet. While LimbStrokeAnimator holds the
+    /// lasting until the next one, so the body undulates in time with the feet. On the back the packets fade out: lying
+    /// on its back the otter paddles with its feet and keeps its trunk straight, and as a packet bends the spine one way
+    /// only, pushes in quick succession would hold it bent into a bow. While LimbStrokeAnimator holds the
     /// hind legs out as a fluke, an ExpSpineHarmonicProvider pitches the spine up and down on the hind rhythm's beat
     /// instead, chest to hips, so the hips heave with the feet. The pulses KickEventBridge sends on the older movement
     /// controller's kick timing are held off meanwhile. Uses the harmonizer's harmonic provider, or adds one for this
@@ -30,6 +32,8 @@ namespace OtterLocomotion
         [Range(0f, 1f)] public float fullPulse = 1f;
         [Tooltip("Packet length as a share of the time until the next push (1 = each packet runs into the next).")]
         public float pulseLength = 0.8f;
+        [Tooltip("Packet strength on the back, as a share of that on the belly.")]
+        [Range(0f, 1f)] public float supinePulse = 0f;
         [Header("Fluke")]
         [Tooltip("Once the fluke is this far in the harmonic wave takes over from the packets.")]
         [Range(0f, 1f)] public float pulsesOff = 0.5f;
@@ -99,8 +103,10 @@ namespace OtterLocomotion
         {
             if (!pulseKicks || packet == null || OtterRig.IsFore(limb) || st.parking || st.drive <= 0f) return;
             if (animator == null || !animator.isActiveAndEnabled || animator.Fluke >= pulsesOff) return;
+            float strength = Mathf.Lerp(lightPulse, fullPulse, st.drive) * Mathf.Lerp(1f, supinePulse, brain.Posture.SupineFraction);
+            if (strength <= 1e-3f) return;
             float interval = (brain.Rhythm.HindTogether ? 1f : 0.5f) / Mathf.Max(0.1f, st.rate);
-            packet.TriggerKick(Mathf.Lerp(lightPulse, fullPulse, st.drive), Mathf.Clamp(interval * pulseLength, 0.15f, 1.2f));
+            packet.TriggerKick(strength, Mathf.Clamp(interval * pulseLength, 0.15f, 1.2f));
             Pulsed?.Invoke();
         }
 
