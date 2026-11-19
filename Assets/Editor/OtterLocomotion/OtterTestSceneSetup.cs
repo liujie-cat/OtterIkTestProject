@@ -53,14 +53,17 @@ namespace OtterLocomotion.EditorTools
         }
 
         [MenuItem("Tools/Otter Locomotion/Refresh Test Scene (no save)")]
-        static void RefreshMenu() => Refresh(resetSettings: true, save: false);
+        static void RefreshMenu() => Debug.Log("[Otter 测试场景] " + Refresh(resetSettings: true, save: false));
 
         [MenuItem("Tools/Otter Locomotion/Report Test Scene")]
         static void ReportMenu()
         {
-            var lines = Inspect(resetSettings: true, save: false).Select(c => $"{c.level,-7} {c.title}: {c.detail}");
+            var checks = Inspect(resetSettings: true, save: false);
+            var lines = checks.Select(c => $"{c.level,-7} {c.title}: {c.detail}").ToArray();
             Directory.CreateDirectory("Logs");
             File.WriteAllLines(Path.Combine("Logs", "OtterTestScene_Report.txt"), lines);
+            int off = checks.Count(c => c.level != Level.Ok);
+            Debug.Log($"[Otter 测试场景] 检查：{(off > 0 ? $"{off} 项要处理" : "全部正常")}\n" + string.Join("\n", lines));
         }
 
         [MenuItem("Tools/Otter Locomotion/Refresh Test Scene (no save)", true)]
@@ -162,11 +165,13 @@ namespace OtterLocomotion.EditorTools
         {
             if (EditorApplication.isPlayingOrWillChangePlaymode) return "Play 模式下不能刷新。";
             var log = new StringBuilder();
+            int changes = 0;
+            void Changed(string line) { log.AppendLine(line); changes++; }
             if (!IsTestSceneOpen)
             {
                 if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return "已取消：当前场景的改动未处理。";
                 EditorSceneManager.OpenScene(ScenePath);
-                log.AppendLine($"打开 {ScenePath}");
+                Changed($"打开 {ScenePath}");
             }
 
             Undo.IncrementCurrentGroup();
@@ -181,7 +186,8 @@ namespace OtterLocomotion.EditorTools
                 if (model == null) log.AppendLine("!! 找不到海獭模型资源，跳过移植");
                 else
                 {
-                    log.AppendLine("== 移植猫骨骼到海獭").AppendLine(SeaOtterRigTransplant.Transplant(cat, model, alignSpine: true, fitTargets: true));
+                    Changed("== 移植猫骨骼到海獭");
+                    log.AppendLine(SeaOtterRigTransplant.Transplant(cat, model, alignSpine: true, fitTargets: true));
                     otter = SeaOtterRigTransplant.FindOtterInstance();
                 }
             }
@@ -191,7 +197,11 @@ namespace OtterLocomotion.EditorTools
 
             if (otter != null)
             {
-                if (SeaOtterRigTransplant.ChainsOffRest(otter).Count > 0) log.AppendLine("== IK 归位").AppendLine(SeaOtterRigTransplant.Refit(otter));
+                if (SeaOtterRigTransplant.ChainsOffRest(otter).Count > 0)
+                {
+                    Changed("== IK 归位");
+                    log.AppendLine(SeaOtterRigTransplant.Refit(otter));
+                }
                 else log.AppendLine("IK 目标点都在静止姿态，无需归位");
             }
 
@@ -203,20 +213,20 @@ namespace OtterLocomotion.EditorTools
                 {
                     Undo.RecordObject(body, "Retire ring controls");
                     body.enabled = false;
-                    log.AppendLine("旧操作: 停用 MovementControllerRB");
+                    Changed("旧操作: 停用 MovementControllerRB");
                 }
                 var ring = RingUI(body);
                 if (ring != null && ring.enabled)
                 {
                     Undo.RecordObject(ring, "Retire ring controls");
                     ring.enabled = false;
-                    log.AppendLine($"旧操作: 停用环形 UI '{ring.name}'");
+                    Changed($"旧操作: 停用环形 UI '{ring.name}'");
                 }
                 if (HeadGuideOff(body))
                 {
                     Undo.RecordObject(ring.gameObject, "Keep the head guide");
                     ring.gameObject.SetActive(true);
-                    log.AppendLine($"头部引导: 重新激活 '{ring.name}'（头部 IK 引导点在它上面）");
+                    Changed($"头部引导: 重新激活 '{ring.name}'（头部 IK 引导点在它上面）");
                 }
                 foreach (var (type, title) in Managed)
                 {
@@ -224,14 +234,15 @@ namespace OtterLocomotion.EditorTools
                     if (component == null)
                     {
                         component = Undo.AddComponent(body.gameObject, type);
-                        log.AppendLine($"{title}: 添加到 '{body.name}'");
+                        Changed($"{title}: 添加到 '{body.name}'");
                     }
                     var wired = References(component, body, apply: true);
-                    if (wired.Count > 0) log.AppendLine($"{title}: 连接引用 " + string.Join(", ", wired));
+                    if (wired.Count > 0) Changed($"{title}: 连接引用 " + string.Join(", ", wired));
                     if (resetSettings)
                     {
                         var diffs = Differences(component, apply: true);
-                        log.AppendLine(diffs.Count > 0 ? $"{title}: 恢复代码默认值 " + string.Join(", ", diffs) : $"{title}: 参数已是代码默认值");
+                        if (diffs.Count > 0) Changed($"{title}: 恢复代码默认值 " + string.Join(", ", diffs));
+                        else log.AppendLine($"{title}: 参数已是代码默认值");
                     }
                 }
             }
@@ -244,6 +255,7 @@ namespace OtterLocomotion.EditorTools
             else if (scene.isDirty)
                 log.AppendLine("场景有未保存的改动（这次不保存）");
 
+            log.Insert(0, (changes > 0 ? $"刷新：改了 {changes} 处" : "刷新：场景已是最新，没有要改的") + "\n");
             Directory.CreateDirectory("Logs");
             File.WriteAllText(Path.Combine("Logs", LogFile), log.ToString());
             return log.ToString();

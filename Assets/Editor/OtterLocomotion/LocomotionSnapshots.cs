@@ -9,9 +9,10 @@ namespace OtterLocomotion.EditorTools
     /// the scene does not hide the limbs; the perspective ones look on from above and behind its left side, as from
     /// the Scene view, with WaterReference's grids and web trails and the controls' ring and guide arrow, so the body's
     /// motion can be set against the world, the strokes and where it is led. Single shots frame the whole body from
-    /// above (head up), from its left and in perspective; strips are contact sheets over a kick (frames left to right,
-    /// then the next row): close-ups of the hind feet from above, behind and the left, a perspective close-up riding
-    /// with the hips, and a perspective view held still in the world over the whole strip, which the otter swims
+    /// above (head up), from its left and in perspective, and add the game view: the whole scene through the camera the
+    /// controls read the pointer through, as the player sees it. Strips are contact sheets over a kick (frames left to
+    /// right, then the next row): close-ups of the hind feet from above, behind and the left, a perspective close-up
+    /// riding with the hips, and a perspective view held still in the world over the whole strip, which the otter swims
     /// through. Written to Logs/Snapshots.
     /// </summary>
     static class LocomotionSnapshots
@@ -132,6 +133,10 @@ namespace OtterLocomotion.EditorTools
                 var persp = new[] { Perspective("persp", bounds.center, aside, extent * 0.9f) };
                 Render(scene, persp, 1000, 800,
                     (v, tex) => File.WriteAllBytes(Path.Combine(dir, $"{label}_{shot.name}_{persp[v].name}.png"), tex.EncodeToPNG()));
+                var controls = otter.GetComponent<OtterControls>();
+                var screen = controls != null ? controls.PointerCamera : null;
+                if (screen != null)
+                    Capture(screen, 1000, 800, tex => File.WriteAllBytes(Path.Combine(dir, $"{label}_{shot.name}_game.png"), tex.EncodeToPNG()));
                 return;
             }
 
@@ -188,6 +193,30 @@ namespace OtterLocomotion.EditorTools
 
         static View Perspective(string name, Vector3 center, Vector3 from, float size) =>
             new View(name, center + from * (size / Mathf.Tan(0.5f * FieldOfView * Mathf.Deg2Rad)), Quaternion.LookRotation(-from, Vector3.up), size, true);
+
+        static void Capture(Camera cam, int width, int height, System.Action<Texture2D> use)
+        {
+            var rt = new RenderTexture(width, height, 24);
+            var tex = new Texture2D(width, height, TextureFormat.RGB24, false);
+            var target = cam.targetTexture;
+            cam.targetTexture = rt;
+            try
+            {
+                cam.Render();
+                var prev = RenderTexture.active;
+                RenderTexture.active = rt;
+                tex.ReadPixels(new Rect(0, 0, width, height), 0, 0);
+                tex.Apply();
+                RenderTexture.active = prev;
+                use(tex);
+            }
+            finally
+            {
+                cam.targetTexture = target;
+                Object.DestroyImmediate(rt);
+                Object.DestroyImmediate(tex);
+            }
+        }
 
         static void Render(Renderer[] drawn, View[] views, int width, int height, System.Action<int, Texture2D> use)
         {

@@ -232,7 +232,7 @@ namespace OtterLocomotion.Testing
 
         private Vector2 ToScreen(Vector3 world)
         {
-            var cam = controls.inputCamera != null ? controls.inputCamera : Camera.main;
+            var cam = controls.PointerCamera;
             world.y = controls.PointerY;
             return cam != null ? (Vector2)cam.WorldToScreenPoint(world) : Vector2.zero;
         }

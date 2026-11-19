@@ -25,7 +25,7 @@ namespace OtterLocomotion
             Vector2 ScreenPosition { get; }
         }
 
-        [Tooltip("Found on this object when empty; the input camera is the main camera.")]
+        [Tooltip("The camera the pointer is read through. Empty: the one drawn last onto the screen, which is what the player sees (not necessarily the main camera).")]
         public Camera inputCamera;
         public OtterLocomotionBrain brain;
         public StrokePropulsion strokes;
@@ -55,6 +55,21 @@ namespace OtterLocomotion
         public bool PointerOverOtter { get; private set; }
         public bool LeftHeld { get; private set; }
         public bool RightHeld { get; private set; }
+        /// <summary>The camera the pointer is read through: inputCamera, or the one drawn last onto the screen.</summary>
+        public Camera PointerCamera
+        {
+            get
+            {
+                if (inputCamera != null) return inputCamera;
+                if (screenCamera == null || !screenCamera.isActiveAndEnabled)
+                {
+                    screenCamera = null;
+                    foreach (var c in Camera.allCameras)
+                        if (c.targetTexture == null && (screenCamera == null || c.depth > screenCamera.depth)) screenCamera = c;
+                }
+                return screenCamera;
+            }
+        }
         /// <summary>
         /// The level the pointer is read on, and the ring and guide drawn: through the middle of the otter's back, where
         /// it is seen. It rides well above the water, and under a camera looking down at a slant a press on its back
@@ -74,6 +89,7 @@ namespace OtterLocomotion
         private readonly List<Gesture> gestureList = new List<Gesture>();
         private readonly List<ControlEvent> events = new List<ControlEvent>();
         private Rigidbody body;
+        private Camera screenCamera;
         private Transform head, chest, hip;
         private float backHeight;
 
@@ -186,7 +202,7 @@ namespace OtterLocomotion
         private bool TryPointerPoint(Vector2 screen, out Vector3 point)
         {
             point = default;
-            var cam = inputCamera != null ? inputCamera : Camera.main;
+            var cam = PointerCamera;
             if (cam == null) return false;
             var ray = cam.ScreenPointToRay(screen);
             if (!new Plane(Vector3.up, new Vector3(0f, PointerY, 0f)).Raycast(ray, out float distance)) return false;
