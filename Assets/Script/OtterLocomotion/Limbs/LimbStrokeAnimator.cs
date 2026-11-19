@@ -249,13 +249,36 @@ namespace OtterLocomotion
     }
 
     /// <summary>
+    /// On the back the forepaws lie on the chest and belly, the arms folded in from the sides, rather than where they
+    /// hang under the chest on the belly: turned up, that is under the chin, and the head curled over to look along the
+    /// belly buries them. The chest and belly are measured from the skin when the limbs are captured. The arms are too
+    /// short to take the wrists out from under the chin, so each paw lies flat, palm to the chest, its fingers reaching
+    /// back along the belly; the forearm alone would carry it tilted, its fingers into the chest.
+    /// </summary>
+    [Serializable]
+    public class ChestRest
+    {
+        public bool enabled = true;
+        [Tooltip("How far out from the midline each wrist lies, as a share of the trunk's half width.")]
+        [Range(0f, 1f)] public float apart = 0.4f;
+        [Tooltip("How far the wrist reaches back over the chest from the shoulder, as a share of the arm's length: as far back from the head as the arm lies at ease.")]
+        [Range(0.3f, 1f)] public float reach = 0.9f;
+        [Tooltip("Wrist height above the skin (m): the paw's thickness from the wrist to its palm, and a little more.")]
+        public float lift = 0.012f;
+        [Tooltip("How far the fingers turn in toward the midline from pointing straight back along the belly (deg).")]
+        [Range(0f, 90f)] public float inward = 25f;
+    }
+
+    /// <summary>
     /// Moves the limb IK targets along stroke paths from OtterLocomotionBrain's rhythm: phase and strength per limb,
     /// so the limbs show what the allocation asks of them. Hind feet draw in and kick out on a loop about the hip joint
     /// (HindKick), splay out to either side in a turn (HindTurn), and sprinting prone hold out behind as a fluke
     /// (FlukeStroke); forepaws sweep along the allocated
-    /// force direction, and rest folded on the chest when they have nothing to do, as on the back. Paths hang off the
+    /// force direction, and rest when they have nothing to do: under the chest on the belly, on the chest and belly on
+    /// the back (ChestRest). Paths hang off the
     /// chest / hip bone, so they follow the spine's bend and roll. After the IK solve the hind flippers are turned at
-    /// the ankle and toes (FlipperPose) to paddle, square through the push and trailing in the flow through the draw.
+    /// the ankle and toes (FlipperPose) to paddle, square through the push and trailing in the flow through the draw;
+    /// on the back the forepaws are laid flat on the chest.
     /// Runs after the spine and before the IK solve. While enabled it switches off the older limb drivers that write
     /// the same targets (HindPaddleDriverRB, IKStrokeController), and switches them back on when disabled.
     /// </summary>
@@ -277,6 +300,7 @@ namespace OtterLocomotion
         public FlukeStroke fluke = new FlukeStroke();
         public FlipperPose flipper = new FlipperPose();
         public StrokeShape foreStroke = new StrokeShape();
+        public ChestRest chestRest = new ChestRest();
         [Tooltip("Time constant of a stroke growing in when a limb starts and fading out when it rests (s).")]
         public float sizeTime = 0.1f;
         [Tooltip("Time constant of the written IK targets (s); hides the jump when a new stroke changes direction.")]
@@ -288,6 +312,13 @@ namespace OtterLocomotion
             public bool valid;
             public Transform target, girdle;
             public Vector3 restLocal, forwardLocal, upLocal, currentLocal;
+            /// <summary>Forepaw: where the wrist lies on the chest on the back (ChestRest), in girdle space; its rest without a chest.</summary>
+            public Vector3 chestLocal;
+            /// <summary>Forepaw: the chain's end bone and its rest on the forearm; the normal of its inner face (toward the
+            /// midline at rest, the palm laid on the chest on the back) and where its fingers point, in the paw's space.</summary>
+            public Transform paw;
+            public Quaternion pawRest;
+            public Vector3 palmLocal, fingersLocal;
             /// <summary>The chain's root joint (shoulder / hip joint) in girdle space.</summary>
             public Vector3 jointLocal;
             public float length;
@@ -335,6 +366,9 @@ namespace OtterLocomotion
         }
 
         private readonly Limb[] limbs = new Limb[OtterRig.LimbCount];
+        /// <summary>The chest and belly the forepaws lie on when on the back: its corners in the chest's space.</summary>
+        private Vector3[] chestArea;
+        private Transform chestBone;
         private readonly List<Behaviour> suspended = new List<Behaviour>();
         private AfterLimbIK afterIK;
         private bool started;
@@ -375,6 +409,7 @@ namespace OtterLocomotion
             afterIK = gameObject.AddComponent<AfterLimbIK>();
             afterIK.hideFlags = HideFlags.HideInInspector | HideFlags.DontSave;
             afterIK.Solved += PoseFlippers;
+            afterIK.Solved += PosePaws;
         }
 
         private void OnEnable()
@@ -390,7 +425,11 @@ namespace OtterLocomotion
             RestoreFlippers();
             FreeKnees(false);
             foreach (var l in limbs)
-                if (l.valid && l.pole != null) l.pole.localPosition = l.poleRestLocal;
+            {
+                if (!l.valid) continue;
+                if (l.pole != null) l.pole.localPosition = l.poleRestLocal;
+                if (l.paw != null && !l.ik.alignEndRotation) l.paw.localRotation = l.pawRest;
+            }
         }
 
         // The hind knee's limits are set about the rig's nearly straight rest pose, which stops it short of the tuck the
@@ -425,6 +464,7 @@ namespace OtterLocomotion
                     target = ik.target,
                     girdle = girdle,
                     restLocal = rest,
+                    chestLocal = rest,
                     currentLocal = rest,
                     forwardLocal = girdle.InverseTransformDirection(transform.forward),
                     upLocal = girdle.InverseTransformDirection(transform.up),
@@ -435,10 +475,103 @@ namespace OtterLocomotion
                     pole = OtterRig.IsFore((LimbId)i) ? null : ik.pole,
                     poleRestLocal = ik.pole != null ? ik.pole.localPosition : Vector3.zero,
                 };
-                if (!OtterRig.IsFore((LimbId)i)) CaptureFlipper(ref limbs[i], ik);
+                if (OtterRig.IsFore((LimbId)i)) CapturePaw(ref limbs[i], ik);
+                else CaptureFlipper(ref limbs[i], ik);
             }
             if (!HasLimbs) Debug.LogWarning($"[LimbStrokeAnimator] No limb IK chains with targets under '{name}'.", this);
+            MeasureChest();
         }
+
+        // The chest and belly the forepaws lie on when on the back: the trunk's skin, all of it but what follows the neck
+        // and the forelimbs, from the shoulders back to the hip joint, mapped as the height of its belly side over a grid
+        // along the chest's own axes. Each wrist lies out from the midline, as far back from the head as the arm reaches
+        // at ease.
+        private void MeasureChest()
+        {
+            chestArea = null;
+            var left = limbs[(int)LimbId.FL];
+            var right = limbs[(int)LimbId.FR];
+            var neck = OtterRig.FindActiveBone(transform, OtterRig.Neck[0]);
+            var hip = OtterRig.FindActiveBone(transform, OtterRig.Hip);
+            if (!left.valid || !right.valid || left.girdle != right.girdle || neck == null || hip == null) return;
+            var chest = left.girdle;
+            Vector3 origin = chest.position;
+            Vector3 fwd = chest.TransformDirection(left.forwardLocal).normalized;
+            Vector3 dorsal = Vector3.ProjectOnPlane(chest.TransformDirection(left.upLocal), fwd).normalized;
+            Vector3 side = Vector3.Cross(dorsal, fwd);
+            Vector3 Axes(Vector3 w) { w -= origin; return new Vector3(Vector3.Dot(w, fwd), Vector3.Dot(w, side), Vector3.Dot(w, dorsal)); }
+            Vector3 Local(Vector3 a) => chest.InverseTransformPoint(origin + fwd * a.x + side * a.y + dorsal * a.z);
+
+            var skipped = new HashSet<Vector3Int>();
+            foreach (var bone in new[] { neck, left.ik.root.bone, right.ik.root.bone })
+            {
+                var skin = OtterRig.FollowingVertices(bone);
+                if (skin != null) foreach (var p in skin) skipped.Add(Key(p));
+            }
+            float front = 0.5f * (Axes(left.ik.root.bone.position).x + Axes(right.ik.root.bone.position).x);
+            float back = Axes(hip.position).x;
+            var trunk = new List<Vector3>();
+            var baked = new Mesh();
+            foreach (var skin in GetComponentsInChildren<SkinnedMeshRenderer>())
+            {
+                if (!skin.enabled || skin.sharedMesh == null) continue;
+                skin.BakeMesh(baked, true);
+                foreach (var v in baked.vertices)
+                {
+                    Vector3 w = skin.transform.TransformPoint(v);
+                    Vector3 a = Axes(w);
+                    if (a.x <= front && a.x >= back && !skipped.Contains(Key(w))) trunk.Add(a);
+                }
+            }
+            Destroy(baked);
+            if (trunk.Count < 16) return;
+
+            var widths = trunk.Select(a => Mathf.Abs(a.y)).OrderBy(y => y).ToList();
+            float half = widths[Mathf.RoundToInt(0.9f * (widths.Count - 1))];
+            float cell = half / 6f;
+            var belly = new Dictionary<Vector2Int, float>();
+            foreach (var a in trunk)
+            {
+                var k = new Vector2Int(Mathf.FloorToInt(a.x / cell), Mathf.FloorToInt(a.y / cell));
+                belly[k] = belly.TryGetValue(k, out var z) ? Mathf.Min(z, a.z) : a.z;
+            }
+            // the belly side under a point: the lowest skin in its cell and those about it
+            bool Under(float x, float y, out float h)
+            {
+                h = float.MaxValue;
+                int i = Mathf.FloorToInt(x / cell), j = Mathf.FloorToInt(y / cell);
+                for (int di = -1; di <= 1; di++)
+                    for (int dj = -1; dj <= 1; dj++)
+                        if (belly.TryGetValue(new Vector2Int(i + di, j + dj), out var z)) h = Mathf.Min(h, z);
+                return h < float.MaxValue;
+            }
+
+            var r = chestRest;
+            for (int i = 0; i < OtterRig.LimbCount; i++)
+            {
+                if (!OtterRig.IsFore((LimbId)i)) continue;
+                ref var l = ref limbs[i];
+                Vector3 shoulder = Axes(l.ik.root.bone.position);
+                float y = Mathf.Sign(shoulder.y) * r.apart * half;
+                for (float x = front; x >= back; x -= 0.25f * cell)
+                {
+                    // right behind the shoulders the chest's own skin goes with the arms, only the back's is left
+                    if (!Under(x, y, out var h) || h > 0f) continue;
+                    var wrist = new Vector3(x, y, h - r.lift);
+                    if ((wrist - shoulder).magnitude > r.reach * l.length) break;
+                    l.chestLocal = Local(wrist);
+                }
+            }
+            float level = Under(0.5f * (front + back), 0f, out var mid) ? mid : 0f;
+            chestBone = chest;
+            chestArea = new[] { Local(new Vector3(front, -half, level)), Local(new Vector3(front, half, level)), Local(new Vector3(back, half, level)), Local(new Vector3(back, -half, level)) };
+        }
+
+        private static Vector3Int Key(Vector3 w) => new Vector3Int(Mathf.RoundToInt(w.x * 1e4f), Mathf.RoundToInt(w.y * 1e4f), Mathf.RoundToInt(w.z * 1e4f));
+
+        // a forepaw on the back lies on the chest; rolling over, it moves between there and its rest under the chest
+        private Vector3 RestLocal(int i, in Limb l) =>
+            OtterRig.IsFore((LimbId)i) && chestRest.enabled ? Vector3.Lerp(l.restLocal, l.chestLocal, brain.Posture.SupineFraction) : l.restLocal;
 
         // The web's normal from the skinned mesh, signed to the face that is dorsal with the leg trailing at rest. Its
         // width runs across the toes.
@@ -467,6 +600,44 @@ namespace OtterLocomotion
             l.centerLocal = center;
             l.widthAxis = axis;
             l.width = 1f;
+        }
+
+        // The paw's flat from the skinned mesh: the face toward the midline, and the fingers toward the toes.
+        private void CapturePaw(ref Limb l, AdvancedTwoBoneIK ik)
+        {
+            var paw = ik.end.bone;
+            if (paw.childCount == 0 || !OtterRig.TryFootPlane(paw, out var normal, out _, out _, out _)) return;
+            Vector3 n = paw.TransformDirection(normal);
+            Vector3 medial = l.girdle.position - ik.root.bone.position;
+            if (Vector3.Dot(n, Vector3.Project(medial, transform.right)) < 0f) n = -n;
+            Vector3 fingers = Vector3.ProjectOnPlane(paw.GetChild(0).position - paw.position, n).normalized;
+            l.paw = paw;
+            l.pawRest = paw.localRotation;
+            l.palmLocal = paw.InverseTransformDirection(n);
+            l.fingersLocal = paw.InverseTransformDirection(fingers);
+        }
+
+        // On the back the paws lie flat on the chest, palm to it, fingers back along the belly and in toward the midline
+        // (ChestRest); rolling over they turn between there and where the forearm carries them.
+        private void PosePaws()
+        {
+            if (!isActiveAndEnabled || brain == null || !brain.HasLimbGeometry) return;
+            float supine = chestRest.enabled ? brain.Posture.SupineFraction : 0f;
+            float inward = chestRest.inward * Mathf.Deg2Rad;
+            for (int i = 0; i < OtterRig.LimbCount; i++)
+            {
+                ref var l = ref limbs[i];
+                if (!l.valid || l.paw == null) continue;
+                if (!l.ik.alignEndRotation) l.paw.localRotation = l.pawRest;
+                if (supine < 1e-3f) continue;
+                Vector3 fwd = l.girdle.TransformDirection(l.forwardLocal).normalized;
+                Vector3 dorsal = Vector3.ProjectOnPlane(l.girdle.TransformDirection(l.upLocal), fwd).normalized;
+                Vector3 side = Vector3.Cross(dorsal, fwd);
+                Vector3 medial = Vector3.Dot(l.girdle.position - l.girdle.TransformPoint(l.jointLocal), side) > 0f ? side : -side;
+                Vector3 fingers = -fwd * Mathf.Cos(inward) + medial * Mathf.Sin(inward);
+                Quaternion flat = Quaternion.LookRotation(fingers, dorsal) * Quaternion.Inverse(Quaternion.LookRotation(l.fingersLocal, l.palmLocal));
+                l.paw.rotation = Quaternion.Slerp(l.paw.rotation, flat, supine);
+            }
         }
 
         private void SuspendOldDrivers()
@@ -525,7 +696,7 @@ namespace OtterLocomotion
                 l.size = Mathf.Lerp(l.size, TargetSize(i, l, st), grow);
                 if (!OtterRig.IsFore((LimbId)i)) l.yaw = KickYaw(l, travel);
                 float phase = st.active ? Mathf.Repeat(st.phase + st.rate * ahead, 1f) : 0f;
-                Vector3 goal = l.restLocal + l.girdle.InverseTransformVector(StrokeOffset(i, l, st, phase));
+                Vector3 goal = RestLocal(i, l) + l.girdle.InverseTransformVector(StrokeOffset(i, l, st, phase));
                 l.currentLocal = Vector3.Lerp(l.currentLocal, goal, blend);
                 l.target.position = l.girdle.TransformPoint(l.currentLocal);
                 if (l.pole != null)
@@ -805,13 +976,19 @@ namespace OtterLocomotion
         private void OnDrawGizmos()
         {
             if (!drawGizmos || !Application.isPlaying || brain == null || !brain.HasLimbGeometry) return;
+            if (chestArea != null && chestBone != null && chestRest.enabled)
+            {
+                Gizmos.color = new Color(1f, 0.9f, 0.4f, 0.4f + 0.4f * brain.Posture.SupineFraction);
+                for (int k = 0; k < chestArea.Length; k++)
+                    Gizmos.DrawLine(chestBone.TransformPoint(chestArea[k]), chestBone.TransformPoint(chestArea[(k + 1) % chestArea.Length]));
+            }
             for (int i = 0; i < OtterRig.LimbCount; i++)
             {
                 var l = limbs[i];
                 if (!l.valid) continue;
                 var st = brain.Rhythm.limbs[i];
                 Color c = OtterRig.IsFore((LimbId)i) ? new Color(0.3f, 0.8f, 1f) : new Color(1f, 0.6f, 0.2f);
-                Vector3 rest = l.girdle.TransformPoint(l.restLocal);
+                Vector3 rest = l.girdle.TransformPoint(RestLocal(i, l));
                 Gizmos.color = new Color(c.r, c.g, c.b, 0.5f);
                 Gizmos.DrawWireSphere(rest, 0.006f);
                 if (l.size < 1e-5f) continue;
