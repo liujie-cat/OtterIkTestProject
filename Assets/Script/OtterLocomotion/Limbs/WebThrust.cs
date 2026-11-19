@@ -1,3 +1,4 @@
+using System.Linq;
 using UnityEngine;
 
 namespace OtterLocomotion
@@ -37,12 +38,15 @@ namespace OtterLocomotion
             public LimbId limb;
             public Transform bone;
             public Vector3 normalLocal, centerLocal, previous;
+            /// <summary>The web's skin, in the bone's space.</summary>
+            public Vector3[] points;
             public float area;
             public bool hasPrevious;
-            public float push;
+            public float push, wet;
         }
 
         private readonly Web[] webs = new Web[2];
+        private Water water;
         private Rigidbody body;
         private Vector3 impulse, force;
         private float time;
@@ -62,6 +66,14 @@ namespace OtterLocomotion
         {
             foreach (var w in webs)
                 if (w != null && w.limb == limb) return w.area;
+            return 0f;
+        }
+
+        /// <summary>The share of a hind web under the water's surface last frame: 1 all in, 0 all out, and 1 with no Water in the scene.</summary>
+        public float Immersion(LimbId limb)
+        {
+            foreach (var w in webs)
+                if (w != null && w.limb == limb) return w.wet;
             return 0f;
         }
 
@@ -93,6 +105,7 @@ namespace OtterLocomotion
         private void Setup()
         {
             body = GetComponent<Rigidbody>();
+            water = FindObjectOfType<Water>();
             var chains = OtterRig.FindLimbChains(transform);
             int k = 0;
             foreach (var limb in new[] { LimbId.HL, LimbId.HR })
@@ -103,8 +116,15 @@ namespace OtterLocomotion
                 {
                     var bone = OtterRig.Flipper(ik.end.bone);
                     if (OtterRig.TryFootPlane(bone, out var normal, out _, out var center, out var extents))
+                    {
+                        var skin = OtterRig.FollowingVertices(bone);
                         // a flat spread of points: its width is about sqrt(12) standard deviations each way
-                        webs[k] = new Web { limb = limb, bone = bone, normalLocal = normal, centerLocal = center, area = 12f * extents.y * extents.z };
+                        webs[k] = new Web
+                        {
+                            limb = limb, bone = bone, normalLocal = normal, centerLocal = center, area = 12f * extents.y * extents.z,
+                            points = skin != null ? skin.Select(bone.InverseTransformPoint).ToArray() : new[] { center },
+                        };
+                    }
                 }
                 k++;
             }
@@ -125,6 +145,7 @@ namespace OtterLocomotion
             foreach (var w in webs)
             {
                 if (w == null || w.bone == null) continue;
+                w.wet = Wet(w);
                 Vector3 p = w.bone.TransformPoint(w.centerLocal);
                 Vector3 n = w.bone.TransformDirection(w.normalLocal).normalized;
                 Vector3 from = previousPivot + swing * (w.previous - previousPivot);
@@ -144,6 +165,16 @@ namespace OtterLocomotion
             previousHeading = facing;
             impulse += total * dt;
             time += dt;
+        }
+
+        // the share of the web's skin below the surface
+        private float Wet(Web w)
+        {
+            if (water == null) return 1f;
+            int under = 0;
+            foreach (var p in w.points)
+                if (water.Depth(w.bone.TransformPoint(p)) > 0f) under++;
+            return under / (float)w.points.Length;
         }
 
         private void FixedUpdate()

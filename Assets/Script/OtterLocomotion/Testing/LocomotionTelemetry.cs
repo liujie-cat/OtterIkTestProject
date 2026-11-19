@@ -132,6 +132,8 @@ namespace OtterLocomotion.Testing
             public float submerged, draft, ride;
             /// <summary>Per hind foot: WebThrust's push on the body along its heading (N, + = forward), 0 without it.</summary>
             public float[] webPush;
+            /// <summary>Per hind foot: the share of the web under the water's surface (WebThrust), NaN without it.</summary>
+            public float[] webWet;
             public Posture posture;
             public float supine, roll, speedTarget, requestedSpeed, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
             public bool allocated;
@@ -425,6 +427,7 @@ namespace OtterLocomotion.Testing
             s.tailLift = tail != null && tail.isActiveAndEnabled ? tail.TipLift : float.NaN;
             s.swayBend = sway != null && sway.isActiveAndEnabled ? sway.Bend : float.NaN;
             s.webPush = feet.Select(f => webThrust != null && webThrust.isActiveAndEnabled && System.Enum.TryParse<LimbId>(f.name, out var id) ? webThrust.Push(id) : 0f).ToArray();
+            s.webWet = feet.Select(f => webThrust != null && webThrust.isActiveAndEnabled && System.Enum.TryParse<LimbId>(f.name, out var id) ? webThrust.Immersion(id) : float.NaN).ToArray();
             // spine bones point +Y toward the head
             s.waist = hip != null && chest != null
                 ? Vector3.SignedAngle(Vector3.ProjectOnPlane(hip.up, Vector3.up), Vector3.ProjectOnPlane(chest.up, Vector3.up), Vector3.up)
@@ -547,6 +550,8 @@ namespace OtterLocomotion.Testing
             sb.Append(",afloat,draft,ride");
             // each web's push on the body along its heading, N
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wpush");
+            // the share of each web under the water's surface
+            foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wet");
             // the web middle's speed up through the water (m/s) and its normal's up component
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wup,").Append(f.name).Append("_nup");
             // which way the toes point: up and forward components
@@ -591,6 +596,7 @@ namespace OtterLocomotion.Testing
                 sb.Append(',').Append(float.IsNaN(s.draft) ? "" : s.draft.ToString("F2", ci));
                 sb.Append(',').Append(float.IsNaN(s.ride) ? "" : s.ride.ToString("F2", ci));
                 foreach (var w in s.webPush) sb.Append(',').Append(w.ToString("F3", ci));
+                foreach (var w in s.webWet) sb.Append(',').Append(float.IsNaN(w) ? "" : w.ToString("F2", ci));
                 for (int k = 0; k < s.footWorldUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footWorldUp[k], s.footNormalUp[k]));
                 for (int k = 0; k < s.footToesUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footToesUp[k], s.footToesFwd[k]));
                 if (brain != null)
@@ -767,6 +773,12 @@ namespace OtterLocomotion.Testing
                 if (webThrust != null && idx.Count > 0)
                     water += $", web push {idx.Average(i => samples[i].webPush[k]).ToString("F3", ci)} N avg" +
                              (pushing.Count > 0 ? $" ({pushing.Average(i => samples[i].webPush[k]).ToString("F3", ci)} pushing)" : "");
+                // how much of the web is in the water while it pushes and while it is drawn forward again
+                var drawing = idx.Where(i => samples[i].rhythm && (samples[i].powerMask & (1 << (int)id)) == 0).ToList();
+                string Wet(List<int> frames) => frames.Count > 0 && !float.IsNaN(samples[frames[0]].webWet[k])
+                    ? (frames.Average(i => samples[i].webWet[k]) * 100f).ToString("F0", ci) + " %"
+                    : "-";
+                if (webThrust != null && idx.Count > 0) water += $", in water {Wet(pushing)} pushing, {Wet(drawing)} drawing";
                 parts.Add($"{feet[k].name} back {Mean(backFace, backWeight)} fwd {Mean(forwardFace, forwardWeight)} peak {peak.ToString("F2", ci)} m/s{water}");
             }
             var gaps = idx.Select(i => samples[i].feetGap).Where(g => g >= 0f).ToList();
