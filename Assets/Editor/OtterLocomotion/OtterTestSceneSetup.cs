@@ -18,7 +18,7 @@ namespace OtterLocomotion.EditorTools
     /// <summary>
     /// Brings the test scene to what the current code expects: the sea otter rig in place of the cat, IK targets on
     /// the rest pose, the locomotion components on the swimming body with their references and code-default
-    /// settings, a translucent sea at the water surface, and the old ring controls and neck controller off. Every step checks first and changes only what is off, so it can be run
+    /// settings, a translucent box of sea water with the otter floating in it at its draft, and the old ring controls and neck controller off. Every step checks first and changes only what is off, so it can be run
     /// at any time. One Undo step.
     /// </summary>
     static class OtterTestSceneSetup
@@ -37,6 +37,7 @@ namespace OtterLocomotion.EditorTools
             (typeof(SpineKickWave), "脊柱踢水波"),
             (typeof(WebThrust), "脚蹼推水"),
             (typeof(BodyKeel), "身体侧向阻力"),
+            (typeof(Buoyancy), "浮力吃水"),
             (typeof(StrokePropulsion), "划水推进"),
             (typeof(HindLegColliders), "后腿碰撞体"),
             (typeof(TailRudder), "尾舵"),
@@ -92,46 +93,43 @@ namespace OtterLocomotion.EditorTools
 
         const string SeaName = "Sea";
         const string SeaMaterialPath = "Assets/ArtResource/Sea/SeaWater.mat";
-        /// <summary>Half the sea's width (m), far past where the playbacks swim.</summary>
-        const float SeaHalfWidth = 50f;
+        /// <summary>The sea's width (m), far past where the playbacks swim, and its depth, down to the ground.</summary>
+        const float SeaWidth = 100f, SeaDepth = 5f;
 
-        /// <summary>The translucent sea surface the refresh lays at the water height (WaterReference.surfaceY).</summary>
+        /// <summary>The translucent box of sea water the refresh lays out, with the Water surface on it.</summary>
         internal static GameObject FindSea() => SceneManager.GetActiveScene().GetRootGameObjects().FirstOrDefault(g => g.name == SeaName);
 
-        static float SurfaceY(MovementControllerRB body) => body.TryGetComponent<WaterReference>(out var water) ? water.surfaceY : 0f;
-
-        /// <summary>What is off about the sea for a water surface at <paramref name="surfaceY"/>; null when it is in place.</summary>
-        static string SeaOff(float surfaceY)
+        /// <summary>What is off about the sea; null when it is in place.</summary>
+        static string SeaOff()
         {
             var sea = FindSea();
             if (sea == null) return "还没有";
-            float y = sea.transform.position.y;
-            if (Mathf.Abs(y - surfaceY) > 1e-4f) return $"在 {y:F3} m，水面在 {surfaceY:F3} m";
+            if (!sea.TryGetComponent<Water>(out _)) return "还是旧的海面平面";
             var r = sea.GetComponent<MeshRenderer>();
             return r == null ? $"'{SeaName}' 没有 MeshRenderer，删掉它刷新时重建" : r.sharedMaterial == null ? "没有材质" : null;
         }
 
-        static void MakeSea(float surfaceY, Vector3 around)
+        /// <summary>Lays out the sea; one in place of an old surface plane keeps its height, a new one has it at 0.</summary>
+        static void MakeSea(Vector3 around)
         {
             var sea = FindSea();
-            if (sea == null)
+            if (sea == null || !sea.TryGetComponent<Water>(out _))
             {
-                sea = GameObject.CreatePrimitive(PrimitiveType.Plane);
+                float surfaceY = sea != null ? sea.transform.position.y : 0f;
+                if (sea != null) Undo.DestroyObjectImmediate(sea);
+                sea = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 sea.name = SeaName;
-                // only to look at: the body must not rest on it
+                // only to look at and float in: nothing rests on it
                 Object.DestroyImmediate(sea.GetComponent<Collider>());
-                sea.transform.position = new Vector3(around.x, surfaceY, around.z);
-                // the plane mesh is 10 m across
-                sea.transform.localScale = new Vector3(SeaHalfWidth / 5f, 1f, SeaHalfWidth / 5f);
+                sea.transform.position = new Vector3(around.x, surfaceY - 0.5f * SeaDepth, around.z);
+                sea.transform.localScale = new Vector3(SeaWidth, SeaDepth, SeaWidth);
+                sea.AddComponent<Water>();
                 var fresh = sea.GetComponent<MeshRenderer>();
                 fresh.sharedMaterial = SeaMaterial();
                 fresh.shadowCastingMode = ShadowCastingMode.Off;
-                Undo.RegisterCreatedObjectUndo(sea, "Create the sea");
+                Undo.RegisterCreatedObjectUndo(sea, "Lay out the sea");
                 return;
             }
-            Undo.RecordObject(sea.transform, "Lay the sea at the water surface");
-            var p = sea.transform.position;
-            sea.transform.position = new Vector3(p.x, surfaceY, p.z);
             var r = sea.GetComponent<MeshRenderer>();
             if (r != null && r.sharedMaterial == null)
             {
@@ -150,7 +148,7 @@ namespace OtterLocomotion.EditorTools
             m = new Material(shader) { name = "SeaWater" };
             m.SetFloat("_Surface", 1f); // transparent
             m.SetFloat("_Blend", 0f); // alpha
-            m.SetFloat("_Cull", 0f); // both faces, so it shows from under the water too
+            m.SetFloat("_Cull", 2f); // front faces: from outside the box, the top face over what is under the water
             m.SetColor("_BaseColor", new Color(0.06f, 0.36f, 0.46f, 0.55f));
             m.SetFloat("_Metallic", 0f);
             m.SetFloat("_Smoothness", 0.9f);
@@ -158,6 +156,17 @@ namespace OtterLocomotion.EditorTools
             Directory.CreateDirectory(Path.GetDirectoryName(SeaMaterialPath));
             AssetDatabase.CreateAsset(m, SeaMaterialPath);
             return m;
+        }
+
+        /// <summary>How far the body may sit from its draft (m).</summary>
+        const float DraftTolerance = 0.001f;
+
+        /// <summary>The body's height floating still on the sea, its skin as posed now; null without the sea, its buoyancy or a skin.</summary>
+        static float? FloatingHeight(MovementControllerRB body)
+        {
+            var sea = FindSea();
+            if (sea == null || !sea.TryGetComponent<Water>(out var water) || !body.TryGetComponent<Buoyancy>(out var buoyancy)) return null;
+            return Buoyancy.FloatingHeight(body.transform, water.SurfaceY, buoyancy.density);
         }
 
         /// <summary>The old neck controllers on the body still on; NeckLook poses the neck in their place.</summary>
@@ -203,11 +212,17 @@ namespace OtterLocomotion.EditorTools
                 checks.Add(necks.Count == 0
                     ? new Check("旧脖子", Level.Ok, "ExpShadowNeckController 已停用（文件保留），脖子由 NeckLook 摆")
                     : new Check("旧脖子", Level.Fix, $"'{necks[0].name}' 上的 ExpShadowNeckController 还开着，刷新时停用"));
-                float surfaceY = SurfaceY(body);
-                string seaOff = SeaOff(surfaceY);
+                string seaOff = SeaOff();
                 checks.Add(seaOff == null
-                    ? new Check("海面", Level.Ok, $"半透明海面 '{SeaName}' 在水面高度 {surfaceY:F2} m")
-                    : new Check("海面", Level.Fix, seaOff + "，刷新时铺好"));
+                    ? new Check("海水", Level.Ok, $"半透明水箱 '{SeaName}'，水面在 {FindSea().GetComponent<Water>().SurfaceY:F2} m")
+                    : new Check("海水", Level.Fix, seaOff + "，刷新时换成半透明水箱"));
+                float? afloat = FloatingHeight(body);
+                Vector3 at = body.transform.position;
+                checks.Add(afloat == null
+                    ? new Check("海獭高度", Level.Fix, "还算不出吃水位置（要海水、浮力组件和皮肤），刷新时补好再放")
+                    : Mathf.Abs(at.y - afloat.Value) > DraftTolerance
+                        ? new Check("海獭高度", Level.Fix, $"在 {at.y:F3} m，吃水位置在 {afloat:F3} m，刷新时放下去")
+                        : new Check("海獭高度", Level.Ok, $"浮在吃水位置，'{body.name}' 在 ({at.x:F2}, {at.y:F3}, {at.z:F2}) m"));
             }
             foreach (var (type, title) in Managed)
             {
@@ -321,15 +336,29 @@ namespace OtterLocomotion.EditorTools
                         else log.AppendLine($"{title}: 参数已是代码默认值");
                     }
                 }
-                // after the components, as WaterReference's surface height may have just been reset
-                float surfaceY = SurfaceY(body);
-                string seaOff = SeaOff(surfaceY);
+                string seaOff = SeaOff();
                 if (seaOff != null)
                 {
-                    MakeSea(surfaceY, body.transform.position);
-                    Changed($"海面: {seaOff}，已铺在水面高度 {surfaceY:F2} m（材质 {SeaMaterialPath}）");
+                    MakeSea(body.transform.position);
+                    Changed($"海水: {seaOff}，已换成半透明水箱，水面在 {FindSea().GetComponent<Water>().SurfaceY:F2} m（材质 {SeaMaterialPath}）");
                 }
-                else log.AppendLine("海面: 已在水面高度");
+                else log.AppendLine("海水: 水箱已在");
+                // after the components and the sea: the draft is the buoyancy's in the water
+                float? afloat = FloatingHeight(body);
+                Vector3 at = body.transform.position;
+                if (afloat == null) log.AppendLine("!! 算不出海獭的吃水位置，高度没动");
+                else if (Mathf.Abs(at.y - afloat.Value) > DraftTolerance)
+                {
+                    Undo.RecordObject(body.transform, "Float the otter at its draft");
+                    body.transform.position = new Vector3(at.x, afloat.Value, at.z);
+                    Changed($"海獭高度: 从 {at.y:F3} m 放到吃水位置 {afloat:F3} m");
+                    if (otter != null && SeaOtterRigTransplant.ChainsOffRest(otter).Count > 0)
+                    {
+                        Changed("== IK 归位（身体高度变了）");
+                        log.AppendLine(SeaOtterRigTransplant.Refit(otter));
+                    }
+                }
+                else log.AppendLine("海獭高度: 已在吃水位置");
             }
 
             Undo.CollapseUndoOperations(group);

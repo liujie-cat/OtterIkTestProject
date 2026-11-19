@@ -6,7 +6,8 @@ namespace OtterLocomotion.EditorTools
 {
     /// <summary>
     /// Pictures of the otter at chosen moments of a playback. The orthographic views show only its skinned meshes so
-    /// the scene does not hide the limbs; the perspective ones look on from above and behind its left side, as from
+    /// the scene does not hide the limbs, those from the side through a pane of the sea from the surface down, so the
+    /// waterline shows on the body; the perspective ones look on from above and behind its left side, as from
     /// the Scene view, with the sea, WaterReference's grids and web trails and the controls' ring and guide arrow, so
     /// the body's motion can be set against the water, the strokes and where it is led. Single shots frame the whole
     /// body from above (head up), from its left and in perspective, and add the game view: the whole scene through the
@@ -44,14 +45,17 @@ namespace OtterLocomotion.EditorTools
             /// <summary>Half the picture's height at the subject (m).</summary>
             public readonly float size;
             public readonly bool perspective;
+            /// <summary>Looking through a pane of the sea from the surface down (a level view).</summary>
+            public readonly bool waterline;
 
-            public View(string name, Vector3 position, Quaternion rotation, float size, bool perspective)
+            public View(string name, Vector3 position, Quaternion rotation, float size, bool perspective, bool waterline = false)
             {
                 this.name = name;
                 this.position = position;
                 this.rotation = rotation;
                 this.size = size;
                 this.perspective = perspective;
+                this.waterline = waterline;
             }
         }
 
@@ -128,7 +132,7 @@ namespace OtterLocomotion.EditorTools
                 var views = new[]
                 {
                     Orthographic("top", bounds.center, Vector3.up, forward, extent * 0.8f, extent),
-                    Orthographic("left", bounds.center, -right, Vector3.up, extent * 0.8f, extent),
+                    Orthographic("left", bounds.center, -right, Vector3.up, extent * 0.8f, extent, waterline: true),
                 };
                 Render(body, views, 1000, 800,
                     (v, tex) => File.WriteAllBytes(Path.Combine(dir, $"{label}_{shot.name}_{views[v].name}.png"), tex.EncodeToPNG()));
@@ -165,8 +169,8 @@ namespace OtterLocomotion.EditorTools
             var close = new[]
             {
                 Orthographic("top", center, Vector3.up, forward, extent * 0.3f, extent),
-                Orthographic("back", center, -forward, Vector3.up, extent * 0.3f, extent),
-                Orthographic("left", center, -right, Vector3.up, extent * 0.3f, extent),
+                Orthographic("back", center, -forward, Vector3.up, extent * 0.3f, extent, waterline: true),
+                Orthographic("left", center, -right, Vector3.up, extent * 0.3f, extent, waterline: true),
             };
             var wide = new[] { Perspective("persp", center, aside, extent * 0.45f), held };
             int column = frame % Columns, row = frame / Columns, rowCount = sheets[0].height / CellHeight;
@@ -190,8 +194,8 @@ namespace OtterLocomotion.EditorTools
             sheets = null;
         }
 
-        static View Orthographic(string name, Vector3 center, Vector3 from, Vector3 up, float size, float extent) =>
-            new View(name, center + from * (extent + 1f), Quaternion.LookRotation(-from, up), size, false);
+        static View Orthographic(string name, Vector3 center, Vector3 from, Vector3 up, float size, float extent, bool waterline = false) =>
+            new View(name, center + from * (extent + 1f), Quaternion.LookRotation(-from, up), size, false, waterline);
 
         static View Perspective(string name, Vector3 center, Vector3 from, float size) =>
             new View(name, center + from * (size / Mathf.Tan(0.5f * FieldOfView * Mathf.Deg2Rad)), Quaternion.LookRotation(-from, Vector3.up), size, true);
@@ -235,6 +239,10 @@ namespace OtterLocomotion.EditorTools
             var rt = new RenderTexture(width, height, 24);
             var tex = new Texture2D(width, height, TextureFormat.RGB24, false);
             cam.targetTexture = rt;
+            var sea = OtterTestSceneSetup.FindSea();
+            var water = sea != null ? sea.GetComponent<Water>() : null;
+            var seaMaterial = sea != null && sea.TryGetComponent<Renderer>(out var surface) ? surface.sharedMaterial : null;
+            GameObject pane = null;
             try
             {
                 for (int v = 0; v < views.Length; v++)
@@ -242,7 +250,10 @@ namespace OtterLocomotion.EditorTools
                     cam.orthographic = !views[v].perspective;
                     cam.orthographicSize = views[v].size;
                     go.transform.SetPositionAndRotation(views[v].position, views[v].rotation);
+                    if (views[v].waterline && water != null && seaMaterial != null)
+                        pane = WaterPane(views[v], water.SurfaceY, (float)width / height, seaMaterial);
                     cam.Render();
+                    if (pane != null) Object.DestroyImmediate(pane);
                     var prev = RenderTexture.active;
                     RenderTexture.active = rt;
                     tex.ReadPixels(new Rect(0, 0, width, height), 0, 0);
@@ -255,10 +266,32 @@ namespace OtterLocomotion.EditorTools
             {
                 for (int i = 0; i < drawn.Length; i++) drawn[i].gameObject.layer = layers[i];
                 cam.targetTexture = null;
+                if (pane != null) Object.DestroyImmediate(pane);
                 Object.DestroyImmediate(go);
                 Object.DestroyImmediate(rt);
                 Object.DestroyImmediate(tex);
             }
+        }
+
+        // A level view's camera is inside the sea's box, whose faces show only from outside: a sheet of the sea just
+        // in front of the camera, across the picture from the surface down past its foot, stands in for the water.
+        static GameObject WaterPane(View view, float surfaceY, float aspect, Material material)
+        {
+            float bottom = view.position.y - 1.5f * view.size;
+            if (surfaceY <= bottom) return null;
+            var go = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            go.hideFlags = HideFlags.HideAndDontSave;
+            Object.DestroyImmediate(go.GetComponent<Collider>());
+            go.layer = Layer;
+            float depth = surfaceY - bottom;
+            Vector3 ahead = view.rotation * Vector3.forward * 0.5f;
+            // the quad shows its face toward -z, so turned as the camera it faces it
+            go.transform.SetPositionAndRotation(new Vector3(view.position.x, surfaceY - 0.5f * depth, view.position.z) + ahead, view.rotation);
+            go.transform.localScale = new Vector3(2.5f * view.size * aspect, depth, 1f);
+            var r = go.GetComponent<MeshRenderer>();
+            r.sharedMaterial = material;
+            r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            return go;
         }
     }
 }

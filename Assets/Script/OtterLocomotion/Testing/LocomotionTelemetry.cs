@@ -127,6 +127,9 @@ namespace OtterLocomotion.Testing
             /// over toward the belly (on the back, up toward the sky and on toward its own chest), - = thrown back.
             /// </summary>
             public float headTuck;
+            /// <summary>Buoyancy: the share of the skin under the surface, how deep its lowest point lies (cm) and the body's
+            /// position above the surface (cm); NaN without it.</summary>
+            public float submerged, draft, ride;
             /// <summary>Per hind foot: WebThrust's push on the body along its heading (N, + = forward), 0 without it.</summary>
             public float[] webPush;
             public Posture posture;
@@ -174,6 +177,8 @@ namespace OtterLocomotion.Testing
         private TailRudder tail;
         private SpineKickSway sway;
         private WebThrust webThrust;
+        private Buoyancy buoyancy;
+        private Water water;
         private string footInfo = "", floatInfo = "";
         private bool kickThisFrame, pulseThisFrame;
         private float prevYaw;
@@ -230,8 +235,8 @@ namespace OtterLocomotion.Testing
                 Vector3 middle = headSkin.Aggregate(Vector3.zero, (a, p) => a + p) / headSkin.Count;
                 snoutLocal = head.InverseTransformDirection(nose - middle).normalized;
             }
-            var water = FindObjectOfType<WaterReference>();
-            float Above(float y) => (y - (water != null ? water.surfaceY : 0f)) * 100f;
+            water = FindObjectOfType<Water>();
+            float Above(float y) => (y - (water != null ? water.SurfaceY : 0f)) * 100f;
             var skins = controls.GetComponentsInChildren<SkinnedMeshRenderer>().Where(r => r.enabled && r.gameObject.activeInHierarchy).ToArray();
             var rb0 = controls.GetComponent<Rigidbody>();
             floatInfo = $"body {Above(b0.position.y):F1}" + (rb0 != null ? $", centre of mass {Above(rb0.worldCenterOfMass.y):F1}" : "") +
@@ -245,6 +250,7 @@ namespace OtterLocomotion.Testing
             tail = controls.GetComponent<TailRudder>();
             sway = controls.GetComponent<SpineKickSway>();
             webThrust = controls.GetComponent<WebThrust>();
+            buoyancy = controls.GetComponent<Buoyancy>();
             if (spineWave != null) spineWave.Pulsed += OnPulse;
             if (brain != null)
             {
@@ -429,6 +435,10 @@ namespace OtterLocomotion.Testing
                 Vector3 snout = head.TransformDirection(snoutLocal);
                 s.headTuck = Mathf.Atan2(Vector3.Dot(snout, chest.forward), Vector3.Dot(snout, chest.up)) * Mathf.Rad2Deg;
             }
+            bool afloat = buoyancy != null && buoyancy.isActiveAndEnabled && water != null;
+            s.submerged = afloat ? buoyancy.Submerged : float.NaN;
+            s.draft = afloat ? buoyancy.Draft * 100f : float.NaN;
+            s.ride = afloat ? (controls.transform.position.y - water.SurfaceY) * 100f : float.NaN;
             if (brain != null)
             {
                 var d = brain.Demand;
@@ -533,6 +543,8 @@ namespace OtterLocomotion.Testing
             sb.Append(",tail,waist,bend,tailHit,tailLift");
             // the snout's pitch from the chest's line toward the belly, deg, + = curled over toward it
             sb.Append(",headTuck");
+            // the share of the skin under the surface; how deep its lowest point lies, cm; the body's position above the surface, cm
+            sb.Append(",afloat,draft,ride");
             // each web's push on the body along its heading, N
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wpush");
             // the web middle's speed up through the water (m/s) and its normal's up component
@@ -575,6 +587,9 @@ namespace OtterLocomotion.Testing
                 sb.Append(',').Append(float.IsNaN(s.tailHit) ? "" : s.tailHit.ToString("F2", ci));
                 sb.Append(',').Append(float.IsNaN(s.tailLift) ? "" : s.tailLift.ToString("F1", ci));
                 sb.Append(',').Append(s.headTuck.ToString("F1", ci));
+                sb.Append(',').Append(float.IsNaN(s.submerged) ? "" : s.submerged.ToString("F3", ci));
+                sb.Append(',').Append(float.IsNaN(s.draft) ? "" : s.draft.ToString("F2", ci));
+                sb.Append(',').Append(float.IsNaN(s.ride) ? "" : s.ride.ToString("F2", ci));
                 foreach (var w in s.webPush) sb.Append(',').Append(w.ToString("F3", ci));
                 for (int k = 0; k < s.footWorldUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footWorldUp[k], s.footNormalUp[k]));
                 for (int k = 0; k < s.footToesUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footToesUp[k], s.footToesFwd[k]));
@@ -617,6 +632,12 @@ namespace OtterLocomotion.Testing
                           " with the stroke rhythm the limb time is the first turning power stroke");
             sb.AppendLine(feet.Count > 0 ? $"# hind feet at start (body axes): {footInfo}" : "# hind feet: no web found in the skinned mesh");
             sb.AppendLine($"# afloat at start (cm above the water surface): {floatInfo}");
+            if (buoyancy != null && buoyancy.isActiveAndEnabled && buoyancy.Stiffness > 0f)
+            {
+                float mass = controls.GetComponent<Rigidbody>().mass;
+                sb.AppendLine($"# buoyancy: skin {buoyancy.Volume * 1000f:F2} L, density {buoyancy.density:F2} of the water's, heave stiffness {buoyancy.Stiffness:F0} N/m " +
+                              $"(bob period {2f * Mathf.PI * Mathf.Sqrt(mass / buoyancy.Stiffness):F2} s), damping {buoyancy.heaveDamping:F2} of critical");
+            }
             if (brain != null && brain.HasLimbGeometry)
             {
                 var p = brain.Parameters;
@@ -693,6 +714,15 @@ namespace OtterLocomotion.Testing
             sb.AppendLine($"  body (seen from above, + = curled right): waist {Range(waist)} | tail tip {Range(tails)}{follow}");
             var tucks = idx.Select(i => samples[i].headTuck).OrderBy(x => x).ToList();
             sb.AppendLine($"  head: snout from the chest's line toward the belly (+ = curled over toward it) {Range(tucks)}");
+            List<float> Sorted(System.Func<Sample, float> f) => idx.Select(i => f(samples[i])).Where(x => !float.IsNaN(x)).OrderBy(x => x).ToList();
+            var under = Sorted(s => s.submerged * 100f);
+            if (under.Count > 0)
+            {
+                string Span(List<float> v) => $"{P(v, 0.05f).ToString("F1", ci)}..{P(v, 0.95f).ToString("F1", ci)}";
+                var rides = Sorted(s => s.ride);
+                sb.AppendLine($"  afloat: under water {Span(under)} % of the skin (still at {buoyancy.density * 100f:F0} %), draft {Span(Sorted(s => s.draft))} cm, " +
+                              $"body {Span(rides)} cm above the surface (bob ±{(0.5f * (P(rides, 0.95f) - P(rides, 0.05f))).ToString("F1", ci)})");
+            }
             var hits = idx.Select(i => samples[i].tailHit).Where(x => !float.IsNaN(x)).ToList();
             var lifts = idx.Select(i => samples[i].tailLift).Where(x => !float.IsNaN(x)).OrderBy(x => x).ToList();
             if (hits.Count > 0)

@@ -8,13 +8,11 @@ namespace OtterLocomotion
     /// grid of lines on the surface and a coarser one on a floor below, laid around the otter and stepped along with
     /// it by whole cells, so the lines stay put in the world while it swims over them; and a trail behind each hind
     /// web in the world, which shows whether a push holds its water (the web nearly still while the body passes it)
-    /// or slips back through it. Built for Play only, never saved.
+    /// or slips back through it. The grids sit at the Water's surface (at 0 without one). Built for Play only, never saved.
     /// </summary>
     [DisallowMultipleComponent]
     public class WaterReference : MonoBehaviour
     {
-        [Tooltip("Water surface height (m).")]
-        public float surfaceY = 0f;
         [Header("Surface grid")]
         public float surfaceCell = 0.25f;
         [Tooltip("Cells out from the otter on each side.")]
@@ -39,6 +37,7 @@ namespace OtterLocomotion
         private readonly List<Renderer> renderers = new List<Renderer>();
         private readonly List<Object> owned = new List<Object>();
         private Transform surface, floor;
+        private Water water;
         private bool started;
 
         /// <summary>Everything drawn, for cameras that show only chosen renderers.</summary>
@@ -67,6 +66,7 @@ namespace OtterLocomotion
 
         private void Build()
         {
+            water = FindObjectOfType<Water>();
             var lines = NewMaterial();
             surface = Grid("WaterReferenceSurface", surfaceCell, surfaceCells, surfaceColor, majorColor, majorEvery, lines);
             floor = Grid("WaterReferenceFloor", floorCell, floorCells, floorColor, floorColor, 0, lines);
@@ -78,6 +78,7 @@ namespace OtterLocomotion
         {
             if (surface == null) return;
             Vector3 p = transform.position;
+            float surfaceY = water != null ? water.SurfaceY : 0f;
             surface.position = Snap(p, surfaceCell, surfaceY);
             floor.position = Snap(p, floorCell, surfaceY - floorDepth);
         }

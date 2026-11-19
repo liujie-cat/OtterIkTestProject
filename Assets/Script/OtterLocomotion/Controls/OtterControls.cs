@@ -102,7 +102,7 @@ namespace OtterLocomotion
             if (legacy == null) legacy = GetComponent<MovementControllerRB>();
             if (body != null)
             {
-                // on the surface: no gravity, no pitching or rolling of the physics body
+                // held at its height until Buoyancy floats it; no pitching or rolling of the physics body
                 body.useGravity = false;
                 body.constraints = (body.constraints | RigidbodyConstraints.FreezePositionY | RigidbodyConstraints.FreezeRotationX | RigidbodyConstraints.FreezeRotationZ)
                                    & ~RigidbodyConstraints.FreezeRotationY;
