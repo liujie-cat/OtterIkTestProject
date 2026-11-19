@@ -134,6 +134,8 @@ namespace OtterLocomotion.Testing
             public float[] webPush;
             /// <summary>Per hind foot: the share of the web under the water's surface (WebThrust), NaN without it.</summary>
             public float[] webWet;
+            /// <summary>Per hind foot: how deep its hip joint lies under the surface (cm), NaN without a Water.</summary>
+            public float[] hipDepth;
             public Posture posture;
             public float supine, roll, speedTarget, requestedSpeed, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
             public bool allocated;
@@ -428,6 +430,7 @@ namespace OtterLocomotion.Testing
             s.swayBend = sway != null && sway.isActiveAndEnabled ? sway.Bend : float.NaN;
             s.webPush = feet.Select(f => webThrust != null && webThrust.isActiveAndEnabled && System.Enum.TryParse<LimbId>(f.name, out var id) ? webThrust.Push(id) : 0f).ToArray();
             s.webWet = feet.Select(f => webThrust != null && webThrust.isActiveAndEnabled && System.Enum.TryParse<LimbId>(f.name, out var id) ? webThrust.Immersion(id) : float.NaN).ToArray();
+            s.hipDepth = feet.Select(f => water != null ? water.Depth(f.hipJoint.position) * 100f : float.NaN).ToArray();
             // spine bones point +Y toward the head
             s.waist = hip != null && chest != null
                 ? Vector3.SignedAngle(Vector3.ProjectOnPlane(hip.up, Vector3.up), Vector3.ProjectOnPlane(chest.up, Vector3.up), Vector3.up)
@@ -527,8 +530,8 @@ namespace OtterLocomotion.Testing
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_face,").Append(f.name).Append("_vfwd,").Append(f.name).Append("_spd,").Append(f.name).Append("_nfwd");
             // distance between the two webs' centres, cm
             sb.Append(",feetGap");
-            // LimbStrokeAnimator's flipper pass: ankle turn from rest (deg), push flag, web width, turn the goal asks for (deg)
-            foreach (var f in feet) sb.Append(',').Append(f.name).Append("_turn,").Append(f.name).Append("_push,").Append(f.name).Append("_width,").Append(f.name).Append("_need");
+            // LimbStrokeAnimator's flipper pass: ankle turn from rest (deg), how far set for the push, web width, swing on the ankle hinge (deg)
+            foreach (var f in feet) sb.Append(',').Append(f.name).Append("_turn,").Append(f.name).Append("_push,").Append(f.name).Append("_width,").Append(f.name).Append("_hinge");
             // ankle from the hip joint in the hip's axes, cm (forward, outward, ventral), and over the leg's length
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_pf,").Append(f.name).Append("_po,").Append(f.name).Append("_pv,").Append(f.name).Append("_reach");
             // how far each kick loop swings out for the turn (deg)
@@ -550,8 +553,9 @@ namespace OtterLocomotion.Testing
             sb.Append(",afloat,draft,ride");
             // each web's push on the body along its heading, N
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wpush");
-            // the share of each web under the water's surface
+            // the share of each web under the water's surface; how deep each hip joint lies under it, cm
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wet");
+            foreach (var f in feet) sb.Append(',').Append(f.name).Append("_hipDepth");
             // the web middle's speed up through the water (m/s) and its normal's up component
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wup,").Append(f.name).Append("_nup");
             // which way the toes point: up and forward components
@@ -578,7 +582,7 @@ namespace OtterLocomotion.Testing
                     sb.Append(string.Format(ci, ",{0:F2},{1:F2},{2:F2},{3:F2}", s.footFace[k], s.footFwd[k], s.footSpeed[k], s.footNormalFwd[k]));
                 sb.Append(',').Append(s.feetGap.ToString("F2", ci));
                 foreach (var p in s.flipperPose)
-                    sb.Append(string.Format(ci, ",{0:F1},{1:F0},{2:F2},{3:F0}", p.x, p.y, p.z, p.w));
+                    sb.Append(string.Format(ci, ",{0:F1},{1:F2},{2:F2},{3:F0}", p.x, p.y, p.z, p.w));
                 for (int k = 0; k < feet.Count; k++)
                     sb.Append(string.Format(ci, ",{0:F2},{1:F2},{2:F2},{3:F3}", s.footPath[k].x, s.footPath[k].y, s.footPath[k].z, s.footReach[k]));
                 foreach (var y in s.kickYaw) sb.Append(',').Append(y.ToString("F1", ci));
@@ -597,6 +601,7 @@ namespace OtterLocomotion.Testing
                 sb.Append(',').Append(float.IsNaN(s.ride) ? "" : s.ride.ToString("F2", ci));
                 foreach (var w in s.webPush) sb.Append(',').Append(w.ToString("F3", ci));
                 foreach (var w in s.webWet) sb.Append(',').Append(float.IsNaN(w) ? "" : w.ToString("F2", ci));
+                foreach (var d in s.hipDepth) sb.Append(',').Append(float.IsNaN(d) ? "" : d.ToString("F2", ci));
                 for (int k = 0; k < s.footWorldUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footWorldUp[k], s.footNormalUp[k]));
                 for (int k = 0; k < s.footToesUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footToesUp[k], s.footToesFwd[k]));
                 if (brain != null)
@@ -726,8 +731,10 @@ namespace OtterLocomotion.Testing
             {
                 string Span(List<float> v) => $"{P(v, 0.05f).ToString("F1", ci)}..{P(v, 0.95f).ToString("F1", ci)}";
                 var rides = Sorted(s => s.ride);
+                var hips = Sorted(s => s.hipDepth != null && s.hipDepth.Length > 0 ? s.hipDepth.Average() : float.NaN);
                 sb.AppendLine($"  afloat: under water {Span(under)} % of the skin (still at {buoyancy.density * 100f:F0} %), draft {Span(Sorted(s => s.draft))} cm, " +
-                              $"body {Span(rides)} cm above the surface (bob ±{(0.5f * (P(rides, 0.95f) - P(rides, 0.05f))).ToString("F1", ci)})");
+                              $"body {Span(rides)} cm above the surface (bob ±{(0.5f * (P(rides, 0.95f) - P(rides, 0.05f))).ToString("F1", ci)})" +
+                              (hips.Count > 0 ? $", hip joints {Span(hips)} cm under" : ""));
             }
             var hits = idx.Select(i => samples[i].tailHit).Where(x => !float.IsNaN(x)).ToList();
             var lifts = idx.Select(i => samples[i].tailLift).Where(x => !float.IsNaN(x)).OrderBy(x => x).ToList();

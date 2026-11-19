@@ -89,7 +89,7 @@ namespace OtterLocomotion.EditorTools
             {
                 new Shot(1, 0.1f, "01_park_kick_feet", 8, 0.06f),
                 new Shot(2, 0.3f, "02_park_click_turn_a"), new Shot(2, 0.6f, "02_park_click_turn_b"), new Shot(2, 0.9f, "02_park_click_turn_c"),
-                new Shot(5, 1.5f, "05_slow_straight"),
+                new Shot(5, 1.5f, "05_slow_straight"), new Shot(5, 1.85f, "05_slow_push"),
                 new Shot(5, 1.55f, "05_slow_straight_feet", 8, 0.1f),
                 new Shot(6, 0.3f, "06_slow_turn_a"), new Shot(6, 0.6f, "06_slow_turn_b"),
                 new Shot(8, 0.3f, "08_roll_prone_a"), new Shot(8, 0.6f, "08_roll_prone_b"), new Shot(8, 0.9f, "08_roll_prone_c"),

@@ -21,7 +21,7 @@ namespace OtterLocomotion
 
         [Header("Speed -> surge force")]
         [Tooltip("Speed (body lengths/s) the hind kicks hold at full stroke strength on the back, and on the belly (WebThrust). The stroke strength asked for is the speed target's share of it: kicks grow with the speed wanted, not with the push missing, since a web's push grows with the square of its speed through the water and a slow body gets far more from the same kick.")]
-        public float supineKickSpeedBL = 0.95f;
+        public float supineKickSpeedBL = 1.6f;
         public float proneKickSpeedBL = 2.1f;
         [Tooltip("Kicks for u* + gain * (u* - u): how much harder or lighter the speed error makes them.")]
         public float speedGain = 1.5f;
@@ -49,15 +49,15 @@ namespace OtterLocomotion
 
     /// <summary>
     /// Intent + measured state -> what the body needs: yaw rate, speed, and the surge/sway force and yaw moment that
-    /// would produce them. Pure function of its inputs plus three bits of memory (slewed speed target, kick trim,
-    /// last turn direction).
+    /// would produce them. Pure function of its inputs plus three bits of memory (slewed speed target, kick trim and
+    /// the kicks it was learned for, last turn direction).
     /// </summary>
     public sealed class DemandLayer
     {
         private LocomotionDemand demand;
         private float speedTarget;
-        /// <summary>Kick trim as a share of the full-stroke speed.</summary>
-        private float trim;
+        /// <summary>Kick trim as a share of the full-stroke speed, and the full-stroke speed it was learned for.</summary>
+        private float trim, trimKickSpeed;
         private int turnSign;
 
         public LocomotionDemand Current => demand;
@@ -67,6 +67,7 @@ namespace OtterLocomotion
             demand = default;
             speedTarget = Mathf.Max(0f, body.surge);
             trim = 0f;
+            trimKickSpeed = 0f;
             turnSign = 0;
         }
 
@@ -95,10 +96,15 @@ namespace OtterLocomotion
             // easing down, the target never waits above the body: one already slower kicks for the new target at once
             if (slowing) speedTarget = Mathf.Max(requested, Mathf.Min(speedTarget, Mathf.Max(0f, body.surge)));
             kickSpeed = Mathf.Max(1e-3f, kickSpeed);
-            if (requested <= 0f) trim = 0f;
-            else if (!slowing && speedTarget >= requested - 1e-4f && Mathf.Abs(rTarget) < s.speedTrimYawRate)
-                trim = Mathf.Clamp(trim + s.speedTrimRate * (speedTarget - body.surge) / kickSpeed * dt, -s.speedTrimMax, s.speedTrimMax);
-            float kick = speedTarget + s.speedGain * (speedTarget - body.surge) + trim * kickSpeed;
+            float lag = speedTarget - body.surge;
+            // a trim learned for one posture's kicks means nothing for another's; and kicks already at full strength
+            // can't be trimmed harder, the trim would only wind up and overshoot once they can
+            bool full = lag > 0f && speedTarget + s.speedGain * lag + trim * kickSpeed >= kickSpeed;
+            if (requested <= 0f || Mathf.Abs(kickSpeed - trimKickSpeed) > 1e-4f) trim = 0f;
+            else if (!slowing && !full && speedTarget >= requested - 1e-4f && Mathf.Abs(rTarget) < s.speedTrimYawRate)
+                trim = Mathf.Clamp(trim + s.speedTrimRate * lag / kickSpeed * dt, -s.speedTrimMax, s.speedTrimMax);
+            trimKickSpeed = kickSpeed;
+            float kick = speedTarget + s.speedGain * lag + trim * kickSpeed;
             // the kicks only drive: the water slows the body, and the controls' brake when asked
             float surgeForce = slowing || requested <= 0f ? 0f : Mathf.Max(0f, fullStroke * kick / kickSpeed);
 

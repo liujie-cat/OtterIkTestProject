@@ -29,11 +29,11 @@ namespace OtterLocomotion
     [Serializable]
     public class RhythmSettings
     {
-        [Tooltip("Hind feet kicking together: cruising and sprinting on the belly, in the dolphin wave, and a click's kick from rest.")]
+        [Tooltip("Hind feet kicking together: cruising and sprinting on the belly, in the dolphin wave, and a click's kick from rest. The web drives only while it sweeps back faster than the body moves on, so the push is quick and the relaxed draw long.")]
         [FormerlySerializedAs("hind")]
-        public RhythmProfile hindTogether = new RhythmProfile(0.7f, 3f, 0.3f, 3f);
+        public RhythmProfile hindTogether = new RhythmProfile(0.7f, 3f, 0.25f, 3f);
         [Tooltip("Hind feet taking turns: swimming slowly on the back, and turning on the spot when parked.")]
-        public RhythmProfile hindAlternate = new RhythmProfile(0.6f, 2f, 0.4f, 3f);
+        public RhythmProfile hindAlternate = new RhythmProfile(0.6f, 2f, 0.25f, 3f);
         public RhythmProfile fore = new RhythmProfile(1.6f, 3.2f, 0.4f, 1.5f);
 
         [Header("Drive = allocated force / full-drive force")]
