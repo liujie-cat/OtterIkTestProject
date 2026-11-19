@@ -10,7 +10,7 @@ namespace OtterLocomotion.EditorTools
     /// waterline shows on the body; the perspective ones look on from above and behind its left side, as from
     /// the Scene view, with the sea, WaterReference's grids and web trails and the controls' ring and guide arrow, so
     /// the body's motion can be set against the water, the strokes and where it is led. Single shots frame the whole
-    /// body from above (head up), from its left and in perspective, and add the game view: the whole scene through the
+    /// body from above (head up), from its left, from behind (how it leans into a turn) and in perspective, and add the game view: the whole scene through the
     /// camera the controls read the pointer through, as the player sees it. Strips are contact sheets over a kick
     /// (frames left to right, then the next row): close-ups of the hind feet from above, behind and the left, a
     /// perspective close-up riding with the hips, and a perspective view held still in the world over the whole strip,
@@ -133,6 +133,7 @@ namespace OtterLocomotion.EditorTools
                 {
                     Orthographic("top", bounds.center, Vector3.up, forward, extent * 0.8f, extent),
                     Orthographic("left", bounds.center, -right, Vector3.up, extent * 0.8f, extent, waterline: true),
+                    Orthographic("back", bounds.center, -forward, Vector3.up, extent * 0.5f, extent, waterline: true),
                 };
                 Render(body, views, 1000, 800,
                     (v, tex) => File.WriteAllBytes(Path.Combine(dir, $"{label}_{shot.name}_{views[v].name}.png"), tex.EncodeToPNG()));

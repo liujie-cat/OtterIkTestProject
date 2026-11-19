@@ -5,8 +5,11 @@ using UnityEngine;
 namespace OtterLocomotion
 {
     /// <summary>
-    /// Makes the spine's flip follow the brain's posture, so the limb the allocation picks is the one on that side in
-    /// the picture. Overrides the flip toggled elsewhere (SpineFlipTestController's F key); the tilt keys still work.
+    /// Makes the spine's roll follow the brain: its flip the posture, so the limb the allocation picks is the one on that
+    /// side in the picture, and its tilt the bank into the turn. The tilt turns the spine about its own length on top of
+    /// the flip, so the side toward the turn sinks on the belly and on the back alike; it is strongest at the chest and
+    /// carried on down to the hips, and the limbs, set on the chest and hip bones, roll with them. Overrides the flip
+    /// and tilt set elsewhere (SpineFlipTestController's F, Q and E keys).
     /// </summary>
     [DefaultExecutionOrder(160)]
     [DisallowMultipleComponent]
@@ -28,6 +31,8 @@ namespace OtterLocomotion
         {
             if (brain == null || rollProvider == null) return;
             rollProvider.isBackstroke = brain.Posture.Current == Posture.Supine;
+            // the tilt is + = left side down, the bank + = right side down
+            rollProvider.additiveRoll = -brain.Demand.bankTargetDeg;
         }
     }
 }

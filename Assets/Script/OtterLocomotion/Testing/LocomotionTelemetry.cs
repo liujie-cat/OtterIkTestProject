@@ -84,6 +84,8 @@ namespace OtterLocomotion.Testing
         {
             public float t, dt, intentYaw, bodyYaw, yawRate, speedFwd, speedLat, targetSpeed, aim;
             public float headYaw, chestBend, chestRoll;
+            /// <summary>How far the chest and hip bones lean about their own length from lying level (deg, + = right side down).</summary>
+            public float chestBank, hipBank;
             /// <summary>Where the neck is told to look: its look point seen from the chest (deg from the body's heading) and how far it is (m).</summary>
             public float guideYaw, guideDist;
             public int seg;
@@ -445,6 +447,9 @@ namespace OtterLocomotion.Testing
             s.submerged = afloat ? buoyancy.Submerged : float.NaN;
             s.draft = afloat ? buoyancy.Draft * 100f : float.NaN;
             s.ride = afloat ? (controls.transform.position.y - water.SurfaceY) * 100f : float.NaN;
+            bool onBack = brain != null && brain.Posture.SupineFraction > 0.5f;
+            s.chestBank = chest != null ? Bank(chest, onBack) : 0f;
+            s.hipBank = hip != null ? Bank(hip, onBack) : 0f;
             if (brain != null)
             {
                 var d = brain.Demand;
@@ -488,6 +493,16 @@ namespace OtterLocomotion.Testing
             Vector3 dorsal = Vector3.ProjectOnPlane(-chest.forward, axis);
             Vector3 up = Vector3.ProjectOnPlane(body.up, axis);
             return Vector3.SignedAngle(up, dorsal, axis);
+        }
+
+        // How far a spine bone (+Y toward the head, +Z ventral) leans about its own length, + = right side down: the
+        // side facing the sky, its back or on the back its belly, tipped toward the right.
+        private static float Bank(Transform bone, bool onBack)
+        {
+            Vector3 axis = bone.up;
+            Vector3 top = Vector3.ProjectOnPlane(onBack ? bone.forward : -bone.forward, axis);
+            Vector3 sky = Vector3.ProjectOnPlane(Vector3.up, axis);
+            return -Vector3.SignedAngle(sky, top, axis);
         }
 
         private static Vector3 Flat(Vector3 v)
@@ -547,8 +562,9 @@ namespace OtterLocomotion.Testing
             // hind pushes' bend on the spine, -1..1; how deep the tail sits in the hind legs, cm; the tail tip's lift above
             // the hips' line, deg, + = toward the back
             sb.Append(",tail,waist,bend,tailHit,tailLift");
-            // the snout's pitch from the chest's line toward the belly, deg, + = curled over toward it
-            sb.Append(",headTuck");
+            // the snout's pitch from the chest's line toward the belly, deg, + = curled over toward it; the chest and hip
+            // bones' lean about their length from lying level, deg, + = right side down
+            sb.Append(",headTuck,chestBank,hipBank");
             // the share of the skin under the surface; how deep its lowest point lies, cm; the body's position above the surface, cm
             sb.Append(",afloat,draft,ride");
             // each web's push on the body along its heading, N
@@ -596,6 +612,7 @@ namespace OtterLocomotion.Testing
                 sb.Append(',').Append(float.IsNaN(s.tailHit) ? "" : s.tailHit.ToString("F2", ci));
                 sb.Append(',').Append(float.IsNaN(s.tailLift) ? "" : s.tailLift.ToString("F1", ci));
                 sb.Append(',').Append(s.headTuck.ToString("F1", ci));
+                sb.Append(',').Append(s.chestBank.ToString("F1", ci)).Append(',').Append(s.hipBank.ToString("F1", ci));
                 sb.Append(',').Append(float.IsNaN(s.submerged) ? "" : s.submerged.ToString("F3", ci));
                 sb.Append(',').Append(float.IsNaN(s.draft) ? "" : s.draft.ToString("F2", ci));
                 sb.Append(',').Append(float.IsNaN(s.ride) ? "" : s.ride.ToString("F2", ci));
@@ -906,9 +923,14 @@ namespace OtterLocomotion.Testing
             var fPeak = PeakBy(x => x.surgeForce);
             var yPeak = PeakBy(x => x.swayForce);
             var bPeak = PeakBy(x => x.bank);
+            // how far the body leaned, lying on the belly or the back: not rolling over between them, nor the spine still
+            // turning over after the posture has
+            var level = seq.Where(x => (x.supine < 0.01f || x.supine > 0.99f) && Mathf.Abs(x.chestBank) < 60f && Mathf.Abs(x.hipBank) < 60f).ToList();
+            string leaned = level.Count == 0 ? "" :
+                $", leaned chest {level.OrderByDescending(x => Mathf.Abs(x.chestBank)).First().chestBank:F0} hips {level.OrderByDescending(x => Mathf.Abs(x.hipBank)).First().hipBank:F0} deg";
             sb.AppendLine($"  demand: end {last.posture} (supine {last.supine:F2}), speed target {last.speedTarget:F2} asked {last.requestedSpeed:F2}; " +
                           $"peak r* {rPeak.yawRateTarget:F0} deg/s, Mz {mPeak.yawMoment:F3} N·m, Fx {fPeak.surgeForce:F1} N (mean {seq.Average(x => x.surgeForce):F1}), " +
-                          $"Fy {yPeak.swayForce:F1} N, bank {bPeak.bank:F0} deg at {(bPeak.t - t0).ToString("F2", ci)} s");
+                          $"Fy {yPeak.swayForce:F1} N, bank {bPeak.bank:F0} deg at {(bPeak.t - t0).ToString("F2", ci)} s{leaned}");
 
             var alloc = seq.Where(x => x.allocated).ToList();
             if (alloc.Count == 0) return;
