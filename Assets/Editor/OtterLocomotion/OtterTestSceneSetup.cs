@@ -9,6 +9,7 @@ using OtterIK.Neo.Experiment;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.Rendering;
 using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 
@@ -17,7 +18,7 @@ namespace OtterLocomotion.EditorTools
     /// <summary>
     /// Brings the test scene to what the current code expects: the sea otter rig in place of the cat, IK targets on
     /// the rest pose, the locomotion components on the swimming body with their references and code-default
-    /// settings, and the old ring controls and neck controller off. Every step checks first and changes only what is off, so it can be run
+    /// settings, a translucent sea at the water surface, and the old ring controls and neck controller off. Every step checks first and changes only what is off, so it can be run
     /// at any time. One Undo step.
     /// </summary>
     static class OtterTestSceneSetup
@@ -89,6 +90,76 @@ namespace OtterLocomotion.EditorTools
             return on;
         }
 
+        const string SeaName = "Sea";
+        const string SeaMaterialPath = "Assets/ArtResource/Sea/SeaWater.mat";
+        /// <summary>Half the sea's width (m), far past where the playbacks swim.</summary>
+        const float SeaHalfWidth = 50f;
+
+        /// <summary>The translucent sea surface the refresh lays at the water height (WaterReference.surfaceY).</summary>
+        internal static GameObject FindSea() => SceneManager.GetActiveScene().GetRootGameObjects().FirstOrDefault(g => g.name == SeaName);
+
+        static float SurfaceY(MovementControllerRB body) => body.TryGetComponent<WaterReference>(out var water) ? water.surfaceY : 0f;
+
+        /// <summary>What is off about the sea for a water surface at <paramref name="surfaceY"/>; null when it is in place.</summary>
+        static string SeaOff(float surfaceY)
+        {
+            var sea = FindSea();
+            if (sea == null) return "还没有";
+            float y = sea.transform.position.y;
+            if (Mathf.Abs(y - surfaceY) > 1e-4f) return $"在 {y:F3} m，水面在 {surfaceY:F3} m";
+            var r = sea.GetComponent<MeshRenderer>();
+            return r == null ? $"'{SeaName}' 没有 MeshRenderer，删掉它刷新时重建" : r.sharedMaterial == null ? "没有材质" : null;
+        }
+
+        static void MakeSea(float surfaceY, Vector3 around)
+        {
+            var sea = FindSea();
+            if (sea == null)
+            {
+                sea = GameObject.CreatePrimitive(PrimitiveType.Plane);
+                sea.name = SeaName;
+                // only to look at: the body must not rest on it
+                Object.DestroyImmediate(sea.GetComponent<Collider>());
+                sea.transform.position = new Vector3(around.x, surfaceY, around.z);
+                // the plane mesh is 10 m across
+                sea.transform.localScale = new Vector3(SeaHalfWidth / 5f, 1f, SeaHalfWidth / 5f);
+                var fresh = sea.GetComponent<MeshRenderer>();
+                fresh.sharedMaterial = SeaMaterial();
+                fresh.shadowCastingMode = ShadowCastingMode.Off;
+                Undo.RegisterCreatedObjectUndo(sea, "Create the sea");
+                return;
+            }
+            Undo.RecordObject(sea.transform, "Lay the sea at the water surface");
+            var p = sea.transform.position;
+            sea.transform.position = new Vector3(p.x, surfaceY, p.z);
+            var r = sea.GetComponent<MeshRenderer>();
+            if (r != null && r.sharedMaterial == null)
+            {
+                Undo.RecordObject(r, "Sea water material");
+                r.sharedMaterial = SeaMaterial();
+            }
+        }
+
+        // made once and kept as an asset, to be tuned by hand
+        static Material SeaMaterial()
+        {
+            var m = AssetDatabase.LoadAssetAtPath<Material>(SeaMaterialPath);
+            if (m != null) return m;
+            var shader = Shader.Find("Universal Render Pipeline/Lit");
+            if (shader == null) return null;
+            m = new Material(shader) { name = "SeaWater" };
+            m.SetFloat("_Surface", 1f); // transparent
+            m.SetFloat("_Blend", 0f); // alpha
+            m.SetFloat("_Cull", 0f); // both faces, so it shows from under the water too
+            m.SetColor("_BaseColor", new Color(0.06f, 0.36f, 0.46f, 0.55f));
+            m.SetFloat("_Metallic", 0f);
+            m.SetFloat("_Smoothness", 0.9f);
+            BaseShaderGUI.SetMaterialKeywords(m);
+            Directory.CreateDirectory(Path.GetDirectoryName(SeaMaterialPath));
+            AssetDatabase.CreateAsset(m, SeaMaterialPath);
+            return m;
+        }
+
         /// <summary>The old neck controllers on the body still on; NeckLook poses the neck in their place.</summary>
         static List<ExpShadowNeckController> OldNecksOn(MovementControllerRB body) =>
             body.GetComponentsInChildren<ExpShadowNeckController>().Where(n => n.enabled).ToList();
@@ -132,6 +203,11 @@ namespace OtterLocomotion.EditorTools
                 checks.Add(necks.Count == 0
                     ? new Check("旧脖子", Level.Ok, "ExpShadowNeckController 已停用（文件保留），脖子由 NeckLook 摆")
                     : new Check("旧脖子", Level.Fix, $"'{necks[0].name}' 上的 ExpShadowNeckController 还开着，刷新时停用"));
+                float surfaceY = SurfaceY(body);
+                string seaOff = SeaOff(surfaceY);
+                checks.Add(seaOff == null
+                    ? new Check("海面", Level.Ok, $"半透明海面 '{SeaName}' 在水面高度 {surfaceY:F2} m")
+                    : new Check("海面", Level.Fix, seaOff + "，刷新时铺好"));
             }
             foreach (var (type, title) in Managed)
             {
@@ -245,6 +321,15 @@ namespace OtterLocomotion.EditorTools
                         else log.AppendLine($"{title}: 参数已是代码默认值");
                     }
                 }
+                // after the components, as WaterReference's surface height may have just been reset
+                float surfaceY = SurfaceY(body);
+                string seaOff = SeaOff(surfaceY);
+                if (seaOff != null)
+                {
+                    MakeSea(surfaceY, body.transform.position);
+                    Changed($"海面: {seaOff}，已铺在水面高度 {surfaceY:F2} m（材质 {SeaMaterialPath}）");
+                }
+                else log.AppendLine("海面: 已在水面高度");
             }
 
             Undo.CollapseUndoOperations(group);

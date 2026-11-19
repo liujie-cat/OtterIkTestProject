@@ -7,13 +7,13 @@ namespace OtterLocomotion.EditorTools
     /// <summary>
     /// Pictures of the otter at chosen moments of a playback. The orthographic views show only its skinned meshes so
     /// the scene does not hide the limbs; the perspective ones look on from above and behind its left side, as from
-    /// the Scene view, with WaterReference's grids and web trails and the controls' ring and guide arrow, so the body's
-    /// motion can be set against the world, the strokes and where it is led. Single shots frame the whole body from
-    /// above (head up), from its left and in perspective, and add the game view: the whole scene through the camera the
-    /// controls read the pointer through, as the player sees it. Strips are contact sheets over a kick (frames left to
-    /// right, then the next row): close-ups of the hind feet from above, behind and the left, a perspective close-up
-    /// riding with the hips, and a perspective view held still in the world over the whole strip, which the otter swims
-    /// through. Written to Logs/Snapshots.
+    /// the Scene view, with the sea, WaterReference's grids and web trails and the controls' ring and guide arrow, so
+    /// the body's motion can be set against the water, the strokes and where it is led. Single shots frame the whole
+    /// body from above (head up), from its left and in perspective, and add the game view: the whole scene through the
+    /// camera the controls read the pointer through, as the player sees it. Strips are contact sheets over a kick
+    /// (frames left to right, then the next row): close-ups of the hind feet from above, behind and the left, a
+    /// perspective close-up riding with the hips, and a perspective view held still in the world over the whole strip,
+    /// which the otter swims through. Written to Logs/Snapshots.
     /// </summary>
     static class LocomotionSnapshots
     {
@@ -115,7 +115,9 @@ namespace OtterLocomotion.EditorTools
             var body = meshes.Cast<Renderer>().Concat(otter.GetComponentsInChildren<LineRenderer>().Where(l => l.enabled && l.positionCount > 1)).ToArray();
             var reference = Object.FindObjectsByType<WaterReference>(FindObjectsSortMode.None).SelectMany(w => w.Renderers).Where(r => r != null);
             var overlay = Object.FindObjectsByType<ControlsOverlay>(FindObjectsSortMode.None).SelectMany(o => o.Renderers).Where(r => r != null && r.enabled);
-            var scene = body.Concat(reference).Concat(overlay).Distinct().ToArray();
+            var sea = OtterTestSceneSetup.FindSea();
+            var water = sea != null && sea.TryGetComponent<Renderer>(out var surface) && surface.enabled ? new[] { surface } : new Renderer[0];
+            var scene = body.Concat(reference).Concat(water).Concat(overlay).Distinct().ToArray();
             // from above and behind the left side, as the Scene view usually looks on
             Vector3 aside = (-right * 0.75f - forward * 0.45f + Vector3.up * 0.5f).normalized;
             string dir = Path.Combine("Logs", "Snapshots");
