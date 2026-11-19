@@ -51,6 +51,51 @@ namespace OtterLocomotion.EditorTools
             EditorApplication.isPlaying = true;
         }
 
+        // before the scene's first frame: its own components would pose the rig in it, and the fresh ones capture the
+        // limbs and the chest as they find them
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+        static void BeforeFirstFrame()
+        {
+            if (SessionState.GetInt(StateKey, 0) == 1) Begin();
+        }
+
+        static void Begin()
+        {
+            // a paused editor would hold the run at its first frame until the timeout, and so would the editor
+            // losing focus while the project does not run in the background (for this Play only)
+            EditorApplication.isPaused = false;
+            Application.runInBackground = true;
+            var body = OtterTestSceneSetup.FindBody();
+            if (body == null)
+            {
+                Debug.LogWarning("[LocomotionPlaybackRunner] No otter body (Rigidbody with MovementControllerRB) in the scene.");
+                Stop();
+                return;
+            }
+            // always the code defaults, so runs compare; the scene's locomotion components are swapped out for this Play only
+            var managed = OtterTestSceneSetup.Managed;
+            for (int i = managed.Length - 1; i >= 0; i--)
+            {
+                var saved = body.GetComponent(managed[i].type);
+                if (saved != null) Object.DestroyImmediate(saved);
+            }
+            foreach (var (type, _) in managed) body.gameObject.AddComponent(type);
+            var controls = body.GetComponent<OtterControls>();
+            var host = new GameObject("LocomotionPlayback (runtime)");
+            playback = host.AddComponent<OtterInputPlayback>();
+            playback.controls = controls;
+            playback.segments = OtterInputPlayback.Script(SessionState.GetString(ScriptKey, "baseline"));
+            telemetry = host.AddComponent<LocomotionTelemetry>();
+            telemetry.playback = playback;
+            telemetry.controls = controls;
+            telemetry.label = SessionState.GetString(LabelKey, "baseline");
+            shots = LocomotionSnapshots.For(SessionState.GetString(ScriptKey, "baseline"));
+            nextShot = nextFrame = 0;
+            LocomotionSnapshots.Release();
+            deadline = EditorApplication.timeSinceStartup + TimeoutSeconds;
+            SessionState.SetInt(StateKey, 2);
+        }
+
         static void Tick()
         {
             int state = SessionState.GetInt(StateKey, 0);
@@ -58,39 +103,7 @@ namespace OtterLocomotion.EditorTools
 
             if (state == 1)
             {
-                // a paused editor would hold the run at its first frame until the timeout, and so would the editor
-                // losing focus while the project does not run in the background (for this Play only)
-                EditorApplication.isPaused = false;
-                Application.runInBackground = true;
-                var body = OtterTestSceneSetup.FindBody();
-                if (body == null)
-                {
-                    Debug.LogWarning("[LocomotionPlaybackRunner] No otter body (Rigidbody with MovementControllerRB) in the scene.");
-                    Stop();
-                    return;
-                }
-                // always the code defaults, so runs compare; the scene's locomotion components are swapped out for this Play only
-                var managed = OtterTestSceneSetup.Managed;
-                for (int i = managed.Length - 1; i >= 0; i--)
-                {
-                    var saved = body.GetComponent(managed[i].type);
-                    if (saved != null) Object.DestroyImmediate(saved);
-                }
-                foreach (var (type, _) in managed) body.gameObject.AddComponent(type);
-                var controls = body.GetComponent<OtterControls>();
-                var host = new GameObject("LocomotionPlayback (runtime)");
-                playback = host.AddComponent<OtterInputPlayback>();
-                playback.controls = controls;
-                playback.segments = OtterInputPlayback.Script(SessionState.GetString(ScriptKey, "baseline"));
-                telemetry = host.AddComponent<LocomotionTelemetry>();
-                telemetry.playback = playback;
-                telemetry.controls = controls;
-                telemetry.label = SessionState.GetString(LabelKey, "baseline");
-                shots = LocomotionSnapshots.For(SessionState.GetString(ScriptKey, "baseline"));
-                nextShot = nextFrame = 0;
-                LocomotionSnapshots.Release();
-                deadline = EditorApplication.timeSinceStartup + TimeoutSeconds;
-                SessionState.SetInt(StateKey, 2);
+                Begin();
                 return;
             }
 
