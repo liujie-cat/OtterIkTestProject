@@ -11,7 +11,9 @@ namespace OtterLocomotion
     /// path and follows the hips' swings a little late, without whipping. As a rudder it bends toward the side the
     /// otter turns to, following the brain's turn rate so it leads the body, and it swings a little away from each hind
     /// foot as that foot pushes, with the curl of the body (HindBend). It is posed after the legs and keeps out of them
-    /// (HindLegColliders): a shin or web that sweeps into it carries it aside, without flinging it.
+    /// (HindLegColliders): a leg pressed on it turns it aside about its joints, the turn easing in and back out, so a
+    /// leg sweeping past nudges it rather than knocking it about. The springs hang the tail as if the legs were not
+    /// there; the turn aside is laid over them.
     /// </summary>
     [DefaultExecutionOrder(375)]
     [DisallowMultipleComponent]
@@ -27,6 +29,11 @@ namespace OtterLocomotion
         public float thickness = 1f;
         [Tooltip("Fastest a web pushes the tail aside (m/s); the shins push it out at once. The webs are thin and give, so one turning over fast against the tail only brushes it, while one pressed on it pushes it clear.")]
         public float webPushSpeed = 1f;
+        [Tooltip("How quickly the tail gives way to a leg pressed on it (s), and settles back once the leg has gone (s): slower than the kicks come, so kicking it rides on them rather than bobbing with each.")]
+        public float giveTime = 0.04f;
+        public float settleTime = 0.6f;
+        [Tooltip("Most a leg turns a piece of the tail aside (deg): the tail is heavy in the water and only yields a little; a leg pressing further sinks into it rather than levering it up.")]
+        public float maxAside = 15f;
         [Tooltip("Joints the tail bends at, spread down it from the root; the bones between them hold their shape.")]
         [Range(1, 6)] public int joints = 2;
         [Tooltip("How long the tip takes to follow the hips (s); joints nearer the root follow sooner.")]
@@ -55,9 +62,11 @@ namespace OtterLocomotion
         private Vector3 tipLocal, straightTip;
         // the bones the joints are at, root first
         private int[] knot;
-        // points 0..k-1 at the joints, k past the last bone's end; point 0 rides on the hips. free: where they would be
-        // this step without the legs' shoves
-        private Vector3[] point, free, velocity, goal, lastGoal;
+        // points 0..k-1 at the joints, k past the last bone's end; point 0 rides on the hips. shown: the same turned
+        // aside out of the legs, as the bones are posed
+        private Vector3[] point, velocity, goal, lastGoal, shown;
+        // per stiff piece, the legs' turn of it about its joint, as an angle times its axis (deg) in the hips' space
+        private Vector3[] aside;
         // per stiff piece, from its joint to the next point: its length; the balls along it, as thick as it is high,
         // in a row down its middle and, as it is flat, a row out at either side
         private float[] length, radius, spread;
@@ -104,10 +113,11 @@ namespace OtterLocomotion
             int k = Mathf.Clamp(joints, 1, n);
             knot = Enumerable.Range(0, k).Select(i => i * n / k).ToArray();
             point = new Vector3[k + 1];
-            free = new Vector3[k + 1];
             velocity = new Vector3[k + 1];
             goal = new Vector3[k + 1];
             lastGoal = new Vector3[k + 1];
+            shown = new Vector3[k + 1];
+            aside = new Vector3[k + 1];
             length = new float[k];
             radius = new float[k];
             spread = new float[k];
@@ -164,19 +174,18 @@ namespace OtterLocomotion
                 {
                     point[j] = lastGoal[j] = goal[j];
                     velocity[j] = Vector3.zero;
+                    aside[j] = Vector3.zero;
                 }
                 settled = true;
             }
 
-            bool colliding = collide && legs != null && legs.Ready;
             dorsal = bones[0].parent.TransformDirection(upLocal);
             int steps = Mathf.Clamp(Mathf.CeilToInt(dt * 240f), 1, 16);
             float h = dt / steps;
-            float webStep = Mathf.Max(0f, webPushSpeed) * h;
             for (int s = 1; s <= steps; s++)
             {
                 float a = (float)s / steps;
-                point[0] = free[0] = Vector3.Lerp(lastGoal[0], goal[0], a);
+                point[0] = Vector3.Lerp(lastGoal[0], goal[0], a);
                 Vector3 rootAlong = Vector3.Lerp(lastGoal[1], goal[1], a) - point[0];
                 for (int j = 1; j <= n; j++)
                 {
@@ -186,44 +195,29 @@ namespace OtterLocomotion
                     Vector3 target = Vector3.Lerp(lastGoal[j], goal[j], a);
                     Vector3 before = point[j];
                     velocity[j] += (w * w * (target - point[j]) - 2f * damping * w * velocity[j]) * h;
-                    Vector3 moved = point[j] + velocity[j] * h;
-
-                    // the legs move once a frame, so a contact shoves the tail a frame's worth in one step: the shove
-                    // and what it drags along are kept out of the velocity, or the tail would be flung off the leg
-                    free[j] = Hang(j, moved, free[j - 1], j == 1 ? rootAlong : free[j - 1] - free[j - 2]);
-                    velocity[j] = (free[j] - before) / h;
-                    point[j] = Hang(j, moved, point[j - 1], j == 1 ? rootAlong : point[j - 1] - point[j - 2]);
-                    if (colliding)
-                    {
-                        Vector3 unpushed = point[j];
-                        Collide(j, webStep);
-                        Vector3 shove = point[j] - unpushed;
-                        if (shove.sqrMagnitude > 1e-12f)
-                        {
-                            Vector3 normal = shove.normalized;
-                            velocity[j] -= normal * Mathf.Min(0f, Vector3.Dot(velocity[j], normal));
-                        }
-                    }
+                    point[j] = Hang(j, point[j] + velocity[j] * h, point[j - 1], j == 1 ? rootAlong : point[j - 1] - point[j - 2]);
+                    velocity[j] = (point[j] - before) / h;
                 }
             }
             for (int j = 0; j <= n; j++) lastGoal[j] = goal[j];
+            GiveWay(collide && legs != null && legs.Ready, dt);
 
             for (int j = 0; j < n; j++)
             {
                 Transform bone = bones[knot[j]];
                 Vector3 end = j + 1 < n ? bones[knot[j + 1]].position : bones[bones.Count - 1].TransformPoint(tipLocal);
-                Vector3 from = end - bone.position, to = point[j + 1] - bone.position;
+                Vector3 from = end - bone.position, to = shown[j + 1] - bone.position;
                 if (from.sqrMagnitude > 1e-12f && to.sqrMagnitude > 1e-12f)
                     bone.rotation = Quaternion.FromToRotation(from, to) * bone.rotation;
             }
 
             Vector3 line = Vector3.ProjectOnPlane(straightTip - goal[0], Vector3.up);
-            Vector3 tail = Vector3.ProjectOnPlane(point[n] - point[0], Vector3.up);
+            Vector3 tail = Vector3.ProjectOnPlane(shown[n] - shown[0], Vector3.up);
             TipBend = line.sqrMagnitude > 1e-8f && tail.sqrMagnitude > 1e-8f ? -Vector3.SignedAngle(line, tail, Vector3.up) : 0f;
             Vector3 hipsLine = straightTip - goal[0];
             Vector3 side = Vector3.Cross(dorsal, hipsLine);
             TipLift = side.sqrMagnitude > 1e-10f
-                ? -Vector3.SignedAngle(hipsLine, Vector3.ProjectOnPlane(point[n] - point[0], side), side)
+                ? -Vector3.SignedAngle(hipsLine, Vector3.ProjectOnPlane(shown[n] - shown[0], side), side)
                 : 0f;
 
             if (legs == null || !legs.Ready) return;
@@ -231,24 +225,65 @@ namespace OtterLocomotion
             for (int j = 1; j <= n; j++)
                 for (int k = 1; k <= balls[j - 1]; k++)
                     for (int lane = 0; lane < Lanes(j); lane++)
-                        overlap = Mathf.Max(overlap, legs.Depth(Ball(j, k, lane, point[j - 1], point[j]), Ball(j)));
+                        overlap = Mathf.Max(overlap, legs.Depth(Ball(j, k, lane, shown[j - 1], shown[j]), Ball(j)));
             LegOverlap = overlap;
         }
 
-        // Balls along the piece from point j-1 to point j keep out of the legs: the piece swings about its joint, each
-        // ball moving the far end by its push. A ball nearer the joint moves less, so it clears over the next steps;
-        // clearing it at once would swing the piece a long way for a small push.
-        private void Collide(int j, float webStep)
+        // The legs turn each piece aside about its joint, the pieces below turning with it: the turn eases in while a
+        // leg presses on the piece and back out once the piece would be clear without it.
+        private void GiveWay(bool colliding, float dt)
         {
-            Vector3 root = point[j - 1];
+            Transform hips = bones[0].parent;
+            float give = 1f - Mathf.Exp(-dt / Mathf.Max(1e-3f, giveTime));
+            float settle = 1f - Mathf.Exp(-dt / Mathf.Max(1e-3f, settleTime));
+            float webStep = Mathf.Max(0f, webPushSpeed) * dt;
+            Quaternion carried = Quaternion.identity;
+            shown[0] = point[0];
+            for (int j = 1; j < point.Length; j++)
+            {
+                Vector3 hanging = carried * (point[j] - point[j - 1]);
+                Vector3 now = Turned(hips, aside[j]) * hanging;
+                Vector3 clear = colliding ? Clear(j, shown[j - 1], now, webStep) : now;
+                if (Vector3.Angle(now, clear) > 1e-3f)
+                {
+                    Quaternion.FromToRotation(now, clear).ToAngleAxis(out float angle, out Vector3 axis);
+                    if (angle > 180f) angle -= 360f;
+                    aside[j] += hips.InverseTransformDirection(axis) * (angle * give);
+                }
+                else
+                {
+                    Vector3 eased = aside[j] * (1f - settle);
+                    Vector3 back = Turned(hips, eased) * hanging;
+                    if (!colliding || Vector3.Angle(back, Clear(j, shown[j - 1], back, webStep)) <= 1e-3f) aside[j] = eased;
+                }
+                aside[j] = Vector3.ClampMagnitude(aside[j], maxAside);
+                Quaternion turned = Turned(hips, aside[j]);
+                shown[j] = shown[j - 1] + turned * hanging;
+                carried = turned * carried;
+            }
+        }
+
+        private static Quaternion Turned(Transform space, Vector3 aside)
+        {
+            float angle = aside.magnitude;
+            return angle > 1e-4f ? Quaternion.AngleAxis(angle, space.TransformDirection(aside / angle)) : Quaternion.identity;
+        }
+
+        // The piece j from root along piece, swung about its joint out of the legs, each ball moving the far end by its
+        // push. A ball nearer the joint moves less, so it clears over the next frames; clearing it at once would swing
+        // the piece a long way for a small push.
+        private Vector3 Clear(int j, Vector3 root, Vector3 piece, float webStep)
+        {
+            Vector3 end = root + piece;
             for (int k = 1; k <= balls[j - 1]; k++)
                 for (int lane = 0; lane < Lanes(j); lane++)
                 {
-                    Vector3 push = legs.Push(Ball(j, k, lane, root, point[j]), Ball(j), webStep);
+                    Vector3 push = legs.Push(Ball(j, k, lane, root, end), Ball(j), webStep);
                     if (push == Vector3.zero) continue;
-                    Vector3 d = point[j] + push * ((float)k / balls[j - 1]) - root;
-                    if (d.sqrMagnitude > 1e-12f) point[j] = root + d.normalized * length[j - 1];
+                    Vector3 d = end + push * ((float)k / balls[j - 1]) - root;
+                    if (d.sqrMagnitude > 1e-12f) end = root + d.normalized * length[j - 1];
                 }
+            return end - root;
         }
 
         // Point j at its piece's length from the point before, bent at most maxBend from the way along there
@@ -273,14 +308,14 @@ namespace OtterLocomotion
 
         private void OnDrawGizmosSelected()
         {
-            if (point == null || radius == null) return;
+            if (shown == null || radius == null) return;
             Gizmos.color = new Color(0.3f, 0.8f, 1f, 0.8f);
-            for (int j = 1; j < point.Length; j++)
+            for (int j = 1; j < shown.Length; j++)
             {
-                Gizmos.DrawLine(point[j - 1], point[j]);
+                Gizmos.DrawLine(shown[j - 1], shown[j]);
                 for (int k = 1; k <= balls[j - 1]; k++)
                     for (int lane = 0; lane < Lanes(j); lane++)
-                        Gizmos.DrawWireSphere(Ball(j, k, lane, point[j - 1], point[j]), Ball(j));
+                        Gizmos.DrawWireSphere(Ball(j, k, lane, shown[j - 1], shown[j]), Ball(j));
             }
         }
 

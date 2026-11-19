@@ -71,7 +71,8 @@ namespace OtterLocomotion
         /// How far a ball has to move to sit clear of every shape (zero when it is clear): out of the deepest overlap
         /// first, then out of whatever it still meets, a few times over. The webs are thin and give: once clear of the
         /// shins the ball moves out of them at most <paramref name="webStep"/>, so a web turning over fast against it
-        /// only brushes it aside, while one pressed on it slowly pushes it clear.
+        /// only brushes it aside, while one pressed on it slowly pushes it clear. A shape that has swept past the ball's
+        /// middle lets it through: the way out from there is on its far side, and the ball would flip across in a step.
         /// </summary>
         public Vector3 Push(Vector3 center, float radius, float webStep = float.PositiveInfinity)
         {
@@ -79,13 +80,13 @@ namespace OtterLocomotion
             bool firmWebs = float.IsPositiveInfinity(webStep);
             for (int pass = 0; pass < 3; pass++)
             {
-                Vector3 push = Deepest(center + moved, radius + skin, true, firmWebs, out float depth);
+                Vector3 push = Deepest(center + moved, radius + skin, true, firmWebs, true, out float depth);
                 if (depth <= 0f) break;
                 moved += push;
             }
             if (!firmWebs && webStep > 0f)
             {
-                Vector3 push = Deepest(center + moved, radius + skin, false, true, out float depth);
+                Vector3 push = Deepest(center + moved, radius + skin, false, true, true, out float depth);
                 if (depth > 0f) moved += Vector3.ClampMagnitude(push, webStep);
             }
             return moved;
@@ -94,12 +95,13 @@ namespace OtterLocomotion
         /// <summary>How deep a ball sits in the deepest shape it meets (m, 0 when clear; without the clearance).</summary>
         public float Depth(Vector3 center, float radius)
         {
-            Deepest(center, radius, true, true, out float depth);
+            Deepest(center, radius, true, true, false, out float depth);
             return Mathf.Max(0f, depth);
         }
 
-        // The way out of the shape the ball overlaps most, and how deep it is in it (negative = the gap to the nearest)
-        private Vector3 Deepest(Vector3 center, float radius, bool shins, bool webs, out float depth)
+        // The way out of the shape the ball overlaps most, and how deep it is in it (negative = the gap to the nearest);
+        // through: shapes the ball's middle is in are passed over
+        private Vector3 Deepest(Vector3 center, float radius, bool shins, bool webs, bool through, out float depth)
         {
             depth = float.NegativeInfinity;
             Vector3 best = Vector3.zero;
@@ -110,7 +112,7 @@ namespace OtterLocomotion
                 float t = Mathf.Clamp01(Vector3.Dot(center - a, ab) / Mathf.Max(1e-10f, ab.sqrMagnitude));
                 Vector3 d = center - (a + ab * t);
                 float dist = d.magnitude, overlap = radius + c.radius * thickness - dist;
-                if (overlap <= depth) continue;
+                if (overlap <= depth || through && dist < c.radius * thickness) continue;
                 depth = overlap;
                 best = (dist > 1e-6f ? d / dist : Vector3.up) * overlap;
             }
@@ -139,7 +141,7 @@ namespace OtterLocomotion
                 Vector3 d = center - closest;
                 float dist = d.magnitude;
                 float overlap = within ? radius + inside : radius - dist;
-                if (overlap <= depth) continue;
+                if (overlap <= depth || through && within) continue;
                 depth = overlap;
                 best = (within ? exit : dist > 1e-6f ? d / dist : Vector3.up) * overlap;
             }
