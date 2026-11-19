@@ -2857,7 +2857,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1776421507}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 08e112bb78c83314cbbea5a5cdcbb56b, type: 3}
   m_Name: 
@@ -3221,6 +3221,8 @@ GameObject:
   - component: {fileID: 2025579690}
   - component: {fileID: 2025579691}
   - component: {fileID: 2025579692}
+  - component: {fileID: 2025579693}
+  - component: {fileID: 2025579694}
   m_Layer: 0
   m_Name: Cat
   m_TagString: Untagged
@@ -3308,7 +3310,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 2025579675}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 55e6826a3cc82124ea97a0bfbd40f947, type: 3}
   m_Name: 
@@ -3414,24 +3416,16 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   body: {fileID: 2025579678}
-  intentSource: {fileID: 2025579680}
+  controls: {fileID: 2025579693}
   waterDrag: {fileID: 2025579681}
-  swimSpeedBL: 1.2
-  sprintSpeedBL: 2
   fallbackBodyLength: 0.4
-  postureToggleKey: 102
+  kickAlignDeg: 30
+  kickWait: 0.6
   postureSettings:
-    initial: 1
-    supineMaxSpeedBL: 0.8
     supineRiseRateBL: 0.6
-    autoSwitch: 1
-    proneSprintFraction: 0.55
-    supineEnterSpeedBL: 0.12
-    supineSettleTime: 1
     flipDuration: 0.6
   demandSettings:
     headingGain: 5
-    releaseHeadingGain: 2.5
     pivotYawRateMax: 150
     cruiseYawRateMax: 180
     yawRateRefSpeedBL: 0.5
@@ -3523,9 +3517,6 @@ MonoBehaviour:
       maxHz: 3.2
       powerFraction: 0.4
       coupling: 1.5
-    hindTogetherSpeedBL: 1
-    hindApartSpeedBL: 0.92
-    proneFlukeSpeedBL: 0.05
     hindFullForce: 2.5
     foreFullForce: 0.6
     engageDrive: 0.04
@@ -3690,8 +3681,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   brain: {fileID: 2025579682}
-  movement: {fileID: 2025579680}
-  webs: {fileID: 2025579690}
   sharpness: 2
   turnPulse: 0.1
 --- !u!114 &2025579688
@@ -3752,7 +3741,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 92cca0ddecf2d574d806bb9881b4a0c9, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  movement: {fileID: 2025579680}
   animator: {fileID: 2025579684}
   waterPush: 600
   slicePush: 800
@@ -3772,6 +3760,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   sidewaysDamping: 12
+  pivot: 0.5
 --- !u!114 &2025579692
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -3787,6 +3776,64 @@ MonoBehaviour:
   thickness: 1
   skin: 0.003
   drawGizmos: 1
+--- !u!114 &2025579693
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2025579675}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a88e92a742993f1428ffe4bb4e07b81f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  inputCamera: {fileID: 1747907176}
+  brain: {fileID: 2025579682}
+  strokes: {fileID: 2025579687}
+  legacy: {fileID: 2025579680}
+  ringRadiusBL: 0.6
+  initialGear: 0
+  gestures:
+    holdTime: 0.3
+    doubleClickTime: 0.3
+    rightHoldTime: 0.3
+  gears:
+    slowSpeedBL: 0.8
+    cruiseSpeedBL: 1.2
+    sprintSpeedBL: 2
+    parkDriftBL: 0.1
+    parkDriftAngle: 20
+    dolphinAt: 0.75
+    dolphinAfter: 1.5
+    dolphinUntil: 0.4
+    jumpGrace: 0.6
+    parkKick: 0.6
+    swimKick: 1
+    aimFade: 0.6
+    headLead: 0.12
+  turnResponse: 0.1
+  brakeBL: 4
+  logEvents: 1
+--- !u!114 &2025579694
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2025579675}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f5998009fdcc6d041bf79f72b9b9285f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  controls: {fileID: 2025579693}
+  ringColor: {r: 1, g: 1, b: 1, a: 0.6}
+  selectedColor: {r: 0.3, g: 1, b: 0.4, a: 1}
+  arrowColor: {r: 1, g: 0.92, b: 0.016, a: 1}
+  ringWidth: 0.015
+  width: 0.025
+  headLength: 0.08
 --- !u!1 &2084129953 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: -4842254417403862700, guid: 2ee3a8dc284140b6a38d07a66500e25a,
