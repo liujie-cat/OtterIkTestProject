@@ -11,6 +11,8 @@ namespace OtterLocomotion
     {
         public const int LimbCount = 4;
         public const string Hip = "root.x", Chest = "spine_03.x", Head = "head.x", TailRoot = "c_tail_00.x";
+        /// <summary>The neck's joints from the chest out, the head last; each the child of the one before.</summary>
+        public static readonly string[] Neck = { "c_subneck_1.x", "neck.x", Head };
 
         public static bool IsFore(LimbId limb) => limb == LimbId.FL || limb == LimbId.FR;
 

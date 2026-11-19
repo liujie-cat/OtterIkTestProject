@@ -84,7 +84,7 @@ namespace OtterLocomotion.Testing
         {
             public float t, dt, intentYaw, bodyYaw, yawRate, speedFwd, speedLat, targetSpeed, aim;
             public float headYaw, chestBend, chestRoll;
-            /// <summary>Where the head IK is told to look: the head guide seen from the chest (deg from the body's heading) and how far it is (m).</summary>
+            /// <summary>Where the neck is told to look: its look point seen from the chest (deg from the body's heading) and how far it is (m).</summary>
             public float guideYaw, guideDist;
             public int seg;
             /// <summary>Mouse buttons; a hind power stroke began this frame; a click's kick is being kicked.</summary>
@@ -122,6 +122,11 @@ namespace OtterLocomotion.Testing
             /// <summary>Side bend at the waist, the hips' heading to the chest's seen from above (deg, + = curled to the right), and
             /// the hind pushes' bend that SpineKickSway puts on the spine (-1..1, NaN without one).</summary>
             public float waist, swayBend;
+            /// <summary>
+            /// The snout's pitch from the chest's line toward the belly (deg): 0 = straight on along the spine, + = curled
+            /// over toward the belly (on the back, up toward the sky and on toward its own chest), - = thrown back.
+            /// </summary>
+            public float headTuck;
             /// <summary>Per hind foot: WebThrust's push on the body along its heading (N, + = forward), 0 without it.</summary>
             public float[] webPush;
             public Posture posture;
@@ -160,7 +165,10 @@ namespace OtterLocomotion.Testing
         private readonly List<Limb> limbs = new List<Limb>();
         private readonly List<Foot> feet = new List<Foot>();
         private readonly List<Sample> samples = new List<Sample>();
-        private Transform hip, chest, head, guide;
+        private Transform hip, chest, head;
+        private NeckLook neck;
+        /// <summary>The way the snout points, in the head bone's space.</summary>
+        private Vector3 snoutLocal;
         private LimbStrokeAnimator animator;
         private SpineKickWave spineWave;
         private TailRudder tail;
@@ -213,6 +221,15 @@ namespace OtterLocomotion.Testing
             hip = OtterRig.FindActiveBone(controls.transform, OtterRig.Hip);
             chest = OtterRig.FindActiveBone(controls.transform, OtterRig.Chest);
             head = OtterRig.FindActiveBone(controls.transform, OtterRig.Head);
+            // the bone's own axes are the cat's: the snout is read off the skin, from the middle of the head to the
+            // point of it farthest from the chest
+            var headSkin = head != null && chest != null ? OtterRig.FollowingVertices(head) : null;
+            if (headSkin != null)
+            {
+                Vector3 nose = headSkin.OrderByDescending(p => (p - chest.position).sqrMagnitude).First();
+                Vector3 middle = headSkin.Aggregate(Vector3.zero, (a, p) => a + p) / headSkin.Count;
+                snoutLocal = head.InverseTransformDirection(nose - middle).normalized;
+            }
             var water = FindObjectOfType<WaterReference>();
             float Above(float y) => (y - (water != null ? water.surfaceY : 0f)) * 100f;
             var skins = controls.GetComponentsInChildren<SkinnedMeshRenderer>().Where(r => r.enabled && r.gameObject.activeInHierarchy).ToArray();
@@ -221,8 +238,7 @@ namespace OtterLocomotion.Testing
                         (hip != null ? $", hip {Above(hip.position.y):F1}" : "") + (chest != null ? $", chest {Above(chest.position.y):F1}" : "") +
                         (head != null ? $", head {Above(head.position.y):F1}" : "") +
                         (skins.Length > 0 ? $", skin {Above(skins.Min(r => r.bounds.min.y)):F1}..{Above(skins.Max(r => r.bounds.max.y)):F1}" : "");
-            var headGuide = FindObjectOfType<HeadIKGuideFromArrowRB>();
-            if (headGuide != null) guide = headGuide.GetHeadIKGuide();
+            neck = controls.GetComponent<NeckLook>();
             if (brain == null) brain = controls.GetComponent<OtterLocomotionBrain>();
             animator = controls.GetComponent<LimbStrokeAnimator>();
             spineWave = controls.GetComponent<SpineKickWave>();
@@ -335,8 +351,8 @@ namespace OtterLocomotion.Testing
                 headYaw = head && chest ? Vector3.SignedAngle(fwd, Flat(head.position + head.up * Vector3.Distance(head.position, chest.position) - chest.position), Vector3.up) : 0f,
                 chestBend = hip && chest ? Vector3.SignedAngle(Flat(hip.up), Flat(chest.up), Vector3.up) : 0f,
                 chestRoll = chest ? ChestRoll(body) : 0f,
-                guideYaw = guide && chest ? Vector3.SignedAngle(fwd, Flat(guide.position - chest.position), Vector3.up) : 0f,
-                guideDist = guide && chest ? Vector3.ProjectOnPlane(guide.position - chest.position, Vector3.up).magnitude : 0f,
+                guideYaw = neck && chest ? Vector3.SignedAngle(fwd, Flat(neck.LookPoint - chest.position), Vector3.up) : 0f,
+                guideDist = neck && chest ? Vector3.ProjectOnPlane(neck.LookPoint - chest.position, Vector3.up).magnitude : 0f,
                 limb = limbs.Select(l => l.space.TransformVector(l.space.InverseTransformPoint(l.target.position) - l.restLocal).magnitude * 100f).ToArray(),
                 limbSide = limbs.Select(l => Vector3.Dot(l.space.TransformPoint(l.restLocal) - l.space.position, right) >= 0f ? 1 : -1).ToArray(),
             };
@@ -407,6 +423,12 @@ namespace OtterLocomotion.Testing
             s.waist = hip != null && chest != null
                 ? Vector3.SignedAngle(Vector3.ProjectOnPlane(hip.up, Vector3.up), Vector3.ProjectOnPlane(chest.up, Vector3.up), Vector3.up)
                 : 0f;
+            if (head != null && chest != null && snoutLocal != Vector3.zero)
+            {
+                // the chest bone: +Y along the spine toward the head, +Z ventral
+                Vector3 snout = head.TransformDirection(snoutLocal);
+                s.headTuck = Mathf.Atan2(Vector3.Dot(snout, chest.forward), Vector3.Dot(snout, chest.up)) * Mathf.Rad2Deg;
+            }
             if (brain != null)
             {
                 var d = brain.Demand;
@@ -479,8 +501,8 @@ namespace OtterLocomotion.Testing
         {
             var ci = CultureInfo.InvariantCulture;
             // left/right = mouse buttons; intentYaw = the heading the controls ask for; aim = how much the head and spine aim (0..1);
-            // kick = a hind power stroke began; kicking = a click's kick is being kicked; guideYaw/guideDist = the head IK's
-            // look target from the chest (deg from the body's heading, m)
+            // kick = a hind power stroke began; kicking = a click's kick is being kicked; guideYaw/guideDist = the neck's
+            // look point from the chest (deg from the body's heading, m)
             var sb = new StringBuilder("t,seg,left,right,gear,gait,intentYaw,aim,bodyYaw,yawRate,speedFwd,speedLat,targetSpeed,kick,kicking,headYaw,chestBend,chestRoll,guideYaw,guideDist");
             foreach (var l in limbs) sb.Append(',').Append(l.name).Append("_cm");
             // horizontal offset away from the body midline, + = outward; side = which side of the midline the limb is on
@@ -509,6 +531,8 @@ namespace OtterLocomotion.Testing
             // hind pushes' bend on the spine, -1..1; how deep the tail sits in the hind legs, cm; the tail tip's lift above
             // the hips' line, deg, + = toward the back
             sb.Append(",tail,waist,bend,tailHit,tailLift");
+            // the snout's pitch from the chest's line toward the belly, deg, + = curled over toward it
+            sb.Append(",headTuck");
             // each web's push on the body along its heading, N
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wpush");
             // the web middle's speed up through the water (m/s) and its normal's up component
@@ -549,7 +573,9 @@ namespace OtterLocomotion.Testing
                 sb.Append(',').Append(s.waist.ToString("F1", ci));
                 sb.Append(',').Append(float.IsNaN(s.swayBend) ? "" : s.swayBend.ToString("F2", ci));
                 sb.Append(',').Append(float.IsNaN(s.tailHit) ? "" : s.tailHit.ToString("F2", ci));
-                sb.Append(',').Append(float.IsNaN(s.tailLift) ? "" : s.tailLift.ToString("F1", ci));                foreach (var w in s.webPush) sb.Append(',').Append(w.ToString("F3", ci));
+                sb.Append(',').Append(float.IsNaN(s.tailLift) ? "" : s.tailLift.ToString("F1", ci));
+                sb.Append(',').Append(s.headTuck.ToString("F1", ci));
+                foreach (var w in s.webPush) sb.Append(',').Append(w.ToString("F3", ci));
                 for (int k = 0; k < s.footWorldUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footWorldUp[k], s.footNormalUp[k]));
                 for (int k = 0; k < s.footToesUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footToesUp[k], s.footToesFwd[k]));
                 if (brain != null)
@@ -665,6 +691,8 @@ namespace OtterLocomotion.Testing
                 if (vw > 1e-4f && vb > 1e-4f) follow = $" | waist follows the pushes' bend: corr {(cov / (vw * vb)).ToString("+0.00;-0.00", ci)}";
             }
             sb.AppendLine($"  body (seen from above, + = curled right): waist {Range(waist)} | tail tip {Range(tails)}{follow}");
+            var tucks = idx.Select(i => samples[i].headTuck).OrderBy(x => x).ToList();
+            sb.AppendLine($"  head: snout from the chest's line toward the belly (+ = curled over toward it) {Range(tucks)}");
             var hits = idx.Select(i => samples[i].tailHit).Where(x => !float.IsNaN(x)).ToList();
             var lifts = idx.Select(i => samples[i].tailLift).Where(x => !float.IsNaN(x)).OrderBy(x => x).ToList();
             if (hits.Count > 0)

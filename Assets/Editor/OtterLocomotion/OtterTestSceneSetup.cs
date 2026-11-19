@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using OtterIK.EditorTools;
+using OtterIK.Neo.Experiment;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -16,7 +17,7 @@ namespace OtterLocomotion.EditorTools
     /// <summary>
     /// Brings the test scene to what the current code expects: the sea otter rig in place of the cat, IK targets on
     /// the rest pose, the locomotion components on the swimming body with their references and code-default
-    /// settings, and the old ring controls off. Every step checks first and changes only what is off, so it can be run
+    /// settings, and the old ring controls and neck controller off. Every step checks first and changes only what is off, so it can be run
     /// at any time. One Undo step.
     /// </summary>
     static class OtterTestSceneSetup
@@ -39,6 +40,7 @@ namespace OtterLocomotion.EditorTools
             (typeof(HindLegColliders), "后腿碰撞体"),
             (typeof(TailRudder), "尾舵"),
             (typeof(SpineKickSway), "腰部摆动"),
+            (typeof(NeckLook), "脖子看向"),
             (typeof(WaterReference), "水中参照"),
         };
 
@@ -87,12 +89,9 @@ namespace OtterLocomotion.EditorTools
             return on;
         }
 
-        /// <summary>The ring UI's object, which also carries the head IK guide, was switched off with it.</summary>
-        static bool HeadGuideOff(MovementControllerRB body)
-        {
-            var ring = RingUI(body);
-            return ring != null && !ring.gameObject.activeSelf;
-        }
+        /// <summary>The old neck controllers on the body still on; NeckLook poses the neck in their place.</summary>
+        static List<ExpShadowNeckController> OldNecksOn(MovementControllerRB body) =>
+            body.GetComponentsInChildren<ExpShadowNeckController>().Where(n => n.enabled).ToList();
 
         static bool IsTestSceneOpen => SceneManager.GetActiveScene().path == ScenePath;
 
@@ -129,9 +128,10 @@ namespace OtterLocomotion.EditorTools
                 checks.Add(on.Count == 0
                     ? new Check("旧操作", Level.Ok, "环形控制器和环形 UI 已停用（文件保留）")
                     : new Check("旧操作", Level.Fix, "还开着: " + string.Join(", ", on) + "，刷新时停用"));
-                checks.Add(HeadGuideOff(body)
-                    ? new Check("头部引导", Level.Fix, $"'{RingUI(body).name}' 被关掉了，头部 IK 引导点停在原地；刷新时重新激活")
-                    : new Check("头部引导", Level.Ok, "头部 IK 引导点跟着引导点/朝向走"));
+                var necks = OldNecksOn(body);
+                checks.Add(necks.Count == 0
+                    ? new Check("旧脖子", Level.Ok, "ExpShadowNeckController 已停用（文件保留），脖子由 NeckLook 摆")
+                    : new Check("旧脖子", Level.Fix, $"'{necks[0].name}' 上的 ExpShadowNeckController 还开着，刷新时停用"));
             }
             foreach (var (type, title) in Managed)
             {
@@ -222,11 +222,11 @@ namespace OtterLocomotion.EditorTools
                     ring.enabled = false;
                     Changed($"旧操作: 停用环形 UI '{ring.name}'");
                 }
-                if (HeadGuideOff(body))
+                foreach (var neck in OldNecksOn(body))
                 {
-                    Undo.RecordObject(ring.gameObject, "Keep the head guide");
-                    ring.gameObject.SetActive(true);
-                    Changed($"头部引导: 重新激活 '{ring.name}'（头部 IK 引导点在它上面）");
+                    Undo.RecordObject(neck, "Retire the old neck");
+                    neck.enabled = false;
+                    Changed($"旧脖子: 停用 '{neck.name}' 上的 ExpShadowNeckController");
                 }
                 foreach (var (type, title) in Managed)
                 {
