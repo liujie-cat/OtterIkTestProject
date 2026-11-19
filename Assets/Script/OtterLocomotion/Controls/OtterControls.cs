@@ -7,9 +7,11 @@ namespace OtterLocomotion
     /// <summary>
     /// The player's controls (行动操作): the mouse's gestures (PointerGestures) shift the gears (GearMachine), which set
     /// the gait, heading and speed the brain swims to; a click's kick, a jump and each shift go out as Control events.
-    /// A drag starts on the otter, everything else on the water. Turns the body toward the heading at the brain's yaw
-    /// rate target and brakes it while the right button is held. Takes over from MovementControllerRB: that stays
-    /// off, its ring UI hidden, and its getters report these controls to the older head, spine and camera scripts.
+    /// A right click on the otter picks it up and a left click on it lets go; picked up, the pointer is its guide point,
+    /// which the head looks at and the body turns after. Everything else is done on the water. Turns the body toward
+    /// the heading at the brain's yaw rate target and brakes it while the right button is held. Takes over from
+    /// MovementControllerRB: that stays off, its ring UI hidden, and its getters report these controls to the older
+    /// head, spine and camera scripts.
     /// </summary>
     [DefaultExecutionOrder(200)]
     [DisallowMultipleComponent]
@@ -30,7 +32,7 @@ namespace OtterLocomotion
         public MovementControllerRB legacy;
         [Tooltip("Water surface height (m): the body floats at it and clicks land on it.")]
         public float waterLevel = 0f;
-        [Tooltip("A press this far (m) outside the body's outline still takes hold of the otter.")]
+        [Tooltip("A press this far (m) outside the body's outline still lands on the otter.")]
         public float grabMargin = 0.03f;
         public Gear initialGear = Gear.Park;
         public GestureSettings gestures = new GestureSettings();
@@ -59,6 +61,8 @@ namespace OtterLocomotion
         public Vector3 GrabPoint => chest != null && hip != null
             ? Flat(0.5f * (chest.position + hip.position)) + Vector3.up * waterLevel
             : Flat(transform.position) + Vector3.up * waterLevel;
+        /// <summary>The head, on the water: where the guide is seen from.</summary>
+        public Vector3 HeadPoint => (head != null ? Flat(head.position) : Flat(transform.position + transform.forward * (0.4f * BodyLength))) + Vector3.up * waterLevel;
 
         private readonly PointerGestures pointer = new PointerGestures();
         private readonly GearMachine machine = new GearMachine();
@@ -107,7 +111,8 @@ namespace OtterLocomotion
             {
                 legacy.SteeringSource = this;
                 legacy.enabled = false;
-                if (legacy.RingUI != null) legacy.RingUI.gameObject.SetActive(false);
+                // only the ring: its object also carries the head IK guide and what moves it
+                if (legacy.RingUI != null) legacy.RingUI.enabled = false;
             }
         }
 
@@ -171,7 +176,7 @@ namespace OtterLocomotion
         {
             Vector3 v = body.velocity;
             v.y = 0f;
-            return new GearBody { position = body.position, forward = transform.forward, speedBL = v.magnitude / BodyLength };
+            return new GearBody { position = body.position, head = HeadPoint, forward = transform.forward, speedBL = v.magnitude / BodyLength };
         }
 
         private bool TryWaterPoint(Vector2 screen, out Vector3 point)
@@ -204,7 +209,7 @@ namespace OtterLocomotion
 
         private static Vector3 Flat(Vector3 v) => new Vector3(v.x, 0f, v.z);
 
-        bool MovementControllerRB.ISteeringSource.Dragging => machine.Steering;
+        bool MovementControllerRB.ISteeringSource.Dragging => machine.Selected;
         MovementControllerRB.MoveZone MovementControllerRB.ISteeringSource.Zone => machine.Gear switch
         {
             Gear.Park => MovementControllerRB.MoveZone.Aim,

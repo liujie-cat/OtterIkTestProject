@@ -7,11 +7,12 @@ namespace OtterLocomotion.EditorTools
     /// <summary>
     /// Pictures of the otter at chosen moments of a playback. The orthographic views show only its skinned meshes so
     /// the scene does not hide the limbs; the perspective ones look on from above and behind its left side, as from
-    /// the Scene view, with WaterReference's grids and web trails, so the body's motion can be set against the world
-    /// and the strokes. Single shots frame the whole body from above (head up), from its left and in perspective;
-    /// strips are contact sheets over a kick (frames left to right, then the next row): close-ups of the hind feet
-    /// from above, behind and the left, a perspective close-up riding with the hips, and a perspective view held still
-    /// in the world over the whole strip, which the otter swims through. Written to Logs/Snapshots.
+    /// the Scene view, with WaterReference's grids and web trails and the guide arrow, so the body's motion can be set
+    /// against the world, the strokes and where it is led. Single shots frame the whole body from above (head up), from
+    /// its left and in perspective; strips are contact sheets over a kick (frames left to right, then the next row):
+    /// close-ups of the hind feet from above, behind and the left, a perspective close-up riding with the hips, and a
+    /// perspective view held still in the world over the whole strip, which the otter swims through. Written to
+    /// Logs/Snapshots.
     /// </summary>
     static class LocomotionSnapshots
     {
@@ -112,7 +113,8 @@ namespace OtterLocomotion.EditorTools
             // the telemetry's hind ankle trails ride along under the hip
             var body = meshes.Cast<Renderer>().Concat(otter.GetComponentsInChildren<LineRenderer>().Where(l => l.enabled && l.positionCount > 1)).ToArray();
             var reference = Object.FindObjectsByType<WaterReference>(FindObjectsSortMode.None).SelectMany(w => w.Renderers).Where(r => r != null);
-            var scene = body.Concat(reference).Distinct().ToArray();
+            var guide = Object.FindObjectsByType<GuideArrow>(FindObjectsSortMode.None).SelectMany(g => g.Renderers).Where(r => r != null && r.enabled);
+            var scene = body.Concat(reference).Concat(guide).Distinct().ToArray();
             // from above and behind the left side, as the Scene view usually looks on
             Vector3 aside = (-right * 0.75f - forward * 0.45f + Vector3.up * 0.5f).normalized;
             string dir = Path.Combine("Logs", "Snapshots");

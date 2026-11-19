@@ -24,6 +24,8 @@ namespace OtterLocomotion.Testing
         public string label = "baseline";
 
         [Header("Reaction thresholds")]
+        [Tooltip("Reactions count from when the controls' heading first moves this far (deg): a click asks on its release, a pick-up once the pointer leaves the otter.")]
+        public float askThresholdDeg = 1f;
         public float bodyYawThresholdDeg = 2f;
         public float headYawThresholdDeg = 3f;
         public float spineBendThresholdDeg = 2f;
@@ -40,6 +42,8 @@ namespace OtterLocomotion.Testing
 
         [Header("Feel targets (checked per segment in the summary)")]
         public float headReactionMax = 0.10f;
+        [Tooltip("The head turns at least this long (s) before the body does.")]
+        public float headLeadMin = 0.08f;
         public float limbLeadMin = 0.10f;
         [Tooltip("Time to 90% of a 90 degree turn; scales linearly to turn170Budget for a 170 degree turn.")]
         public float turn90Budget = 1.0f;
@@ -80,6 +84,8 @@ namespace OtterLocomotion.Testing
         {
             public float t, dt, intentYaw, bodyYaw, yawRate, speedFwd, speedLat, targetSpeed, aim;
             public float headYaw, chestBend, chestRoll;
+            /// <summary>Where the head IK is told to look: the head guide seen from the chest (deg from the body's heading) and how far it is (m).</summary>
+            public float guideYaw, guideDist;
             public int seg;
             /// <summary>Mouse buttons; a hind power stroke began this frame; a click's kick is being kicked.</summary>
             public bool left, right, kick, kicking;
@@ -154,7 +160,7 @@ namespace OtterLocomotion.Testing
         private readonly List<Limb> limbs = new List<Limb>();
         private readonly List<Foot> feet = new List<Foot>();
         private readonly List<Sample> samples = new List<Sample>();
-        private Transform hip, chest, head;
+        private Transform hip, chest, head, guide;
         private LimbStrokeAnimator animator;
         private SpineKickWave spineWave;
         private TailRudder tail;
@@ -207,6 +213,8 @@ namespace OtterLocomotion.Testing
             hip = OtterRig.FindActiveBone(controls.transform, OtterRig.Hip);
             chest = OtterRig.FindActiveBone(controls.transform, OtterRig.Chest);
             head = OtterRig.FindActiveBone(controls.transform, OtterRig.Head);
+            var headGuide = FindObjectOfType<HeadIKGuideFromArrowRB>();
+            if (headGuide != null) guide = headGuide.GetHeadIKGuide();
             if (brain == null) brain = controls.GetComponent<OtterLocomotionBrain>();
             animator = controls.GetComponent<LimbStrokeAnimator>();
             spineWave = controls.GetComponent<SpineKickWave>();
@@ -313,10 +321,14 @@ namespace OtterLocomotion.Testing
                 speedFwd = Vector3.Dot(v, fwd), speedLat = Vector3.Dot(v, right),
                 targetSpeed = brain != null && brain.isActiveAndEnabled ? brain.Demand.requestedSpeed : 0f, kick = kickThisFrame,
                 kicking = brain != null && brain.Rhythm.limbs.Any(l => l.kicking),
-                // bones point at their child along local +Y, so .up is the head/chest/hip direction
-                headYaw = head ? Vector3.SignedAngle(fwd, Flat(head.up), Vector3.up) : 0f,
+                // bones point at their child along local +Y, so .up is the head/chest/hip direction. The head is seen by
+                // its tip, as far out along it as it is from the chest, from the chest: flattening the head's own line
+                // alone loses it on the back, where the head looks up at the sky
+                headYaw = head && chest ? Vector3.SignedAngle(fwd, Flat(head.position + head.up * Vector3.Distance(head.position, chest.position) - chest.position), Vector3.up) : 0f,
                 chestBend = hip && chest ? Vector3.SignedAngle(Flat(hip.up), Flat(chest.up), Vector3.up) : 0f,
                 chestRoll = chest ? ChestRoll(body) : 0f,
+                guideYaw = guide && chest ? Vector3.SignedAngle(fwd, Flat(guide.position - chest.position), Vector3.up) : 0f,
+                guideDist = guide && chest ? Vector3.ProjectOnPlane(guide.position - chest.position, Vector3.up).magnitude : 0f,
                 limb = limbs.Select(l => l.space.TransformVector(l.space.InverseTransformPoint(l.target.position) - l.restLocal).magnitude * 100f).ToArray(),
                 limbSide = limbs.Select(l => Vector3.Dot(l.space.TransformPoint(l.restLocal) - l.space.position, right) >= 0f ? 1 : -1).ToArray(),
             };
@@ -459,8 +471,9 @@ namespace OtterLocomotion.Testing
         {
             var ci = CultureInfo.InvariantCulture;
             // left/right = mouse buttons; intentYaw = the heading the controls ask for; aim = how much the head and spine aim (0..1);
-            // kick = a hind power stroke began; kicking = a click's kick is being kicked
-            var sb = new StringBuilder("t,seg,left,right,gear,gait,intentYaw,aim,bodyYaw,yawRate,speedFwd,speedLat,targetSpeed,kick,kicking,headYaw,chestBend,chestRoll");
+            // kick = a hind power stroke began; kicking = a click's kick is being kicked; guideYaw/guideDist = the head IK's
+            // look target from the chest (deg from the body's heading, m)
+            var sb = new StringBuilder("t,seg,left,right,gear,gait,intentYaw,aim,bodyYaw,yawRate,speedFwd,speedLat,targetSpeed,kick,kicking,headYaw,chestBend,chestRoll,guideYaw,guideDist");
             foreach (var l in limbs) sb.Append(',').Append(l.name).Append("_cm");
             // horizontal offset away from the body midline, + = outward; side = which side of the midline the limb is on
             // now (+1 right), which swaps left and right while on the back
@@ -507,10 +520,9 @@ namespace OtterLocomotion.Testing
             float t0 = samples.Count > 0 ? samples[0].t : 0f;
             foreach (var s in samples)
             {
-                sb.Append(string.Format(ci, "{0:F4},{1},{2},{3},{4},{5},{6:F2},{7:F2},{8:F2},{9:F1},{10:F3},{11:F3},{12:F2},{13},{14},{15:F2},{16:F2},{17:F2}",
+                sb.Append(string.Format(ci, "{0:F4},{1},{2},{3},{4},{5},{6:F2},{7:F2},{8:F2},{9:F1},{10:F3},{11:F3},{12:F2},{13},{14},{15:F2},{16:F2},{17:F2},{18:F1},{19:F2}",
                     s.t - t0, s.seg, s.left ? 1 : 0, s.right ? 1 : 0, s.gear, s.gait, s.intentYaw, s.aim, s.bodyYaw, s.yawRate, s.speedFwd, s.speedLat,
-                    s.targetSpeed, s.kick ? 1 : 0, s.kicking ? 1 : 0, s.headYaw, s.chestBend, s.chestRoll));
-                foreach (var x in s.limb) sb.Append(',').Append(x.ToString("F2", ci));
+                    s.targetSpeed, s.kick ? 1 : 0, s.kicking ? 1 : 0, s.headYaw, s.chestBend, s.chestRoll, s.guideYaw, s.guideDist));                foreach (var x in s.limb) sb.Append(',').Append(x.ToString("F2", ci));
                 foreach (var x in s.limbOut) sb.Append(',').Append(x.ToString("F2", ci));
                 foreach (var x in s.limbSide) sb.Append(',').Append(x);
                 for (int k = 0; k < feet.Count; k++)
@@ -567,7 +579,7 @@ namespace OtterLocomotion.Testing
             checkCount = passCount = 0;
             var sb = new StringBuilder();
             sb.AppendLine($"# Locomotion playback '{label}', {samples.Count} frames, limbs: {string.Join(" ", limbs.Select(l => l.name))}");
-            sb.AppendLine("# times in seconds from segment start; 'lead' = body reaction time minus limb reaction time (+ = limbs first);" +
+            sb.AppendLine("# times in seconds from segment start, a turn's from when the controls ask for it; 'lead' = body reaction time minus limb reaction time (+ = limbs first);" +
                           " with the stroke rhythm the limb time is the first turning power stroke");
             sb.AppendLine(feet.Count > 0 ? $"# hind feet at start (body axes): {footInfo}" : "# hind feet: no web found in the skinned mesh");
             if (brain != null && brain.HasLimbGeometry)
@@ -605,7 +617,7 @@ namespace OtterLocomotion.Testing
                 if (events.Count > 0)
                     sb.AppendLine("  input: " + string.Join(", ", events.Select(e => $"{e.text} {(e.t - t0).ToString("F2", CultureInfo.InvariantCulture)}")));
 
-                bool turns = spec.action == OtterInputPlayback.Action.Drag || spec.action == OtterInputPlayback.Action.Click;
+                bool turns = spec.action == OtterInputPlayback.Action.Steer || spec.action == OtterInputPlayback.Action.Click;
                 float delta = turns ? Mathf.DeltaAngle(first.bodyYaw, playback.TargetYaw(seg)) : 0f;
                 if (Mathf.Abs(delta) >= turnMinDeg) TurnMetrics(sb, idx, t0, first, delta);
                 else if (last.targetSpeed > 0f) SpeedMetrics(sb, idx, t0);
@@ -850,6 +862,14 @@ namespace OtterLocomotion.Testing
             if (Mathf.Abs(delta) > 170f && Mathf.Abs(net) > 90f && Mathf.Sign(net) != Mathf.Sign(delta))
                 delta -= 360f * Mathf.Sign(delta);
             float target = first.bodyYaw + delta;
+            float asked = 0f, before = idx[0] > 0 ? samples[idx[0] - 1].intentYaw : first.intentYaw;
+            foreach (int i in idx)
+                if (Mathf.Abs(Mathf.DeltaAngle(before, samples[i].intentYaw)) > askThresholdDeg)
+                {
+                    asked = samples[i].t - t0;
+                    break;
+                }
+            t0 += asked;
             float? tBody = null, tHead = null, tSpine = null, tFront = null, tHind = null, t50 = null, t90 = null;
             float maxProgress = 0f, peakRate = 0f, lastOutside = 0f;
             float front0 = Asymmetry(first, "F"), hind0 = Asymmetry(first, "H");
@@ -877,9 +897,11 @@ namespace OtterLocomotion.Testing
             if (first.rhythm) tLimb = tStroke;
             float? leadValue = tBody.HasValue && tLimb.HasValue ? tBody.Value - tLimb.Value : (float?)null;
             string lead = leadValue.HasValue ? leadValue.Value.ToString("+0.00;-0.00", CultureInfo.InvariantCulture) : "n/a";
+            float? headLead = tBody.HasValue && tHead.HasValue ? tBody.Value - tHead.Value : (float?)null;
+            string headFirst = headLead.HasValue ? headLead.Value.ToString("+0.00;-0.00", CultureInfo.InvariantCulture) : "n/a";
             float overshoot = Mathf.Max(0f, maxProgress - 1f) * Mathf.Abs(delta);
             string stroke = first.rhythm ? $"  turning stroke {F(tStroke)}{(strokeLimb.HasValue ? $" ({strokeLimb})" : "")}" : "";
-            sb.AppendLine($"  turn {delta:+0;-0} deg | first reaction: head {F(tHead)}  spine {F(tSpine)}  limb L/R asymmetry front {F(tFront)} hind {F(tHind)}{stroke}  body {F(tBody)} | limb lead {lead}");
+            sb.AppendLine($"  turn {delta:+0;-0} deg, asked at {asked:F2} | first reaction after it: head {F(tHead)}  spine {F(tSpine)}  limb L/R asymmetry front {F(tFront)} hind {F(tHind)}{stroke}  body {F(tBody)} | head lead {headFirst}  limb lead {lead}");
             sb.AppendLine($"  progress: 50% at {F(t50)}  90% at {F(t90)}  overshoot {overshoot:F1} deg  " +
                           $"settled(±{settleToleranceDeg:F0}) {(lastOutside < end - 0.2f ? lastOutside.ToString("F2", CultureInfo.InvariantCulture) : "no")}  peak yaw rate {peakRate:F0} deg/s");
             var bends = idx.Select(i => samples[i]).Where(s => !float.IsNaN(s.tailBend)).ToList();
@@ -893,6 +915,7 @@ namespace OtterLocomotion.Testing
             float budget = Mathf.Lerp(turn90Budget, turn170Budget, Mathf.InverseLerp(90f, 170f, Mathf.Abs(delta)));
             sb.AppendLine("  targets: " + string.Join(" | ",
                 Check($"head <= {headReactionMax:F2}", tHead.HasValue && tHead.Value <= headReactionMax),
+                Check($"head lead >= +{headLeadMin:F2}", headLead.HasValue && headLead.Value >= headLeadMin),
                 Check($"limb lead >= +{limbLeadMin:F2}", leadValue.HasValue && leadValue.Value >= limbLeadMin),
                 Check($"90% <= {budget:F2}", t90.HasValue && t90.Value <= budget),
                 Check($"overshoot <= {overshootMaxDeg:F0}", overshoot <= overshootMaxDeg)));

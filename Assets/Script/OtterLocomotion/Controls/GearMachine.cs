@@ -21,7 +21,7 @@ namespace OtterLocomotion
         public float slowSpeedBL = 0.8f;
         public float cruiseSpeedBL = 1.2f;
         public float sprintSpeedBL = 2f;
-        [Tooltip("Parked, a drag that turns it more than parkDriftAngle (deg) drifts it on at this speed, so it draws a small arc rather than spinning on the spot.")]
+        [Tooltip("Parked, guided round more than parkDriftAngle (deg) it drifts on at this speed, so it draws a small arc rather than spinning on the spot.")]
         public float parkDriftBL = 0.1f;
         public float parkDriftAngle = 20f;
 
@@ -39,8 +39,10 @@ namespace OtterLocomotion
         [Range(0f, 1f)] public float swimKick = 1f;
 
         [Header("Aim")]
-        [Tooltip("How long (s) the head and spine keep aiming where a drag or a click pointed, fading out.")]
+        [Tooltip("How long (s) the head and spine keep aiming where the guide point or a click was, fading out once it is let go.")]
         public float aimFade = 0.6f;
+        [Tooltip("The head turns first: the body swims toward where the head looked this long (s) before.")]
+        public float headLead = 0.12f;
     }
 
     public enum ControlEventKind { Kick, Jump, Shift }
@@ -66,15 +68,17 @@ namespace OtterLocomotion
     /// <summary>The body as the gears see it.</summary>
     public struct GearBody
     {
-        public Vector3 position, forward;
+        /// <summary>The body's middle and its head, on the water, and its facing.</summary>
+        public Vector3 position, head, forward;
         public float speedBL;
         public bool airborne;
     }
 
     /// <summary>
     /// The gears the mouse shifts through (行动操作). Parked and swimming slowly the otter lies on its back; cruising and
-    /// sprinting it swims on its belly. A drag from the otter turns it toward the pointer in whatever gear it is in. A
-    /// click on the water turns it toward the click and kicks once, without shifting; a double click shifts up from
+    /// sprinting it swims on its belly. Selected, the pointer is its guide point in whatever gear it is in: the head
+    /// looks at it and the body turns after the head, headLead behind, until it is let go. A click on the water turns it
+    /// toward the click and kicks once, without shifting; a double click shifts up from
     /// parked to slow and from slow to cruising, its first click kicking as a click does. Cruising, a long press
     /// sprints along the heading: kicking at first, then in the dolphin wave; let go before the wave it cruises on, let
     /// go in the wave it slows of itself, keeping the wave while still fast and for at least jumpGrace. In the wave a
@@ -90,11 +94,13 @@ namespace OtterLocomotion
         /// <summary>A long press is driving the sprint on.</summary>
         public bool Accelerating { get; private set; }
         public bool Braking { get; private set; }
-        /// <summary>A drag is turning it.</summary>
-        public bool Steering { get; private set; }
-        /// <summary>Where it is headed (world, unit, on the water).</summary>
+        /// <summary>Picked up by a right click on it, guided by the pointer until a left click on it lets go.</summary>
+        public bool Selected { get; private set; }
+        /// <summary>Where the head looks to go (world, unit, on the water): from the head toward the guide point or the click.</summary>
         public Vector3 Heading { get; private set; } = Vector3.forward;
-        /// <summary>Where the head and spine aim, and how much (1 while dragging, fading after a drag or a click).</summary>
+        /// <summary>Where the body is headed: the head's heading of headLead ago.</summary>
+        public Vector3 BodyHeading { get; private set; } = Vector3.forward;
+        /// <summary>Where the head and spine aim, and how much (1 while selected, fading after it is let go or after a click).</summary>
         public Vector3 AimPoint { get; private set; }
         public float AimBlend { get; private set; }
         /// <summary>Speed asked for (body lengths/s).</summary>
@@ -116,32 +122,34 @@ namespace OtterLocomotion
         private bool clickPending;
         private Vector3 pendingPoint;
         private float pendingUntil, sprintSince, releasedAt, aimUntil;
+        private readonly List<(float time, Vector3 heading)> looked = new List<(float, Vector3)>();
 
         public void Reset(in GearBody body, Gear initial = Gear.Park)
         {
             Gear = initial;
-            Dolphin = Accelerating = Braking = Steering = false;
-            Heading = Flat(body.forward, Vector3.forward);
-            AimPoint = body.position + Heading;
+            Dolphin = Accelerating = Braking = Selected = false;
+            Heading = BodyHeading = Flat(body.forward, Vector3.forward);
+            looked.Clear();
+            AimPoint = body.head + Heading;
             AimBlend = 0f;
             SpeedBL = 0f;
             clickPending = pressEligible = false;
             aimUntil = float.NegativeInfinity;
         }
 
-        /// <param name="pointer">The pointer on the water now, which a drag turns toward once it is off the otter.</param>
+        /// <param name="pointer">The pointer on the water now: selected, the guide point, once it is off the otter.</param>
         public void Step(GearSettings s, GestureSettings gs, List<Gesture> gestures, float time, Vector3 pointer, bool pointerOnOtter, in GearBody b, List<ControlEvent> events)
         {
             foreach (var g in gestures)
             {
                 switch (g.kind)
                 {
-                    case GestureKind.DragBegin:
-                        Steering = true;
+                    case GestureKind.Select:
+                        Selected = true;
                         break;
-                    case GestureKind.DragEnd:
-                        Steering = false;
-                        aimUntil = time;
+                    case GestureKind.Deselect:
+                        if (Selected) aimUntil = time;
+                        Selected = false;
                         break;
                     case GestureKind.Press:
                         if (!g.second)
@@ -214,18 +222,25 @@ namespace OtterLocomotion
                     Shift(Gear.Cruise, "slowed out of the wave", time, events);
             }
 
-            if (Steering && !pointerOnOtter)
+            if (Selected && !pointerOnOtter)
             {
-                Heading = Flat(pointer - b.position, Heading);
+                Heading = Flat(pointer - b.head, Heading);
                 AimPoint = pointer;
             }
-            if (Steering) aimUntil = time;
-            AimBlend = Steering ? 1f : s.aimFade > 0f ? Mathf.Clamp01(1f - (time - aimUntil) / s.aimFade) : 0f;
+            if (Selected) aimUntil = time;
+            AimBlend = Selected ? 1f : s.aimFade > 0f ? Mathf.Clamp01(1f - (time - aimUntil) / s.aimFade) : 0f;
+
+            looked.Add((time, Heading));
+            float then = time - s.headLead;
+            int gone = 0;
+            while (gone + 1 < looked.Count && looked[gone + 1].time <= then) gone++;
+            looked.RemoveRange(0, gone);
+            if (looked[0].time <= then) BodyHeading = looked[0].heading;
 
             bool turning = Vector3.Angle(Flat(b.forward, Heading), Heading) > s.parkDriftAngle;
             SpeedBL = Gear switch
             {
-                Gear.Park => Steering && turning && !Braking ? s.parkDriftBL : 0f,
+                Gear.Park => Selected && turning && !Braking ? s.parkDriftBL : 0f,
                 Gear.Slow => s.slowSpeedBL,
                 Gear.Cruise => s.cruiseSpeedBL,
                 _ => Accelerating ? s.sprintSpeedBL : s.cruiseSpeedBL,
@@ -234,7 +249,7 @@ namespace OtterLocomotion
 
         private void Click(GearSettings s, Vector3 point, float time, in GearBody b, List<ControlEvent> events)
         {
-            Vector3 to = Flat(point - b.position, Heading);
+            Vector3 to = Flat(point - b.head, Heading);
             Heading = to;
             AimPoint = point;
             aimUntil = time;

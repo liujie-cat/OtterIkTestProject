@@ -15,7 +15,7 @@ namespace OtterLocomotion
         public float rightHoldTime = 0.3f;
     }
 
-    public enum GestureKind { DragBegin, DragEnd, Press, Click, HoldBegin, HoldEnd, RightPress, RightHoldBegin, RightRelease }
+    public enum GestureKind { Select, Deselect, Press, Click, HoldBegin, HoldEnd, RightPress, RightHoldBegin, RightRelease }
 
     /// <summary>Something the player did with the mouse, and where on the water.</summary>
     public struct Gesture
@@ -30,31 +30,30 @@ namespace OtterLocomotion
     }
 
     /// <summary>
-    /// Turns the two mouse buttons into gestures. A left press that starts on the otter is a drag, held until the button
-    /// comes up wherever the pointer has gone; one on the water is a click if let go within holdTime, a long press if
-    /// not. A press within doubleClickTime of a click's release is the second of a double click; a drag or a long press
-    /// breaks the chain, so neither one's release counts toward a double click. The right button gives a press at once
-    /// and a hold once it has been down rightHoldTime.
+    /// Turns the two mouse buttons into gestures. Pressed on the otter, the right button selects it and the left one
+    /// lets it go; either press is spent on that, going on to nothing else. A left press on the water is a click if let
+    /// go within holdTime, a long press if not. A press within doubleClickTime of a click's release is the second of a
+    /// double click; a long press or a press on the otter breaks the chain. The right button on the water gives a press
+    /// at once and a hold once it has been down rightHoldTime.
     /// </summary>
     public sealed class PointerGestures
     {
-        public bool Dragging { get; private set; }
         public bool Holding { get; private set; }
         public bool RightHolding { get; private set; }
 
-        private bool left, right, pressed, pressSecond;
+        private bool left, right, pressed, pressSecond, rightSpent;
         private float pressTime, rightTime;
         private float lastClick = float.NegativeInfinity;
 
         public void Reset()
         {
-            Dragging = Holding = RightHolding = false;
-            left = right = pressed = pressSecond = false;
+            Holding = RightHolding = false;
+            left = right = pressed = pressSecond = rightSpent = false;
             lastClick = float.NegativeInfinity;
         }
 
         /// <param name="point">The pointer on the water.</param>
-        /// <param name="overOtter">Whether the pointer is on the otter; only read as the left button goes down.</param>
+        /// <param name="overOtter">Whether the pointer is on the otter; only read as a button goes down.</param>
         public void Step(GestureSettings s, float time, bool leftHeld, bool rightHeld, Vector3 point, bool overOtter, List<Gesture> output)
         {
             void Emit(GestureKind kind, bool second = false) =>
@@ -64,9 +63,8 @@ namespace OtterLocomotion
             {
                 if (overOtter)
                 {
-                    Dragging = true;
                     lastClick = float.NegativeInfinity;
-                    Emit(GestureKind.DragBegin);
+                    Emit(GestureKind.Deselect);
                 }
                 else
                 {
@@ -83,12 +81,7 @@ namespace OtterLocomotion
             }
             if (!leftHeld && left)
             {
-                if (Dragging)
-                {
-                    Dragging = false;
-                    Emit(GestureKind.DragEnd);
-                }
-                else if (pressed)
+                if (pressed)
                 {
                     if (Holding)
                     {
@@ -110,17 +103,22 @@ namespace OtterLocomotion
             if (rightHeld && !right)
             {
                 rightTime = time;
-                Emit(GestureKind.RightPress);
+                rightSpent = overOtter;
+                Emit(overOtter ? GestureKind.Select : GestureKind.RightPress);
             }
-            if (rightHeld && !RightHolding && time - rightTime >= s.rightHoldTime)
+            if (rightHeld && !rightSpent && !RightHolding && time - rightTime >= s.rightHoldTime)
             {
                 RightHolding = true;
                 Emit(GestureKind.RightHoldBegin);
             }
             if (!rightHeld && right)
             {
-                RightHolding = false;
-                Emit(GestureKind.RightRelease);
+                if (!rightSpent)
+                {
+                    RightHolding = false;
+                    Emit(GestureKind.RightRelease);
+                }
+                rightSpent = false;
             }
             right = rightHeld;
         }

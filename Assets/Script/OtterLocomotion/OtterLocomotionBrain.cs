@@ -204,7 +204,7 @@ namespace OtterLocomotion
                 gear = g.Gear,
                 gait = g.Gait,
                 posture = g.Posture,
-                heading = g.Heading,
+                heading = g.BodyHeading,
                 requestedSpeed = g.SpeedBL * Parameters.bodyLength,
             };
         }

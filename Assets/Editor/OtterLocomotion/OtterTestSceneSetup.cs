@@ -28,6 +28,7 @@ namespace OtterLocomotion.EditorTools
         internal static readonly (Type type, string title)[] Managed =
         {
             (typeof(OtterControls), "操作"),
+            (typeof(GuideArrow), "引导箭头"),
             (typeof(OtterLocomotionBrain), "运动大脑"),
             (typeof(LimbStrokeAnimator), "四肢划水"),
             (typeof(PostureFlipSync), "翻身同步"),
@@ -79,8 +80,15 @@ namespace OtterLocomotion.EditorTools
             var on = new List<string>();
             if (body.enabled) on.Add("旧控制器 MovementControllerRB");
             var ring = RingUI(body);
-            if (ring != null && ring.gameObject.activeSelf) on.Add($"环形 UI '{ring.name}'");
+            if (ring != null && ring.enabled) on.Add($"环形 UI '{ring.name}'");
             return on;
+        }
+
+        /// <summary>The ring UI's object, which also carries the head IK guide, was switched off with it.</summary>
+        static bool HeadGuideOff(MovementControllerRB body)
+        {
+            var ring = RingUI(body);
+            return ring != null && !ring.gameObject.activeSelf;
         }
 
         static bool IsTestSceneOpen => SceneManager.GetActiveScene().path == ScenePath;
@@ -118,6 +126,9 @@ namespace OtterLocomotion.EditorTools
                 checks.Add(on.Count == 0
                     ? new Check("旧操作", Level.Ok, "环形控制器和环形 UI 已停用（文件保留）")
                     : new Check("旧操作", Level.Fix, "还开着: " + string.Join(", ", on) + "，刷新时停用"));
+                checks.Add(HeadGuideOff(body)
+                    ? new Check("头部引导", Level.Fix, $"'{RingUI(body).name}' 被关掉了，头部 IK 引导点停在原地；刷新时重新激活")
+                    : new Check("头部引导", Level.Ok, "头部 IK 引导点跟着引导点/朝向走"));
             }
             foreach (var (type, title) in Managed)
             {
@@ -195,11 +206,17 @@ namespace OtterLocomotion.EditorTools
                     log.AppendLine("旧操作: 停用 MovementControllerRB");
                 }
                 var ring = RingUI(body);
-                if (ring != null && ring.gameObject.activeSelf)
+                if (ring != null && ring.enabled)
                 {
-                    Undo.RecordObject(ring.gameObject, "Retire ring controls");
-                    ring.gameObject.SetActive(false);
-                    log.AppendLine($"旧操作: 隐藏环形 UI '{ring.name}'");
+                    Undo.RecordObject(ring, "Retire ring controls");
+                    ring.enabled = false;
+                    log.AppendLine($"旧操作: 停用环形 UI '{ring.name}'");
+                }
+                if (HeadGuideOff(body))
+                {
+                    Undo.RecordObject(ring.gameObject, "Keep the head guide");
+                    ring.gameObject.SetActive(true);
+                    log.AppendLine($"头部引导: 重新激活 '{ring.name}'（头部 IK 引导点在它上面）");
                 }
                 foreach (var (type, title) in Managed)
                 {
