@@ -145,6 +145,8 @@ namespace OtterLocomotion.Testing
             public Vector4[] forePaddle;
             /// <summary>Per forepaw, from LimbStrokeAnimator.ForeRolling: how much of a roll's stroke it takes and how far over to its rest on the chest it is (0..1 each), and its arm's angle about the chest's length in the world (deg).</summary>
             public Vector3[] foreRoll;
+            /// <summary>Per forepaw: how deep its wrist lies under the surface (cm), NaN without a Water.</summary>
+            public float[] foreDepth;
             /// <summary>How fast the chest bone turns in the world (deg/s), and its roll over without the bank (deg, LimbStrokeAnimator.ChestRoll).</summary>
             public float chestSpin, chestOver;
             public Posture posture;
@@ -201,6 +203,7 @@ namespace OtterLocomotion.Testing
         private Quaternion prevChest;
         private bool hasPrevChest;
         private static readonly LimbId[] Forepaws = { LimbId.FL, LimbId.FR };
+        private readonly Transform[] wrists = new Transform[2];
 
         private void Start()
         {
@@ -217,6 +220,7 @@ namespace OtterLocomotion.Testing
                 if (!OtterRig.TryClassify(ik, out var limb)) continue;
                 var space = OtterRig.Girdle(ik.root.bone);
                 limbs.Add(new Limb { name = limb.ToString(), target = ik.target, space = space, restLocal = space.InverseTransformPoint(ik.target.position) });
+                if (OtterRig.IsFore(limb)) wrists[System.Array.IndexOf(Forepaws, limb)] = ik.end.bone;
                 var flipper = OtterRig.IsFore(limb) ? null : OtterRig.Flipper(ik.end.bone);
                 if (flipper != null && OtterRig.TryFootPlane(flipper, out var normal, out var length, out var center, out _))
                 {
@@ -450,6 +454,7 @@ namespace OtterLocomotion.Testing
             s.foreWet = Forepaws.Select(id => animator != null ? animator.ForeTrail(id).y : 0f).ToArray();
             s.forePaddle = Forepaws.Select(id => animator != null ? animator.ForePaddleState(id) : Vector4.zero).ToArray();
             s.foreRoll = Forepaws.Select(id => animator != null ? animator.ForeRolling(id) : Vector3.zero).ToArray();
+            s.foreDepth = wrists.Select(w => water != null && w != null ? water.Depth(w.position) * 100f : float.NaN).ToArray();
             s.chestOver = animator != null ? animator.ChestRoll : 0f;
             if (chest != null)
             {
@@ -607,9 +612,9 @@ namespace OtterLocomotion.Testing
             // each forepaw's paddle: wrist from the shoulder's rest forward and out (cm), the shoulder blade's reach forward (cm), how far it is taken up
             foreach (var id in Forepaws) sb.Append(',').Append(id).Append("_wfwd,").Append(id).Append("_wout,").Append(id).Append("_blade,").Append(id).Append("_paddle");
             sb.Append(",chestSpin");
-            // the chest's roll over without the bank (deg); each forepaw's share of the roll's stroke, how far over to its rest on the chest, and its arm's angle about the chest's length from straight down (deg)
+            // the chest's roll over without the bank (deg); each forepaw's share of the roll's stroke, how far over to its rest on the chest, its arm's angle about the chest's length from straight down (deg), and how deep its wrist is (cm)
             sb.Append(",chestOver");
-            foreach (var id in Forepaws) sb.Append(',').Append(id).Append("_roll,").Append(id).Append("_over,").Append(id).Append("_arm");
+            foreach (var id in Forepaws) sb.Append(',').Append(id).Append("_roll,").Append(id).Append("_over,").Append(id).Append("_arm,").Append(id).Append("_depth");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedAsked,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -660,7 +665,9 @@ namespace OtterLocomotion.Testing
                 foreach (var p in s.forePaddle) sb.Append(string.Format(ci, ",{0:F1},{1:F1},{2:F2},{3:F2}", p.x, p.y, p.z, p.w));
                 sb.Append(',').Append(s.chestSpin.ToString("F0", ci));
                 sb.Append(',').Append(s.chestOver.ToString("F1", ci));
-                foreach (var r in s.foreRoll) sb.Append(string.Format(ci, ",{0:F2},{1:F2},{2:F1}", r.x, r.y, r.z));
+                for (int k = 0; k < s.foreRoll.Length; k++)
+                    sb.Append(string.Format(ci, ",{0:F2},{1:F2},{2:F1},", s.foreRoll[k].x, s.foreRoll[k].y, s.foreRoll[k].z))
+                        .Append(float.IsNaN(s.foreDepth[k]) ? "" : s.foreDepth[k].ToString("F1", ci));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.requestedSpeed, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
@@ -814,8 +821,10 @@ namespace OtterLocomotion.Testing
                         if (arm > top) { top = arm; topAt = j; chestTurnTop = chestTurn; }
                         if (top - arm > back) { back = top - arm; backFrom = topAt; backTo = j; rolledBack = chestTurn - chestTurnTop; }
                     }
+                    var depth = stroke.Skip(backFrom).Take(backTo - backFrom + 1).Select(i => samples[i].foreDepth[k]).Where(d => !float.IsNaN(d)).ToList();
+                    string under = depth.Count > 0 ? $", wrist {depth.Min():F1}..{depth.Max():F1} cm under the surface" : "";
                     string sweep = back > 0f
-                        ? $"sweeps {back:F0} deg back against the roll in {(samples[stroke[backTo]].t - samples[stroke[backFrom]].t).ToString("F2", ci)} s from {(samples[stroke[backFrom]].t - t0).ToString("F2", ci)} s, the chest rolling {rolledBack:F0} meanwhile"
+                        ? $"sweeps {back:F0} deg back against the roll in {(samples[stroke[backTo]].t - samples[stroke[backFrom]].t).ToString("F2", ci)} s from {(samples[stroke[backFrom]].t - t0).ToString("F2", ci)} s{under}, the chest rolling {rolledBack:F0} meanwhile"
                         : "never against the roll";
                     roles.Add($"{Forepaws[k]} strokes, holding {(samples[held[held.Count - 1]].t - samples[held[0]].t).ToString("F2", ci)} s from {(samples[held[0]].t - t0).ToString("F2", ci)} s, {sweep}, rides {arm:F0} deg with it in all: wrist fwd {w.Min(p => p.x):F1}..{w.Max(p => p.x):F1} out {w.Min(p => p.y):F1}..{w.Max(p => p.y):F1} cm, blade {w.Min(p => p.z):F1}..{w.Max(p => p.z):F1} cm");
                     continue;
