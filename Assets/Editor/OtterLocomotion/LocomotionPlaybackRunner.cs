@@ -37,9 +37,13 @@ namespace OtterLocomotion.EditorTools
         [MenuItem("Tools/Otter Locomotion/Run Speed Playback")]
         static void RunSpeeds() => Run("speeds", "speeds");
 
+        [MenuItem("Tools/Otter Locomotion/Run Circle Playback")]
+        static void RunCircles() => Run("circles", "circles");
+
         [MenuItem("Tools/Otter Locomotion/Run Baseline Playback", true)]
         [MenuItem("Tools/Otter Locomotion/Run Turn Playback", true)]
         [MenuItem("Tools/Otter Locomotion/Run Speed Playback", true)]
+        [MenuItem("Tools/Otter Locomotion/Run Circle Playback", true)]
         static bool CanRun() => !EditorApplication.isPlayingOrWillChangePlaymode;
 
         public static void Run(string label, string script)

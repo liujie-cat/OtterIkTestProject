@@ -78,6 +78,14 @@ namespace OtterLocomotion.EditorTools
                 new Shot(6, 0.5f, "6_sprint_kick_feet", 8, 0.04f),
                 new Shot(6, 5.0f, "6_sprint_wave_feet", 8, 0.04f),
             },
+            "circles" => new[]
+            {
+                new Shot(3, 1.70f, "03_slow_circle_push", 8, 1f / 60f),
+                new Shot(3, 4.0f, "03_slow_circle_feet", 8, 0.06f), new Shot(3, 5.0f, "03_slow_circle"),
+                new Shot(6, 4.0f, "06_cruise_circle_feet", 8, 0.06f), new Shot(6, 5.0f, "06_cruise_circle"),
+                new Shot(7, 2.5f, "07_cruise_tight_feet", 8, 0.06f), new Shot(7, 3.5f, "07_cruise_tight"),
+                new Shot(9, 2.5f, "09_sprint_circle_feet", 8, 0.05f),
+            },
             "turns" => new[]
             {
                 new Shot(3, 0.15f, "03_park_large_right_feet", 8, 0.08f),

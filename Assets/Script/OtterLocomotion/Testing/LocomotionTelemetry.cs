@@ -106,6 +106,7 @@ namespace OtterLocomotion.Testing
             public float[] footReach;
             /// <summary>Per hind foot, from LimbStrokeAnimator: ankle turn from rest (deg), push flag, web width, turn the goal asks for (deg).</summary>
             public Vector4[] flipperPose;
+            public Vector3[] ankle;
             /// <summary>Per hind foot, from LimbStrokeAnimator: how far its kick loop swings out for the turn (deg).</summary>
             public float[] kickYaw;
             /// <summary>LimbStrokeAnimator's fluke (0..1) and its beat (cycles); the hip and chest bones' pitch (deg, + = front up); per hind foot the ankle's height over the hip joint (cm, world up).</summary>
@@ -419,6 +420,7 @@ namespace OtterLocomotion.Testing
                 s.footToesFwd[k] = Vector3.Dot(toes, fwd);
             }
             s.flipperPose = feet.Select(f => animator != null && System.Enum.TryParse<LimbId>(f.name, out var id) ? animator.FlipperState(id) : Vector4.zero).ToArray();
+            s.ankle = feet.Select(f => animator != null && System.Enum.TryParse<LimbId>(f.name, out var id) ? animator.AnkleAngles(id) : Vector3.zero).ToArray();
             s.kickYaw = feet.Select(f => animator != null && System.Enum.TryParse<LimbId>(f.name, out var id) ? animator.KickYaw(id) : 0f).ToArray();
             s.fluke = animator != null ? animator.Fluke : 0f;
             s.flukePhase = animator != null ? animator.FlukePhase : 0f;
@@ -576,6 +578,8 @@ namespace OtterLocomotion.Testing
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wup,").Append(f.name).Append("_nup");
             // which way the toes point: up and forward components
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_tup,").Append(f.name).Append("_tfwd");
+            // the ankle's flex, evert and splay from the web's rest on the shin (deg)
+            foreach (var f in feet) sb.Append(',').Append(f.name).Append("_flex,").Append(f.name).Append("_evert,").Append(f.name).Append("_splay");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedAsked,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -621,6 +625,7 @@ namespace OtterLocomotion.Testing
                 foreach (var d in s.hipDepth) sb.Append(',').Append(float.IsNaN(d) ? "" : d.ToString("F2", ci));
                 for (int k = 0; k < s.footWorldUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footWorldUp[k], s.footNormalUp[k]));
                 for (int k = 0; k < s.footToesUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footToesUp[k], s.footToesFwd[k]));
+                foreach (var a in s.ankle) sb.Append(string.Format(ci, ",{0:F1},{1:F1},{2:F1}", a.x, a.y, a.z));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.requestedSpeed, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
@@ -808,6 +813,32 @@ namespace OtterLocomotion.Testing
             var gaps = idx.Select(i => samples[i].feetGap).Where(g => g >= 0f).ToList();
             string closest = gaps.Count > 0 ? $" | webs closest {gaps.Min().ToString("F1", ci)} cm" : "";
             sb.AppendLine($"  feet (web facing its motion, 1 = flat-on push, 0 = edge-on): {string.Join(" | ", parts)}{closest}");
+
+            // the ankle's angles (5th..95th percentile), and how sharply the web's speed through the water changes (99th
+            // percentile, m/s^2): a web that flicks over in a frame or two shows as a jerk well above the kick's own
+            var ankles = new List<string>();
+            for (int k = 0; k < feet.Count; k++)
+            {
+                var seq = idx.Select(i => samples[i]).Where(s => s.ankle != null && k < s.ankle.Length).ToList();
+                if (seq.Count < 8) continue;
+                string Span(System.Func<Vector3, float> f)
+                {
+                    var o = seq.Select(s => f(s.ankle[k])).OrderBy(x => x).ToList();
+                    return $"{o[(int)(0.05f * (o.Count - 1))].ToString("F0", ci)}..{o[(int)(0.95f * (o.Count - 1))].ToString("F0", ci)}";
+                }
+                var jerk = new List<float>();
+                for (int i = 1; i < seq.Count; i++)
+                {
+                    float dt = seq[i].t - seq[i - 1].t;
+                    if (dt < 1e-5f || seq[i].footWorldFwd == null || seq[i - 1].footWorldFwd == null) continue;
+                    var dv = new Vector2(seq[i].footWorldFwd[k] - seq[i - 1].footWorldFwd[k], seq[i].footWorldUp[k] - seq[i - 1].footWorldUp[k]);
+                    jerk.Add(dv.magnitude / dt);
+                }
+                jerk.Sort();
+                string snap = jerk.Count > 0 ? jerk[(int)(0.99f * (jerk.Count - 1))].ToString("F0", ci) : "-";
+                ankles.Add($"{feet[k].name} flex {Span(a => a.x)} evert {Span(a => a.y)} splay {Span(a => a.z)} deg, web jerk {snap} m/s2");
+            }
+            if (ankles.Count > 0) sb.AppendLine($"  ankle (from the web's rest in the leg's plane; evert and splay + = out): {string.Join(" | ", ankles)}");
         }
 
         // The shape of each ankle's path relative to the hip: how far the leg draws in and stretches out (reach over the

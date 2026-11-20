@@ -9,7 +9,7 @@ namespace OtterLocomotion.Testing
     /// player would: a click, double click or long press on the water, steering the otter picked up (a right click on
     /// it, then the pointer as its guide), letting it go (a left click on it), a right tap or hold on the water;
     /// pointing toward a yaw relative to the otter's facing when playback started (+ = clockwise seen from above,
-    /// i.e. right). Between pointing segments the pointer stays where it last pointed from the otter, as a still mouse
+    /// i.e. right), held there or swept round the otter from it. Between pointing segments the pointer stays where it last pointed from the otter, as a still mouse
     /// does under the following camera. Feeds OtterControls through its pointer override, so its gestures and gears
     /// apply exactly as with the mouse. Locks the frame rate so runs repeat.
     /// </summary>
@@ -29,14 +29,17 @@ namespace OtterLocomotion.Testing
             public float headingDeg;
             [Tooltip("How far from the otter it points (body lengths); 0 = the action's usual distance.")]
             public float distanceBL;
+            [Tooltip("How fast the pointer sweeps round the otter from there (deg/s, + = right), as a mouse dragged round it; 0 = held still.")]
+            public float sweepDegPerSec;
 
-            public Segment(string name, float duration, Action action, float headingDeg = 0f, float distanceBL = 0f)
+            public Segment(string name, float duration, Action action, float headingDeg = 0f, float distanceBL = 0f, float sweepDegPerSec = 0f)
             {
                 this.name = name;
                 this.duration = duration;
                 this.action = action;
                 this.headingDeg = headingDeg;
                 this.distanceBL = distanceBL;
+                this.sweepDegPerSec = sweepDegPerSec;
             }
 
             public bool Points => action == Action.Click || action == Action.DoubleClick || action == Action.Hold || action == Action.Steer;
@@ -143,10 +146,34 @@ namespace OtterLocomotion.Testing
             new Segment("parked: rest", 2.0f, Action.Idle),
         };
 
+        /// <summary>
+        /// Long turns with the pointer swept round the otter, as a mouse dragged round it, so the body keeps turning and
+        /// leaning through many kicks: on the back, on the belly gently and tightly, and sprinting in the wave, each kind
+        /// after a straight stretch to set it against.
+        /// </summary>
+        public static List<Segment> CircleScript() => new List<Segment>
+        {
+            new Segment("parked: idle", 1.0f, Action.Idle),
+            new Segment("parked: double click, slow", 2.0f, Action.DoubleClick, 0f),
+            new Segment("slow: straight on the back", 2.5f, Action.Idle),
+            new Segment("slow: steer round to the right", 6.0f, Action.Steer, 20f, 0f, 60f),
+            new Segment("slow: double click, cruise", 2.5f, Action.DoubleClick, 20f),
+            new Segment("cruise: straight on the belly", 2.5f, Action.Idle),
+            new Segment("cruise: steer round to the left", 6.0f, Action.Steer, 0f, 0f, -60f),
+            new Segment("cruise: steer round tight to the right", 4.0f, Action.Steer, 30f, 0f, 120f),
+            new Segment("cruise: long press, sprint", 3.5f, Action.Hold, 150f),
+            new Segment("sprint: sweep round to the left in the wave", 4.0f, Action.Hold, 150f, 0f, -60f),
+            new Segment("sprint: let go, glide", 2.0f, Action.Idle),
+            new Segment("cruise: right tap, slow", 3.0f, Action.RightTap),
+            new Segment("slow: right hold, brake", 2.0f, Action.RightHold),
+            new Segment("parked: let go of it, rest", 1.5f, Action.LetGo),
+        };
+
         public static List<Segment> Script(string name) => name switch
         {
             "turns" => TurnScript(),
             "speeds" => SpeedScript(),
+            "circles" => CircleScript(),
             _ => BaselineScript(),
         };
 
@@ -211,7 +238,7 @@ namespace OtterLocomotion.Testing
                 _ => false,
             };
 
-            if (s.Points) pointed = Pointing(TargetYaw(index), s.distanceBL > 0f ? s.distanceBL : s.action == Action.Steer ? guideDistanceBL : clickDistanceBL);
+            if (s.Points) pointed = Pointing(TargetYaw(index) + s.sweepDegPerSec * u, s.distanceBL > 0f ? s.distanceBL : s.action == Action.Steer ? guideDistanceBL : clickDistanceBL);
             // picking it up and letting it go are clicks on the otter
             bool onOtter = (s.action == Action.Steer && Right) || (s.action == Action.LetGo && Left);
             ScreenPosition = ToScreen(onOtter ? controls.GrabPoint : controls.transform.position + pointed);
