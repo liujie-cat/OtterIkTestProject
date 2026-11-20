@@ -73,6 +73,18 @@ namespace OtterLocomotion.EditorTools
             if (playing) EditorGUILayout.LabelField("Play 中，退出后刷新状态。", EditorStyles.miniLabel);
             foreach (var c in checks) DrawCheck(c);
 
+            var sea = OtterTestSceneSetup.FindSea();
+            if (sea != null && sea.TryGetComponent<MeshRenderer>(out var look))
+            {
+                bool hidden = EditorGUILayout.ToggleLeft(new GUIContent("隐藏海水（看水下的四肢）",
+                    "只关掉水箱的显示，水体还在：浮力、入水深度照常。Play 中切换，退出 Play 后恢复；不在 Play 时切换要保存场景才留下。"), !look.enabled);
+                if (hidden == look.enabled)
+                {
+                    if (!playing) Undo.RecordObject(look, hidden ? "Hide the sea" : "Show the sea");
+                    look.enabled = !hidden;
+                }
+            }
+
             EditorGUILayout.Space();
             ResetSettings = EditorGUILayout.ToggleLeft(new GUIContent("运动组件参数恢复为代码默认值",
                 "关掉则保留 Inspector 里对运动大脑、四肢划水、翻身同步的调参。回放测试总是用代码默认值。"), ResetSettings);

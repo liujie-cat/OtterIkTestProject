@@ -34,7 +34,8 @@ namespace OtterLocomotion
         public RhythmProfile hindTogether = new RhythmProfile(0.7f, 3f, 0.25f, 3f);
         [Tooltip("Hind feet taking turns: swimming slowly on the back, and turning on the spot when parked.")]
         public RhythmProfile hindAlternate = new RhythmProfile(0.6f, 2f, 0.25f, 3f);
-        public RhythmProfile fore = new RhythmProfile(1.6f, 3.2f, 0.4f, 1.5f);
+        [Tooltip("Forepaws paddling: a slow, full sweep, the outside paw steering a cruise turn round like a single oar.")]
+        public RhythmProfile forePaddle = new RhythmProfile(1.2f, 2.2f, 0.55f, 1.5f);
 
         [Header("Drive = allocated force / full-drive force")]
         [Tooltip("Allocated force (N) at which a limb strokes at full size and rate.")]
@@ -93,7 +94,8 @@ namespace OtterLocomotion
     /// asked to push sets its stroke strength and rate, the force direction sets its stroke direction, fixed when each
     /// power phase begins. Left and right of a girdle pull toward alternating strokes; the hind feet kick together in
     /// the gaits on the belly. A limb with nothing to do finishes its cycle and rests; a fresh demand in the late
-    /// recovery hurries the rest of it through, and a limb starting from rest pushes immediately. A click's kick
+    /// recovery hurries the rest of it through, and a limb starting from rest pushes immediately, a forepaw once it has
+    /// reached forward for its catch. A click's kick
     /// (Kick) makes the next power stroke of both hind feet at least that strong and straight back; from rest they
     /// draw up and kick it together, once.
     /// </summary>
@@ -218,7 +220,7 @@ namespace OtterLocomotion
         }
 
         private RhythmProfile Profile(RhythmSettings s, int limb) =>
-            OtterRig.IsFore((LimbId)limb) ? s.fore : HindTogether ? s.hindTogether : s.hindAlternate;
+            OtterRig.IsFore((LimbId)limb) ? s.forePaddle : HindTogether ? s.hindTogether : s.hindAlternate;
 
         /// <summary>How far the partner's phase should run ahead of this limb's (cycles).</summary>
         private float PartnerLead(int limb)
@@ -234,8 +236,10 @@ namespace OtterLocomotion
             ref var p = ref limbs[Partner(i)];
             l.powerFraction = Profile(s, i).powerFraction;
             // a kick from rest draws the foot up through the late recovery first: pushing straight from the rest pose
-            // the stroke's loop grows out ahead of the foot and sweeps the web forward, backing the body
-            float phase = l.kick > 0f ? 1f - (1f - l.powerFraction) * s.resetWindow : 0f;
+            // the stroke's loop grows out ahead of the foot and sweeps the web forward, backing the body. A forepaw
+            // likewise reaches forward for its catch first, or it would cut into its sweep halfway round
+            bool reach = l.kick > 0f || OtterRig.IsFore((LimbId)i);
+            float phase = reach ? 1f - (1f - l.powerFraction) * s.resetWindow : 0f;
             if (p.active)
             {
                 float slot = Mathf.Repeat(p.phase - PartnerLead(i), 1f);

@@ -141,6 +141,8 @@ namespace OtterLocomotion.Testing
             public float[] hipDepth;
             /// <summary>Per forepaw (FL, FR), from LimbStrokeAnimator: how far it trails the chest's turning (deg) and how much of it is in the water (0..1).</summary>
             public float[] foreTrail, foreWet;
+            /// <summary>Per forepaw, its paddle (LimbStrokeAnimator.ForePaddleState): wrist from the shoulder's rest forward and out (cm), the shoulder blade's reach forward (cm), and how far the paddle is taken up (0..1).</summary>
+            public Vector4[] forePaddle;
             /// <summary>How fast the chest bone turns in the world (deg/s).</summary>
             public float chestSpin;
             public Posture posture;
@@ -444,6 +446,7 @@ namespace OtterLocomotion.Testing
             s.hipDepth = feet.Select(f => water != null ? water.Depth(f.hipJoint.position) * 100f : float.NaN).ToArray();
             s.foreTrail = Forepaws.Select(id => animator != null ? animator.ForeTrail(id).x : 0f).ToArray();
             s.foreWet = Forepaws.Select(id => animator != null ? animator.ForeTrail(id).y : 0f).ToArray();
+            s.forePaddle = Forepaws.Select(id => animator != null ? animator.ForePaddleState(id) : Vector4.zero).ToArray();
             if (chest != null)
             {
                 s.chestSpin = hasPrevChest ? Quaternion.Angle(prevChest, chest.rotation) / dt : 0f;
@@ -597,6 +600,8 @@ namespace OtterLocomotion.Testing
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_flex,").Append(f.name).Append("_evert,").Append(f.name).Append("_splay");
             // how far each forepaw trails the chest's turning (deg) and how much of it is in the water; the chest's turning rate (deg/s)
             foreach (var id in Forepaws) sb.Append(',').Append(id).Append("_trail,").Append(id).Append("_pawWet");
+            // each forepaw's paddle: wrist from the shoulder's rest forward and out (cm), the shoulder blade's reach forward (cm), how far it is taken up
+            foreach (var id in Forepaws) sb.Append(',').Append(id).Append("_wfwd,").Append(id).Append("_wout,").Append(id).Append("_blade,").Append(id).Append("_paddle");
             sb.Append(",chestSpin");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedAsked,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
@@ -645,6 +650,7 @@ namespace OtterLocomotion.Testing
                 for (int k = 0; k < s.footToesUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footToesUp[k], s.footToesFwd[k]));
                 foreach (var a in s.ankle) sb.Append(string.Format(ci, ",{0:F1},{1:F1},{2:F1}", a.x, a.y, a.z));
                 for (int k = 0; k < Forepaws.Length; k++) sb.Append(string.Format(ci, ",{0:F1},{1:F2}", s.foreTrail[k], s.foreWet[k]));
+                foreach (var p in s.forePaddle) sb.Append(string.Format(ci, ",{0:F1},{1:F1},{2:F2},{3:F2}", p.x, p.y, p.z, p.w));
                 sb.Append(',').Append(s.chestSpin.ToString("F0", ci));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
@@ -745,7 +751,8 @@ namespace OtterLocomotion.Testing
         }
 
         // The forepaws against the chest: how fast the chest turns (95th percentile), how far each paw trails it (95th
-        // percentile and peak), and how much of the time each is in the water.
+        // percentile and peak), and how much of the time each is in the water; and while each paddles, how far round its
+        // wrist goes from the shoulder's rest and how far the shoulder blade reaches the shoulder.
         private void ForeMetrics(StringBuilder sb, List<int> idx)
         {
             if (animator == null) return;
@@ -763,6 +770,14 @@ namespace OtterLocomotion.Testing
                 parts.Add($"{Forepaws[k]} trails {P(trail, 0.95f).ToString("F1", ci)} deg (peak {trail.Max().ToString("F1", ci)}), in water {wet:P0}");
             }
             sb.AppendLine($"  forepaws: chest turning {P(idx.Select(i => samples[i].chestSpin), 0.95f).ToString("F0", ci)} deg/s | {string.Join(" | ", parts)}");
+            var paddles = new List<string>();
+            for (int k = 0; k < Forepaws.Length; k++)
+            {
+                var on = idx.Where(i => samples[i].forePaddle[k].w > 0.99f).Select(i => samples[i].forePaddle[k]).ToList();
+                if (on.Count == 0) continue;
+                paddles.Add($"{Forepaws[k]} {on.Count / (float)idx.Count:P0} of frames: wrist fwd {on.Min(p => p.x):F1}..{on.Max(p => p.x):F1} out {on.Min(p => p.y):F1}..{on.Max(p => p.y):F1} cm from the shoulder at rest, which its blade takes {on.Min(p => p.z):F1}..{on.Max(p => p.z):F1} cm forward");
+            }
+            sb.AppendLine("  paddle: " + (paddles.Count > 0 ? string.Join(" | ", paddles) : "none"));
         }
 
         // How the trunk and tail bend side to side: the waist's range and its swing about its own mean (half the 5th..95th

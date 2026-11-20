@@ -51,8 +51,11 @@ namespace OtterLocomotion
         public StrokeCapacity hindScullIn = new StrokeCapacity(0.6f, 4f, 1f, 0.8f);
 
         [Header("Forepaws: steering and fine sculling when prone, little thrust; held on the chest out of the water on the back")]
-        [Tooltip("Swimming prone, the forepaws fold against the chest as the speed target passes this (body lengths/s) and the body and hind feet do the steering; only turning on the spot do they scull.")]
+        [Tooltip("Turning on the spot prone the forepaws scull every way; as the speed target passes this (body lengths/s) they fold against the chest.")]
         public float foreTuckSpeedBL = 0.15f;
+        [Tooltip("Cruising prone the paw on the outside of a turn paddles it round, sculling out like a single oar, from a turn asked of foreSteerFrom (deg/s) to all it can at foreSteerFull. The inside paw stays folded, and both do going straight or sprinting in the dolphin wave.")]
+        public float foreSteerFrom = 15f;
+        public float foreSteerFull = 60f;
         public StrokeCapacity foreThrust = new StrokeCapacity(0.5f, 12f, 1f, 0f);
         public StrokeCapacity foreBrake = new StrokeCapacity(1.5f, 1.5f, 1f, 0f);
         [Tooltip("Sweeping out to the side is the strong scull; sweeping in across the chest is weak, so the paw on the outside of a turn sculls.")]
@@ -98,12 +101,15 @@ namespace OtterLocomotion
         public Vector3 CenterOfMass { get; private set; }
 
         /// <param name="speedTargetBL">The demand layer's speed target (body lengths/s), which folds the forepaws away when swimming prone.</param>
-        public void Build(ActuatorSettings s, LimbGeometry[] geometry, Vector3 centerOfMass, float rollDeg, float supineFraction, float mass, float speedTargetBL)
+        /// <param name="yawRateTarget">The demand layer's turn (deg/s): cruising, the forepaws paddle it round.</param>
+        /// <param name="cruising">Swimming prone short of the dolphin wave, where the forepaws steer.</param>
+        public void Build(ActuatorSettings s, LimbGeometry[] geometry, Vector3 centerOfMass, float rollDeg, float supineFraction, float mass, float speedTargetBL, float yawRateTarget, bool cruising)
         {
             CenterOfMass = centerOfMass;
             float roll = rollDeg * Mathf.Deg2Rad, cos = Mathf.Cos(roll), sin = Mathf.Sin(roll);
             float rollFactor = 1f - s.rollPenalty * Mathf.Sin(Mathf.PI * Mathf.Clamp01(supineFraction));
             float foreOut = 1f - Mathf.Clamp01(speedTargetBL / Mathf.Max(1e-3f, s.foreTuckSpeedBL));
+            float steer = cruising ? Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(s.foreSteerFrom, s.foreSteerFull, Mathf.Abs(yawRateTarget))) : 0f;
             for (int i = 0; i < OtterRig.LimbCount; i++)
             {
                 var limb = (LimbId)i;
@@ -119,15 +125,19 @@ namespace OtterLocomotion
                 // the side the limb is on now: belly up, the left limbs are on the right
                 float side = Mathf.Abs(p.y) > 1e-4f ? Mathf.Sign(p.y) : OtterRig.Side(limb);
 
-                SetColumn(i, 0, limb, StrokeKind.Thrust, new Vector3(1f, 0f, -p.y), fore ? s.foreThrust : s.hindThrust);
-                SetColumn(i, 1, limb, StrokeKind.Brake, new Vector3(-1f, 0f, p.y), fore ? s.foreBrake : s.hindBrake);
-                SetColumn(i, 2, limb, StrokeKind.ScullOut, new Vector3(0f, -side, -side * p.x), fore ? s.foreScullOut : s.hindScullOut);
-                SetColumn(i, 3, limb, StrokeKind.ScullIn, new Vector3(0f, side, side * p.x), fore ? s.foreScullIn : s.hindScullIn);
+                // prone, how much of its use a forepaw has: all of it turning on the spot, only sculling out on the outside
+                // of a cruise turn (to the left the right paw, on the side away from it), not even checking the turn as it eases
+                float use = fore ? foreOut : 1f;
+                float oar = fore && side * yawRateTarget < 0f ? Mathf.Max(use, steer) : use;
+                SetColumn(i, 0, limb, StrokeKind.Thrust, new Vector3(1f, 0f, -p.y), fore ? s.foreThrust : s.hindThrust, use);
+                SetColumn(i, 1, limb, StrokeKind.Brake, new Vector3(-1f, 0f, p.y), fore ? s.foreBrake : s.hindBrake, use);
+                SetColumn(i, 2, limb, StrokeKind.ScullOut, new Vector3(0f, -side, -side * p.x), fore ? s.foreScullOut : s.hindScullOut, oar);
+                SetColumn(i, 3, limb, StrokeKind.ScullIn, new Vector3(0f, side, side * p.x), fore ? s.foreScullIn : s.hindScullIn, use);
             }
 
-            void SetColumn(int limbIndex, int k, LimbId limb, StrokeKind kind, Vector3 wrench, StrokeCapacity cap)
+            void SetColumn(int limbIndex, int k, LimbId limb, StrokeKind kind, Vector3 wrench, StrokeCapacity cap, float proneUse)
             {
-                float e = present[limbIndex] ? Mathf.Lerp(cap.prone * (OtterRig.IsFore(limb) ? foreOut : 1f), cap.supine, supineFraction) * rollFactor : 0f;
+                float e = present[limbIndex] ? Mathf.Lerp(cap.prone * proneUse, cap.supine, supineFraction) * rollFactor : 0f;
                 float hi = cap.maxAccel * mass * e;
                 columns[limbIndex * ColumnsPerLimb + k] = new StrokeColumn
                 {

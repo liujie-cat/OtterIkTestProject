@@ -5,47 +5,86 @@ using UnityEngine;
 
 namespace OtterLocomotion
 {
-    /// <summary>Forepaw stroke: a sweep along the allocated direction, spread out and down, folded back in and up.</summary>
+    /// <summary>
+    /// Forepaw paddle, round the shoulder. For the catch the shoulder blade reaches the shoulder forward and up, and the
+    /// paw goes in out ahead under the chin; the arm then sweeps a wide arc back and out round the shoulder, stretched,
+    /// the paw square to its sweep, while the shoulder blade draws the shoulder back. For the recovery the paw turns
+    /// edge-on and slices forward again folded in close to the body. The arc lies in a plane through the shoulder
+    /// tilted down from the chest's level toward the belly, so the paw stays in the water, and rides on the chest bone,
+    /// so it turns, banks and pitches with the chest. Sculling out, the oar on the outside of a cruise turn, it sweeps
+    /// from ahead round to the side; a push back turns it further round, a brake further forward.
+    /// </summary>
     [Serializable]
-    public class StrokeShape
+    public class ForePaddle
     {
-        [Tooltip("Stroke length as a fraction of the limb length, at full drive and at the lightest drive that strokes.")]
-        public float length = 1.3f;
-        public float lightLength = 0.6f;
-        [Tooltip("Where the power stroke starts, as a fraction of the stroke ahead of the rest point (0 = from rest).")]
-        [Range(0f, 1f)] public float lead = 0.1f;
-        [Header("Power: paw spread, wide path through the water")]
-        [Tooltip("How far the paw swings out to the side and dips below its line, as fractions of the stroke.")]
-        public float spread = 0.15f;
-        public float dip = 0.1f;
-        [Header("Recovery: folded, close to the body")]
-        [Tooltip("How far the paw rises toward the surface and tucks in toward the body, as fractions of the stroke.")]
-        public float lift = 0.3f;
-        public float tuck = 0.3f;
+        [Header("Arc round the shoulder: angles from straight ahead round toward the side (deg)")]
+        [Tooltip("Where the sweep catches the water and where it finishes, sculling out at full drive.")]
+        public float catchAngle = 20f;
+        public float finishAngle = 135f;
+        [Tooltip("Tilt of the arc's plane from the chest's level down toward the belly (deg).")]
+        public float dip = 35f;
+        [Tooltip("How far the push turns the arc round from sculling straight out (deg): back for a thrust, forward for a brake.")]
+        public float maxTurnBack = 35f;
+        public float maxTurnForward = 45f;
+        [Tooltip("Arc span at the lightest drive that paddles, as a share of the full one.")]
+        [Range(0.1f, 1f)] public float lightAmplitude = 0.5f;
+        [Header("Reach: shoulder to wrist over the arm's length")]
+        [Tooltip("Stretched through the sweep, folded in close through the recovery.")]
+        public float sweepReach = 0.9f;
+        public float recoveryReach = 0.5f;
+        [Tooltip("How far the sweep bows down toward the belly at its middle, and the recovery comes up in toward the chest (arm lengths).")]
+        public float sweepDepth = 0.1f;
+        public float recoveryLift = 0.15f;
+        [Header("Shoulder blade")]
+        [Tooltip("How far it reaches the shoulder forward for the catch and draws it back at the finish, and lifts it at the catch (m).")]
+        public float protract = 0.02f;
+        public float retract = 0.012f;
+        public float lift = 0.008f;
+        [Header("Paw")]
+        [Tooltip("Share of the recovery at either end over which the paw turns between square and edge-on.")]
+        [Range(0.05f, 0.5f)] public float featherTurn = 0.2f;
+        [Tooltip("The most the wrist turns the paw from where the forearm carries it (deg).")]
+        public float wristRange = 100f;
+        [Tooltip("Where the elbow points while paddling, from the shoulder (arm lengths): back along the body, up toward the back, out to the side.")]
+        public float elbowBack = 1f;
+        public float elbowUp = 0.5f;
+        public float elbowOut = 0.2f;
 
-        /// <summary>Stroke length (m) of a limb at a drive.</summary>
-        public float Length(float limbLength, float drive) => limbLength * Mathf.Lerp(lightLength, length, drive);
+        /// <summary>Arc span at a drive, as a share of the full one.</summary>
+        public float Amplitude(float drive) => Mathf.Lerp(lightAmplitude, 1f, drive);
 
-        /// <summary>Paw offset from rest at a phase; power along <paramref name="power"/>, recovery back above and inside it.</summary>
-        public Vector3 Offset(float phase, float powerFraction, Vector3 power, Vector3 outward, Vector3 up, float stroke)
+        /// <summary>How far round the arc the paw is at a phase: 0 at the catch, 1 at the finish; out through the sweep, back through the recovery.</summary>
+        public static float Along(float phase, float powerFraction)
         {
-            float along, bulge;
-            Vector3 side;
-            if (phase < powerFraction)
-            {
-                float u = phase / powerFraction;
-                along = Smooth(u);
-                bulge = Mathf.Sin(Mathf.PI * u);
-                side = spread * outward - dip * up;
-            }
-            else
-            {
-                float u = (phase - powerFraction) / Mathf.Max(1e-4f, 1f - powerFraction);
-                along = 1f - Smooth(u);
-                bulge = Mathf.Sin(Mathf.PI * u);
-                side = lift * up - tuck * outward;
-            }
-            return stroke * ((along - lead) * power + bulge * side);
+            float pf = Mathf.Clamp(powerFraction, 0.05f, 0.95f);
+            return phase < pf ? Smooth(phase / pf) : 1f - Smooth((phase - pf) / (1f - pf));
+        }
+
+        /// <summary>Wrist at a phase on an arc of the given span turned round by <paramref name="turn"/> (deg, + = back),
+        /// in arm lengths from the shoulder: x forward, y out to the paw's side, z toward the belly.</summary>
+        public Vector3 Point(float phase, float powerFraction, float amplitude, float turn)
+        {
+            float pf = Mathf.Clamp(powerFraction, 0.05f, 0.95f);
+            bool sweep = phase < pf;
+            float bulge = Mathf.Sin(Mathf.PI * (sweep ? phase / pf : (phase - pf) / (1f - pf)));
+            float reach = sweep ? sweepReach : Mathf.Lerp(sweepReach, recoveryReach, bulge);
+            float down = sweep ? sweepDepth * bulge : -recoveryLift * bulge;
+            float mid = 0.5f * (catchAngle + finishAngle) + turn, half = 0.5f * (finishAngle - catchAngle) * amplitude;
+            float a = (mid - half + 2f * half * Along(phase, powerFraction)) * Mathf.Deg2Rad, d = dip * Mathf.Deg2Rad;
+            float side = Mathf.Sin(a) * reach;
+            return new Vector3(Mathf.Cos(a) * reach, side * Mathf.Cos(d), side * Mathf.Sin(d) + down);
+        }
+
+        /// <summary>Where the shoulder blade takes the shoulder at a point round the arc (m): forward, and up toward the back.</summary>
+        public Vector2 Shoulder(float along) => new Vector2(Mathf.Lerp(protract, -retract, along), lift * (1f - along) * (1f - along));
+
+        /// <summary>How square the paw is at a phase: 1 through the sweep, 0 edge-on through the recovery.</summary>
+        public float Square(float phase, float powerFraction)
+        {
+            float pf = Mathf.Clamp(powerFraction, 0.05f, 0.95f);
+            if (phase < pf) return 1f;
+            float u = (phase - pf) / (1f - pf);
+            return Mathf.SmoothStep(0f, 1f, Mathf.Max(1f - u / featherTurn, (u - 1f + featherTurn) / featherTurn));
         }
 
         private static float Smooth(float u) => u * u * (3f - 2f * u);
@@ -298,12 +337,12 @@ namespace OtterLocomotion
     /// Moves the limb IK targets along stroke paths from OtterLocomotionBrain's rhythm: phase and strength per limb,
     /// so the limbs show what the allocation asks of them. Hind feet draw in and kick out on a loop about the hip joint
     /// (HindKick), splay out to either side in a turn (HindTurn), and sprinting prone hold out behind as a fluke
-    /// (FlukeStroke); forepaws sweep along the allocated
-    /// force direction in the chest's own frame, and rest when they have nothing to do: under the chest on the belly, on
+    /// (FlukeStroke); forepaws paddle round the shoulder, the shoulder blade reaching and drawing it (ForePaddle), and
+    /// rest when they have nothing to do: under the chest on the belly, on
     /// the chest and belly on the back (ChestRest); in the water they trail the chest's turning (ForeFollow). Paths hang
     /// off the chest / hip bone, so they follow the spine's bend and roll. After the IK solve the hind flippers are turned at
     /// the ankle and toes (FlipperPose) to paddle, square through the push and trailing in the flow through the draw;
-    /// on the back the forepaws are laid flat on the chest.
+    /// the forepaws are turned square through their sweep and edge-on through the recovery, and on the back laid flat on the chest.
     /// Runs after the spine and before the IK solve. While enabled it switches off the older limb drivers that write
     /// the same targets (HindPaddleDriverRB, IKStrokeController), and switches them back on when disabled.
     /// </summary>
@@ -324,7 +363,7 @@ namespace OtterLocomotion
         public HindTurn hindTurn = new HindTurn();
         public FlukeStroke fluke = new FlukeStroke();
         public FlipperPose flipper = new FlipperPose();
-        public StrokeShape foreStroke = new StrokeShape();
+        public ForePaddle forePaddle = new ForePaddle();
         public ChestRest chestRest = new ChestRest();
         public ForeFollow foreFollow = new ForeFollow();
         [Tooltip("Time constant of a stroke growing in when a limb starts and fading out when it rests (s).")]
@@ -350,17 +389,23 @@ namespace OtterLocomotion
             public Quaternion carried, chestBefore;
             public bool hasCarried;
             public float lag, wet;
+            /// <summary>Forepaw: the shoulder blade (the chain root's parent, below the chest) and its rest; null without one.</summary>
+            public Transform blade;
+            public Quaternion bladeRest;
+            /// <summary>Forepaw paddling: where the wrist is going round the arc (world), and how square the paw is to it (ForePaddle.Square).</summary>
+            public Vector3 sweep;
+            public float square;
             /// <summary>The chain's root joint (shoulder / hip joint) in girdle space.</summary>
             public Vector3 jointLocal;
             public float length;
-            /// <summary>Current stroke size: metres for a forepaw, a fraction of the full kick loop for a hind foot.</summary>
+            /// <summary>Current stroke size, a fraction of the full stroke: the paddle's arc for a forepaw, the kick loop for a hind foot.</summary>
             public float size;
             /// <summary>Hind foot: how far its kick loop swings about the hip's dorso-ventral axis (deg, + = out).</summary>
             public float yaw;
             public AdvancedTwoBoneIK ik;
             /// <summary>Whether the scene limits the chain's mid joint (knee / elbow) about its rest pose.</summary>
             public bool kneeLimited;
-            /// <summary>Hind leg: the IK's pole, which this places, and where the scene put it.</summary>
+            /// <summary>The IK's pole, which this places (a hind leg's always, a forepaw's while it paddles), and where the scene put it.</summary>
             public Transform pole;
             public Vector3 poleRestLocal;
 
@@ -436,6 +481,19 @@ namespace OtterLocomotion
             return OtterRig.IsFore(limb) ? new Vector2(l.lag, l.wet) : Vector2.zero;
         }
 
+        /// <summary>A forepaw's paddle (ForePaddle): the wrist from where the shoulder lies at rest, forward and out to its
+        /// side (cm), how far the shoulder blade has taken the shoulder forward (cm), and how far it has taken up the
+        /// paddle from rest (0..1); zeros for a hind foot.</summary>
+        public Vector4 ForePaddleState(LimbId limb)
+        {
+            var l = limbs[(int)limb];
+            if (!l.valid || !OtterRig.IsFore(limb)) return Vector4.zero;
+            KickAxes(l, out var joint, out var back, out var outward, out _);
+            Vector3 wrist = l.ik.end.bone.position - joint;
+            float reached = -Vector3.Dot(l.ik.root.bone.position - joint, back);
+            return new Vector4(-Vector3.Dot(wrist, back) * 100f, Vector3.Dot(wrist, outward) * 100f, reached * 100f, PaddleEngagement(l.size));
+        }
+
         /// <summary>A hind flipper's turn from its rest on the shin as the ankle's flex, evert and splay (deg, Angles); zeros for a forepaw.</summary>
         public Vector3 AnkleAngles(LimbId limb)
         {
@@ -479,6 +537,7 @@ namespace OtterLocomotion
                 if (!l.valid) continue;
                 if (l.pole != null) l.pole.localPosition = l.poleRestLocal;
                 if (l.paw != null && !l.ik.alignEndRotation) l.paw.localRotation = l.pawRest;
+                if (l.blade != null) l.blade.localRotation = l.bladeRest;
             }
         }
 
@@ -522,7 +581,7 @@ namespace OtterLocomotion
                     length = Vector3.Distance(a, b) + Vector3.Distance(b, c),
                     ik = ik,
                     kneeLimited = ik.mid.useEulerLimits,
-                    pole = OtterRig.IsFore((LimbId)i) ? null : ik.pole,
+                    pole = ik.pole,
                     poleRestLocal = ik.pole != null ? ik.pole.localPosition : Vector3.zero,
                 };
                 if (OtterRig.IsFore((LimbId)i)) CapturePaw(ref limbs[i], ik);
@@ -654,9 +713,16 @@ namespace OtterLocomotion
             l.width = 1f;
         }
 
-        // The paw's flat from the skinned mesh: the face toward the midline, and the fingers toward the toes.
+        // The paw's flat from the skinned mesh: the face toward the midline, and the fingers toward the toes. The shoulder
+        // blade is the bone the arm hangs from below the chest.
         private void CapturePaw(ref Limb l, AdvancedTwoBoneIK ik)
         {
+            var blade = ik.root.bone.parent;
+            if (blade != null && blade != l.girdle)
+            {
+                l.blade = blade;
+                l.bladeRest = blade.localRotation;
+            }
             var paw = ik.end.bone;
             if (paw.childCount == 0 || !OtterRig.TryFootPlane(paw, out var normal, out _, out _, out _)) return;
             Vector3 n = paw.TransformDirection(normal);
@@ -669,8 +735,9 @@ namespace OtterLocomotion
             l.fingersLocal = paw.InverseTransformDirection(fingers);
         }
 
-        // On the back the paws lie flat on the chest, palm to it, fingers back along the belly and in toward the midline
-        // (ChestRest); rolling over they turn between there and where the forearm carries them.
+        // Paddling, the paws are set square to their sweep and edge-on through the recovery (Feathered). On the back they lie
+        // flat on the chest, palm to it, fingers back along the belly and in toward the midline (ChestRest); rolling over
+        // they turn between there and where the forearm carries them.
         private void PosePaws()
         {
             if (!isActiveAndEnabled || brain == null || !brain.HasLimbGeometry) return;
@@ -681,6 +748,8 @@ namespace OtterLocomotion
                 ref var l = ref limbs[i];
                 if (!l.valid || l.paw == null) continue;
                 if (!l.ik.alignEndRotation) l.paw.localRotation = l.pawRest;
+                float engaged = PaddleEngagement(l.size);
+                if (engaged > 1e-3f && l.sweep.sqrMagnitude > 1e-12f) l.paw.rotation = Quaternion.Slerp(l.paw.rotation, Feathered(l), engaged);
                 if (supine < 1e-3f) continue;
                 Vector3 fwd = l.girdle.TransformDirection(l.forwardLocal).normalized;
                 Vector3 dorsal = Vector3.ProjectOnPlane(l.girdle.TransformDirection(l.upLocal), fwd).normalized;
@@ -690,6 +759,22 @@ namespace OtterLocomotion
                 Quaternion flat = Quaternion.LookRotation(fingers, dorsal) * Quaternion.Inverse(Quaternion.LookRotation(l.fingersLocal, l.palmLocal));
                 l.paw.rotation = Quaternion.Slerp(l.paw.rotation, flat, supine);
             }
+        }
+
+        // A paddling paw (ForePaddle): square to its sweep, the palm pressing on the water and the fingers out along the
+        // arm; edge-on through the recovery, the fingers leading and the palm toward the body. The wrist turns it only so
+        // far from where the forearm carries it.
+        private Quaternion Feathered(in Limb l)
+        {
+            KickAxes(l, out _, out _, out var outward, out _);
+            Vector3 sweep = l.sweep.normalized;
+            Vector3 along = Vector3.ProjectOnPlane(l.paw.position - l.ik.root.bone.position, sweep);
+            Vector3 inward = Vector3.ProjectOnPlane(-outward, sweep);
+            if (along.sqrMagnitude < 1e-10f || inward.sqrMagnitude < 1e-10f) return l.paw.rotation;
+            Quaternion fromPaw = Quaternion.Inverse(Quaternion.LookRotation(l.fingersLocal, l.palmLocal));
+            Quaternion square = Quaternion.LookRotation(along, sweep) * fromPaw;
+            Quaternion edgeOn = Quaternion.LookRotation(sweep, inward) * fromPaw;
+            return Quaternion.RotateTowards(l.paw.rotation, Quaternion.Slerp(edgeOn, square, l.square), forePaddle.wristRange);
         }
 
         private void SuspendOldDrivers()
@@ -744,15 +829,20 @@ namespace OtterLocomotion
             {
                 ref var l = ref limbs[i];
                 if (!l.valid) continue;
+                bool fore = OtterRig.IsFore((LimbId)i);
                 var st = brain.Rhythm.limbs[i];
                 l.size = Mathf.Lerp(l.size, TargetSize(i, l, st), grow);
-                if (!OtterRig.IsFore((LimbId)i)) l.yaw = KickYaw(l, travel);
+                if (!fore) l.yaw = KickYaw(l, travel);
                 float phase = st.active ? Mathf.Repeat(st.phase + st.rate * ahead, 1f) : 0f;
                 Vector3 goal = RestLocal(i, l) + l.girdle.InverseTransformVector(StrokeOffset(i, l, st, phase));
                 l.currentLocal = Vector3.Lerp(l.currentLocal, goal, blend);
                 l.target.position = l.girdle.TransformPoint(l.currentLocal);
-                if (OtterRig.IsFore((LimbId)i)) Trail(ref l);
-                if (l.pole != null)
+                if (fore)
+                {
+                    Paddle(i, ref l, st, phase);
+                    Trail(ref l);
+                }
+                else if (l.pole != null)
                 {
                     KickAxes(l, out var joint, out var back, out var outward, out var belly);
                     float supine = brain.Posture.SupineFraction;
@@ -770,6 +860,39 @@ namespace OtterLocomotion
             }
         }
 
+        // The shoulder blade and the elbow set for a forepaw's paddle (ForePaddle), as far as the paw has taken it up, and
+        // which way the wrist is going round the arc, for the paw's set after the IK
+        private void Paddle(int i, ref Limb l, in LimbStroke st, float phase)
+        {
+            float engaged = PaddleEngagement(l.size);
+            KickAxes(l, out var joint, out var back, out var outward, out var belly);
+            Vector3 shoulder = Shoulder(l, joint, back, belly, phase, st.powerFraction, engaged);
+            if (l.blade != null)
+            {
+                Vector3 pivot = l.blade.position;
+                l.blade.rotation = Quaternion.FromToRotation(joint - pivot, shoulder - pivot) * l.blade.parent.rotation * l.bladeRest;
+            }
+            if (l.pole != null)
+            {
+                var p = forePaddle;
+                l.pole.localPosition = l.poleRestLocal;
+                Vector3 elbow = shoulder + l.length * (back * p.elbowBack - belly * p.elbowUp + outward * p.elbowOut);
+                l.pole.position = Vector3.Lerp(l.pole.position, elbow, engaged);
+            }
+            l.sweep = engaged > 0f ? StrokeOffset(i, l, st, Mathf.Repeat(phase + 0.01f, 1f)) - StrokeOffset(i, l, st, phase) : Vector3.zero;
+            l.square = forePaddle.Square(phase, st.powerFraction);
+        }
+
+        // The shoulder as the shoulder blade carries it for the paddle (ForePaddle): reached forward and up for the catch,
+        // drawn back at the finish. It swings on the blade, keeping its distance from where the blade hangs off the chest.
+        private Vector3 Shoulder(in Limb l, Vector3 joint, Vector3 back, Vector3 belly, float phase, float powerFraction, float engaged)
+        {
+            if (l.blade == null || engaged <= 0f) return joint;
+            Vector2 o = forePaddle.Shoulder(ForePaddle.Along(phase, powerFraction)) * engaged;
+            Vector3 pivot = l.blade.position, blade = joint - pivot;
+            return pivot + (blade - back * o.x - belly * o.y).normalized * blade.magnitude;
+        }
+
         // A forepaw in the water trails the chest's turning (ForeFollow), about the shoulder joint so it keeps its reach:
         // the water holds it where it was while the chest turns, and it eases back to rest. A stroking paw drives itself,
         // and one out of the water rides with the chest, keeping how far it trails, so neither going in nor coming out jumps.
@@ -781,8 +904,7 @@ namespace OtterLocomotion
             l.hasCarried = true;
             float depth = water != null ? water.Depth(l.target.position) : (0.5f - brain.Posture.SupineFraction) * f.wetDepth;
             l.wet = Mathf.Clamp01(0.5f + depth / Mathf.Max(1e-4f, f.wetDepth));
-            float stroking = Mathf.Clamp01(l.size / Mathf.Max(1e-4f, foreStroke.Length(l.length, 0f)));
-            float drag = l.wet * (1f - stroking);
+            float drag = l.wet * (1f - PaddleEngagement(l.size));
             Quaternion ride = chest * Quaternion.Inverse(l.chestBefore) * l.carried;
             Quaternion held = Quaternion.Slerp(ride, l.carried, drag);
             l.carried = Quaternion.Slerp(held, chest, 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, f.lagTime)));
@@ -981,9 +1103,12 @@ namespace OtterLocomotion
             // a limb with nothing left to do shrinks back to rest while its cycle runs out, e.g. forepaws folding as the otter rolls onto its back
             if (!st.active || st.parking) return 0f;
             return OtterRig.IsFore((LimbId)i)
-                ? foreStroke.Length(l.length, st.drive)
+                ? forePaddle.Amplitude(st.drive)
                 : Mathf.Lerp(hindKick.Amplitude(st.drive), backKick.Amplitude(st.drive), brain.Posture.SupineFraction);
         }
+
+        /// <summary>How far a paddle growing in from rest (size 0) or fading out to it has moved onto its arc.</summary>
+        private float PaddleEngagement(float size) => Mathf.Clamp01(size / forePaddle.lightAmplitude);
 
         // the lightest kick's loop size, on the belly or the back or rolling between
         private float LightKick => Mathf.Lerp(hindKick.lightAmplitude, backKick.lightAmplitude, brain.Posture.SupineFraction);
@@ -1000,10 +1125,14 @@ namespace OtterLocomotion
             KickAxes(l, out var joint, out var back, out var outward, out var belly);
             if (fore)
             {
-                // in the chest's own frame, so the stroke turns, banks and pitches with it; the allocation's sideways is the body's right
-                Vector3 right = Vector3.Dot(outward, brain.State.right) >= 0f ? outward : -outward;
-                Vector3 power = (-back * st.direction.x + right * st.direction.y).normalized;
-                return foreStroke.Offset(phase, st.powerFraction, power, outward, -belly, l.size);
+                // round the shoulder as its blade carries it, in the chest's own frame, so the paddle turns, banks and
+                // pitches with the chest; sculling out, the push is straight out from the paw's side, whichever side that is
+                var p = forePaddle;
+                float engaged = PaddleEngagement(l.size);
+                float round = Mathf.Clamp(Mathf.Atan2(-st.direction.x, Mathf.Abs(st.direction.y)) * Mathf.Rad2Deg, -p.maxTurnForward, p.maxTurnBack);
+                Vector3 at = p.Point(phase, st.powerFraction, Mathf.Max(l.size, p.lightAmplitude), round);
+                Vector3 wrist = Shoulder(l, joint, back, belly, phase, st.powerFraction, engaged) + l.length * (-back * at.x + outward * at.y + belly * at.z);
+                return (wrist - rest) * engaged;
             }
 
             Vector3 offset = Vector3.zero;

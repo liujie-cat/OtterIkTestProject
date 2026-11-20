@@ -183,7 +183,8 @@ namespace OtterLocomotion
 
             if (!HasLimbGeometry) return;
             float speedTargetBL = demand.speedTarget / length;
-            actuators.Build(actuatorSettings, geometry, centerOfMass, postureMachine.RollDeg, postureMachine.SupineFraction, Parameters.mass, speedTargetBL);
+            actuators.Build(actuatorSettings, geometry, centerOfMass, postureMachine.RollDeg, postureMachine.SupineFraction, Parameters.mass, speedTargetBL,
+                demand.yawRateTarget, Intent.gait == Gait.ProneTogether);
             allocator.Solve(allocatorSettings, actuators, demand, Parameters);
             // a click's kick pushes off once the body faces where it was clicked
             if (kickPending && (Vector3.Angle(state.forward, pendingKick.direction) <= kickAlignDeg || Time.time - kickQueuedAt >= kickWait))

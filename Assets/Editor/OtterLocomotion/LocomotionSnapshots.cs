@@ -14,7 +14,8 @@ namespace OtterLocomotion.EditorTools
     /// camera the controls read the pointer through, as the player sees it. Strips are contact sheets over a kick
     /// (frames left to right, then the next row): close-ups of the hind feet from above, behind and the left, a
     /// perspective close-up riding with the hips, and a perspective view held still in the world over the whole strip,
-    /// which the otter swims through. Written to Logs/Snapshots.
+    /// which the otter swims through. Forepaw strips ride with the chest instead, seen from above, from below, where
+    /// the paws work under the chest, and from the side outside the turn, where the paddling paw is. Written to Logs/Snapshots.
     /// </summary>
     static class LocomotionSnapshots
     {
@@ -23,17 +24,20 @@ namespace OtterLocomotion.EditorTools
             public readonly int segment;
             public readonly float time;
             public readonly string name;
-            /// <summary>1 = a whole-body picture; more = a hind-foot strip, one frame every interval seconds.</summary>
+            /// <summary>1 = a whole-body picture; more = a strip of close-ups, one frame every interval seconds.</summary>
             public readonly int frames;
             public readonly float interval;
+            /// <summary>The strip frames the forepaws under the chest rather than the hind feet.</summary>
+            public readonly bool paws;
 
-            public Shot(int segment, float time, string name, int frames = 1, float interval = 0f)
+            public Shot(int segment, float time, string name, int frames = 1, float interval = 0f, bool paws = false)
             {
                 this.segment = segment;
                 this.time = time;
                 this.name = name;
                 this.frames = frames;
                 this.interval = interval;
+                this.paws = paws;
             }
         }
 
@@ -65,6 +69,8 @@ namespace OtterLocomotion.EditorTools
 
         static Texture2D[] sheets;
         static Vector3 stripCenterLocal;
+        /// <summary>A forepaw strip's side view: from the right (+1) or the left (-1), outside the turn.</summary>
+        static float outsideSign;
         static View held;
 
         /// <summary>Moments to capture: segment index and seconds into it, matching OtterInputPlayback's scripts, in order and not overlapping.</summary>
@@ -82,7 +88,9 @@ namespace OtterLocomotion.EditorTools
             {
                 new Shot(3, 1.70f, "03_slow_circle_push", 8, 1f / 60f),
                 new Shot(3, 4.0f, "03_slow_circle_feet", 8, 0.06f), new Shot(3, 5.0f, "03_slow_circle"),
+                new Shot(6, 3.0f, "06_cruise_circle_paws", 8, 0.07f, paws: true),
                 new Shot(6, 4.0f, "06_cruise_circle_feet", 8, 0.06f), new Shot(6, 5.0f, "06_cruise_circle"),
+                new Shot(7, 1.2f, "07_cruise_tight_paws", 8, 0.07f, paws: true),
                 new Shot(7, 2.5f, "07_cruise_tight_feet", 8, 0.06f), new Shot(7, 3.5f, "07_cruise_tight"),
                 new Shot(9, 2.5f, "09_sprint_circle_feet", 8, 0.05f),
             },
@@ -129,7 +137,8 @@ namespace OtterLocomotion.EditorTools
             var overlay = Object.FindObjectsByType<ControlsOverlay>(FindObjectsSortMode.None).SelectMany(o => o.Renderers).Where(r => r != null && r.enabled);
             var sea = OtterTestSceneSetup.FindSea();
             var water = sea != null && sea.TryGetComponent<Renderer>(out var surface) && surface.enabled ? new[] { surface } : new Renderer[0];
-            var scene = body.Concat(reference).Concat(water).Concat(overlay).Distinct().ToArray();
+            // the forepaws work under the chest, where the sea's surface would hide them
+            var scene = body.Concat(reference).Concat(shot.paws ? new Renderer[0] : water).Concat(overlay).Distinct().ToArray();
             // from above and behind the left side, as the Scene view usually looks on
             Vector3 aside = (-right * 0.75f - forward * 0.45f + Vector3.up * 0.5f).normalized;
             string dir = Path.Combine("Logs", "Snapshots");
@@ -155,14 +164,17 @@ namespace OtterLocomotion.EditorTools
                 return;
             }
 
-            var hip = OtterRig.FindActiveBone(otter, OtterRig.Hip);
-            if (hip == null) return;
+            var girdle = OtterRig.FindActiveBone(otter, shot.paws ? OtterRig.Chest : OtterRig.Hip);
+            if (girdle == null) return;
             if (frame == 0)
             {
                 var chains = OtterRig.FindLimbChains(otter);
-                var hind = new[] { chains[(int)LimbId.HL], chains[(int)LimbId.HR] }.Where(c => c != null).ToArray();
-                Vector3 feet = hind.Length > 0 ? hind.Aggregate(Vector3.zero, (s, c) => s + c.end.bone.position) / hind.Length : hip.position;
-                stripCenterLocal = hip.InverseTransformPoint(Vector3.Lerp(hip.position, feet, 0.6f));
+                var pair = (shot.paws ? new[] { LimbId.FL, LimbId.FR } : new[] { LimbId.HL, LimbId.HR }).Select(id => chains[(int)id]).Where(c => c != null).ToArray();
+                Vector3 ends = pair.Length > 0 ? pair.Aggregate(Vector3.zero, (s, c) => s + c.end.bone.position) / pair.Length : girdle.position;
+                stripCenterLocal = girdle.InverseTransformPoint(Vector3.Lerp(girdle.position, ends, 0.6f));
+                // the forepaw on the outside of the turn paddles it round
+                var brain = otter.GetComponent<OtterLocomotionBrain>();
+                outsideSign = brain != null && brain.Demand.yawRateTarget > 0f ? -1f : 1f;
                 // held still in the world, framing the otter's whole way through the strip from its left
                 var rb = otter.GetComponent<Rigidbody>();
                 Vector3 travel = rb != null ? Vector3.ProjectOnPlane(rb.velocity, Vector3.up) * (shot.interval * (shot.frames - 1)) : Vector3.zero;
@@ -174,13 +186,20 @@ namespace OtterLocomotion.EditorTools
                 sheets = Enumerable.Range(0, 5).Select(_ => new Texture2D(CellWidth * Columns, CellHeight * rows, TextureFormat.RGB24, false)).ToArray();
             }
             if (sheets == null) return;
-            Vector3 center = hip.TransformPoint(stripCenterLocal);
-            var close = new[]
-            {
-                Orthographic("top", center, Vector3.up, forward, extent * 0.3f, extent),
-                Orthographic("back", center, -forward, Vector3.up, extent * 0.3f, extent, waterline: true),
-                Orthographic("left", center, -right, Vector3.up, extent * 0.3f, extent, waterline: true),
-            };
+            Vector3 center = girdle.TransformPoint(stripCenterLocal);
+            var close = shot.paws
+                ? new[]
+                {
+                    Orthographic("top", center, Vector3.up, forward, extent * 0.3f, extent),
+                    Orthographic("below", center, Vector3.down, forward, extent * 0.3f, extent),
+                    Orthographic("outside", center, right * outsideSign, Vector3.up, extent * 0.3f, extent),
+                }
+                : new[]
+                {
+                    Orthographic("top", center, Vector3.up, forward, extent * 0.3f, extent),
+                    Orthographic("back", center, -forward, Vector3.up, extent * 0.3f, extent, waterline: true),
+                    Orthographic("left", center, -right, Vector3.up, extent * 0.3f, extent, waterline: true),
+                };
             var wide = new[] { Perspective("persp", center, aside, extent * 0.45f), held };
             int column = frame % Columns, row = frame / Columns, rowCount = sheets[0].height / CellHeight;
             Render(body, close, CellWidth, CellHeight, (v, tex) => Place(v, tex));
