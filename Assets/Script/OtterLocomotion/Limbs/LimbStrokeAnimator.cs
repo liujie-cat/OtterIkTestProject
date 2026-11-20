@@ -192,11 +192,8 @@ namespace OtterLocomotion
         [Tooltip("Web pitch into the water it meets: its trailing edge rises as it sweeps down and drops as it sweeps up, by this share of the angle its path through the water makes with the heading (a short flat plate drives hardest at about half), at most attack (deg).")]
         public float feather = 0.5f;
         public float attack = 40f;
-        [Tooltip("Time constant of the web turning to its pitch (s), and the fastest it turns (deg/s). With little way on the pitch flips right over at each end of the beat; flipping slower than the beat turns, the web spends the stroke pitched the wrong way and pushes the body back.")]
+        [Tooltip("Time constant of the web turning to its pitch (s). With little way on the pitch flips right over at each end of the beat; flipping slower than the beat turns, the web spends the stroke pitched the wrong way and pushes the body back.")]
         public float pitchTime = 0.02f;
-        public float maxPitchSpeed = 2500f;
-        [Tooltip("Most the fan twists in its own plane to trail its toes straight back (deg).")]
-        public float maxTwistDeg = 70f;
         [Tooltip("Web width as a multiple of its rest width.")]
         public float width = 1.3f;
         [Tooltip("Spine pitch asked for at full drive (deg; the hips 1.5 times this, the chest 0.4), and how far the wave runs behind from chest to hips (rad per joint). The harmonizer's chain stiffness and damping take off about three quarters.")]
@@ -211,8 +208,13 @@ namespace OtterLocomotion
     /// sets the sole square to the push and the web spreads; over the last of it the ankle points the foot, whipping the
     /// web back through the water. Through the draw the ankle is relaxed: the web folds back on its hinge to trail
     /// straight back along the heading, out of the water streaming past, and closes. Throughout it gives way to the
-    /// water pressing on its top, so it never hooks forward against the flow.
+    /// water pressing on its top, so it never hooks forward against the flow. The hinge is set in the kick's own frame,
+    /// its loop swung out for a turn, so the web pushes square to the way the leg actually sweeps.
     /// In the fluke the web lies level, toes trailing back, and pitches into the water it meets.
+    /// The web is carried on the shin by its joints: the ankle flexes it about the axis across the foot, and it turns out
+    /// about the foot's length and splays in its own plane, each only so far. Its pose is held in the hip's space, so it
+    /// keeps its line while the shin swings under it, as those three angles within their ranges: wherever the leg takes
+    /// the foot, the web turns only as far as its joints let it and stops there, rather than swinging the long way round.
     /// </summary>
     [Serializable]
     public class FlipperPose
@@ -231,16 +233,19 @@ namespace OtterLocomotion
         [Tooltip("Time constant of the web swinging on its hinge (s), and the fastest it swings (deg/s).")]
         public float hingeTime = 0.02f;
         public float maxHingeSpeed = 1500f;
-        [Header("Joints")]
-        [Tooltip("Most the web turns from its rest on the shin (deg).")]
-        public float maxTurnDeg = 135f;
-        [Tooltip("Share of the turn taken at the ankle (the IK chain's end bone); the toes take the rest. Only when the IK leaves the end bone's rotation alone.")]
+        [Header("Joints, from the web's rest in the plane the leg bends in")]
+        [Tooltip("How far the ankle flexes the web about the axis across the foot, parallel to the knee (deg): + the toes toward the belly side, the sole toward where they pointed (90 = square to the shin), - pointing the foot. On the back the shin hangs down from the raised knee, so the web trailing back is already flexed about 90.")]
+        public Vector2 flex = new Vector2(-80f, 155f);
+        [Tooltip("How far the sole then turns about the foot's length, + out to the leg's side (deg). Kept well short of 90, where flex and splay would lose their meaning.")]
+        public Vector2 evert = new Vector2(-45f, 70f);
+        [Tooltip("How far the toes then splay in the web's own plane, + out to the leg's side (deg). On the back the leg bends in a plane skewed out from the knee, and the web turned out under the surface lies well round from the shin's line.")]
+        public Vector2 splay = new Vector2(-145f, 55f);
+        [Tooltip("How far short of each end of a joint's range its stop begins to take the web along as the leg swings under it (deg). The web eases onto the leg's swing instead of being caught at the end all at once.")]
+        public float cushion = 20f;
+        [Tooltip("Share of the flex taken at the ankle (the IK chain's end bone); the toe fan takes the rest of the turn. Only when the IK leaves the end bone's rotation alone.")]
         [Range(0f, 1f)] public float ankleShare = 0.5f;
-        [Tooltip("Most the fan twists in its own plane (deg) to bring its toes round to where the hinge points them.")]
-        public float maxTwistDeg = 180f;
-        [Tooltip("Time constant of the web following its hinge (s), and the fastest it turns (deg/s).")]
+        [Tooltip("Time constant of the web following its hinge (s). The water damps it far more than its weight carries it on, so it eases straight in, never swinging past.")]
         public float turnTime = 0.02f;
-        public float maxTurnSpeed = 2500f;
         [Tooltip("Time constant of the web taking up its kicking pose as a kick starts and lying back as it stops (s).")]
         public float standTime = 0.25f;
         [Tooltip("Web width while pushing and while drawing forward, as multiples of its rest width: toes spread wide and drawn together.")]
@@ -336,13 +341,16 @@ namespace OtterLocomotion
             // hind flipper: the chain's end bone (the foot, hinged at the ankle) and the toe fan below it
             public Transform end, web;
             public Quaternion endRest, webRest;
-            /// <summary>Web normal in the flipper's space (the face that is dorsal at rest), and where it points now, in girdle space.</summary>
-            public Vector3 normalLocal, aimLocal;
-            /// <summary>The ankle's turn from its rest on the shin (deg).</summary>
+            /// <summary>Web normal in the flipper's space (the face that is dorsal at rest), and where its toes point.</summary>
+            public Vector3 normalLocal, toesLocal;
+            /// <summary>The web's pose (toes forward, normal up) in girdle space; its rest in the leg's own frame (LegFrame);
+            /// and whether the axis across it at rest (normal × toes) points out to the leg's side (+1) or in (-1).</summary>
+            public Quaternion poseLocal, onLeg;
+            public float side;
+            /// <summary>That pose as the ankle's flex, evert and splay from the web's rest on the leg (deg, Angles), and the
+            /// normal's turn from there (deg).</summary>
+            public Vector3 ankle;
             public float turned;
-            /// <summary>Toe direction in the flipper's space, and the fan's twist in its plane (deg).</summary>
-            public Vector3 toesLocal;
-            public float twist;
             /// <summary>Middle of the web in the flipper's space.</summary>
             public Vector3 centerLocal;
             public Vector3 webScale;
@@ -392,6 +400,13 @@ namespace OtterLocomotion
         {
             var l = limbs[(int)limb];
             return l.web != null ? new Vector4(l.turned, l.push, l.width, l.hinge) : Vector4.zero;
+        }
+
+        /// <summary>A hind flipper's turn from its rest on the shin as the ankle's flex, evert and splay (deg, Angles); zeros for a forepaw.</summary>
+        public Vector3 AnkleAngles(LimbId limb)
+        {
+            var l = limbs[(int)limb];
+            return l.web != null ? l.ankle : Vector3.zero;
         }
 
         private void Awake()
@@ -594,9 +609,11 @@ namespace OtterLocomotion
             l.webRest = web.localRotation;
             l.webScale = web.localScale;
             l.normalLocal = web.InverseTransformDirection(n);
-            l.aimLocal = l.girdle.InverseTransformDirection(n);
             l.toesLocal = web.InverseTransformDirection(toes);
-            l.twist = 0f;
+            l.poseLocal = Quaternion.Inverse(l.girdle.rotation) * Quaternion.LookRotation(toes, n);
+            l.onLeg = Quaternion.Inverse(LegFrame(l)) * Quaternion.LookRotation(toes, n);
+            KickAxes(l, out _, out _, out var outward, out _);
+            l.side = Vector3.Dot(Vector3.Cross(n, toes), outward) >= 0f ? 1f : -1f;
             l.centerLocal = center;
             l.widthAxis = axis;
             l.width = 1f;
@@ -721,8 +738,7 @@ namespace OtterLocomotion
         {
             if (!isActiveAndEnabled || brain == null || !brain.HasLimbGeometry) return;
             var f = flipper;
-            float kickTurn = 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, f.turnTime));
-            float flukeTurn = 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, fluke.pitchTime));
+            float follow = 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, Mathf.Lerp(f.turnTime, fluke.pitchTime, Fluke)));
             float standing = 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, f.standTime));
             float swing = 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, f.hingeTime));
             float turnOut = Mathf.Lerp(f.turnOut, f.backTurnOut, brain.Posture.SupineFraction) * Mathf.Deg2Rad;
@@ -730,7 +746,6 @@ namespace OtterLocomotion
             {
                 ref var l = ref limbs[i];
                 if (!l.valid || l.web == null) continue;
-                float turn = Mathf.Lerp(kickTurn, flukeTurn, Fluke);
                 // the IK carries the foot rigidly on the shin unless it aligns the end bone itself
                 bool ankle = l.ik != null && !l.ik.alignEndRotation;
                 if (ankle) l.end.localRotation = l.endRest;
@@ -738,8 +753,10 @@ namespace OtterLocomotion
                 // how much of a kick the foot is making: none at rest, full from the lightest kick up
                 float kicking = f.enabled ? KickEngagement(l.size) : 0f;
                 l.stand = Mathf.Lerp(l.stand, kicking, standing);
-                float posed = Mathf.Max(l.stand, Fluke);
-                Vector3 rest = l.web.TransformDirection(l.normalLocal);
+                // the web as the shin bone carries it, and the joints' frame: its rest in the plane the leg bends in
+                Quaternion webAtRest = l.web.rotation;
+                var carriedPose = Quaternion.LookRotation(l.web.TransformDirection(l.toesLocal), l.web.TransformDirection(l.normalLocal));
+                Quaternion rest = LegFrame(l) * l.onLeg;
                 // the web's path through still water as the leg carries it, before its own turn: the turn swings the web
                 // about the ankle the way it is already going, so pitching it by its posed path would run away
                 Vector3 carried = l.web.TransformPoint(l.centerLocal);
@@ -751,37 +768,24 @@ namespace OtterLocomotion
                 Vector3 flow = l.hasLastAnkle ? (ankleAt - l.lastAnkle) / Mathf.Max(1e-4f, Time.deltaTime) : Vector3.zero;
                 l.lastAnkle = ankleAt;
                 l.hasLastAnkle = true;
-                Hinge(ref l, flow, turnOut, swing, out var sole, out var toesHinged);
-                Vector3 aim = l.girdle.TransformDirection(l.aimLocal);
-                Vector3 goal = Vector3.Slerp(rest, sole, l.stand);
-                if (Fluke > 1e-3f) goal = Vector3.Slerp(goal, FlukeNormal(ref l, rest, aim), Fluke);
+                Hinge(ref l, flow, turnOut, swing, out var sole, out var toes);
+                Vector3 goal = l.stand * Limit(Angles(rest, Quaternion.LookRotation(toes, sole), l.side), l.ankle);
+                Quaternion held = l.girdle.rotation * l.poseLocal;
+                if (Fluke > 1e-3f) goal = Vector3.Lerp(goal, FlukeAngles(ref l, rest, held * Vector3.up), Fluke);
                 else l.flukeFace = 0f;
-                // the aim eases toward the goal in the hip's space, and the ankle is solved fresh from the shin each
-                // frame, so the web holds its line while the shin swings under it
-                float turnSpeed = Mathf.Lerp(f.maxTurnSpeed, fluke.maxPitchSpeed, Fluke);
-                Vector3 next = Vector3.RotateTowards(aim, Vector3.Slerp(aim, goal, turn), turnSpeed * Mathf.Deg2Rad * Time.deltaTime, 0f);
-                next = Vector3.RotateTowards(rest, next, Mathf.Min(Vector3.Angle(rest, next), f.maxTurnDeg + 15f) * Mathf.Deg2Rad, 0f);
-                l.aimLocal = l.girdle.InverseTransformDirection(next);
-                l.turned = Vector3.Angle(rest, next);
-                // the ankle takes its share of the turn and the toes the rest, so neither joint folds over alone
-                Quaternion whole = Quaternion.FromToRotation(rest, next);
-                if (ankle) l.end.rotation = Quaternion.Slerp(Quaternion.identity, whole, f.ankleShare) * l.end.rotation;
-                l.web.rotation = Quaternion.FromToRotation(l.web.TransformDirection(l.normalLocal), next) * l.web.rotation;
-                // the least turn can swing the toes anywhere in the new plane; twist them round to where the hinge
-                // points them, or to trail straight back along the fluke
-                Vector3 toesNow = l.web.TransformDirection(l.toesLocal);
-                Vector3 toesHome = Vector3.Slerp(toesHinged, -l.girdle.TransformDirection(l.forwardLocal), Fluke);
-                Vector3 toesWant = Vector3.ProjectOnPlane(toesHome, next);
-                float maxTwist = Mathf.Lerp(f.maxTwistDeg, fluke.maxTwistDeg, Fluke);
-                float twistGoal = toesWant.sqrMagnitude > 1e-4f
-                    ? Mathf.Clamp(Vector3.SignedAngle(toesNow, toesWant, next), -maxTwist, maxTwist) * posed
-                    : l.twist;
-                float twistStep = Mathf.DeltaAngle(l.twist, twistGoal) * turn;
-                l.twist = Mathf.Repeat(l.twist + Mathf.Clamp(twistStep, -f.maxTurnSpeed * Time.deltaTime, f.maxTurnSpeed * Time.deltaTime) + 180f, 360f) - 180f;
-                l.web.rotation = Quaternion.AngleAxis(l.twist, next) * l.web.rotation;
+                // the web held where it was in the hip's space, as the shin now carries the ankle, comes round toward its
+                // goal: it keeps its line while the shin swings under it, and nearing the end of a joint's range is carried along
+                l.ankle = Vector3.Lerp(Cushion(Angles(rest, held, l.side), l.ankle), goal, follow);
+                Quaternion pose = Pose(rest, l.ankle, l.side);
+                l.poseLocal = Quaternion.Inverse(l.girdle.rotation) * pose;
+                l.turned = Vector3.Angle(rest * Vector3.up, pose * Vector3.up);
+                // the ankle hinges its share of the flex, parallel to the knee, and the toe fan takes the rest, so neither
+                // joint folds over alone
+                if (ankle) l.end.rotation = Quaternion.AngleAxis(f.ankleShare * l.ankle.x, rest * Vector3.right) * l.end.rotation;
+                l.web.rotation = pose * Quaternion.Inverse(carriedPose) * webAtRest;
 
                 float kickWidth = Mathf.Lerp(1f, Mathf.Lerp(f.fold, f.spread, l.push), kicking);
-                l.width = Mathf.Lerp(l.width, Mathf.Lerp(kickWidth, fluke.width, Fluke), turn);
+                l.width = Mathf.Lerp(l.width, Mathf.Lerp(kickWidth, fluke.width, Fluke), follow);
                 var scale = l.webScale;
                 scale[l.widthAxis] *= l.width;
                 l.web.localScale = scale;
@@ -796,12 +800,16 @@ namespace OtterLocomotion
         // it gives way when the water presses on its top. As a push begins the ankle catches the water, flexing the web on
         // its own while its sole still faces across the heading, where the water it sweeps pushes the body up or down
         // rather than back; turned square, only the water flexes it further. Its toes turn out only as far as it is
-        // flexed. Out: the sole's normal (the face dorsal at rest) and where the toes point.
+        // flexed. All of it in the kick's frame: swung out with the loop for a turn, square is square to the leg's sweep.
+        // Out: the sole's normal (the face dorsal at rest) and where the toes point.
         private void Hinge(ref Limb l, Vector3 flow, float turnOut, float swing, out Vector3 sole, out Vector3 toes)
         {
             var f = flipper;
             KickAxes(l, out _, out _, out var outward, out var belly);
             LevelAxes(l, out var back, out _);
+            var swung = Quaternion.AngleAxis(l.yaw, Vector3.Cross(back, outward));
+            back = swung * back;
+            outward = swung * outward;
             float outAngle = turnOut * Mathf.Clamp01(l.hinge / 90f);
             Vector3 flex = Vector3.ProjectOnPlane(belly * Mathf.Cos(outAngle) + outward * Mathf.Sin(outAngle), back).normalized;
             float most = f.maxHingeSpeed * Time.deltaTime;
@@ -818,6 +826,73 @@ namespace OtterLocomotion
             sole = back * Mathf.Sin(a) - flex * Mathf.Cos(a);
         }
 
+        // A web's pose (toes forward, normal up) against its rest on the shin as the ankle's angles (deg), taken in turn:
+        // flex about the axis across the foot (+ = the toes toward the belly side, the normal toward where they pointed:
+        // 0 = trailing as at rest, 90 = square), then evert about the foot's length and splay of the toes in the web's
+        // own plane, both + toward the leg's side (side: +1 where the axis across the foot points out). Where the web's
+        // normal points depends on the flex and evert alone. Pose is the inverse.
+        private static Vector3 Angles(Quaternion rest, Quaternion pose, float side)
+        {
+            Quaternion q = Quaternion.Inverse(rest) * pose;
+            Vector3 normal = q * Vector3.up, toes = q * Vector3.forward, across = q * Vector3.right;
+            float flex = Mathf.Atan2(normal.z, normal.y) * Mathf.Rad2Deg;
+            float evert = Mathf.Asin(Mathf.Clamp(-normal.x, -1f, 1f)) * Mathf.Rad2Deg;
+            float splay = Mathf.Atan2(toes.x, across.x) * Mathf.Rad2Deg;
+            return new Vector3(flex, -side * evert, side * splay);
+        }
+
+        // The leg's own frame at the ankle: forward along the shin, right along the knee's hinge axis, across the plane
+        // where the leg bends. The IK may roll the shin bone about its length as it likes; the joints bend from this
+        // plane. The IK bends the knee toward its pole, so the plane runs through hip, ankle and pole: still clear as the
+        // leg straightens, when the knee's own bend gives no axis.
+        private static Quaternion LegFrame(in Limb l)
+        {
+            Vector3 hip = l.ik.root.bone.position, knee = l.ik.mid.bone.position, ankle = l.end.position;
+            Vector3 shin = ankle - knee;
+            Vector3 across = l.pole != null ? Vector3.Cross(l.pole.position - hip, ankle - hip) : Vector3.Cross(knee - hip, shin);
+            return Quaternion.LookRotation(shin, Vector3.Cross(shin, across));
+        }
+
+        private static Quaternion Pose(Quaternion rest, Vector3 angles, float side) =>
+            rest * Quaternion.AngleAxis(angles.x, Vector3.right) * Quaternion.AngleAxis(-side * angles.y, Vector3.forward) * Quaternion.AngleAxis(side * angles.z, Vector3.up);
+
+        // The ankle's angles within their ranges (FlipperPose). An angle beyond its range stops at the end it last came
+        // from, so a goal swinging round through the far side holds the web there rather than throwing it to the other end.
+        private Vector3 Limit(Vector3 angles, Vector3 last)
+        {
+            var f = flipper;
+            return new Vector3(Limit(angles.x, last.x, f.flex), Limit(angles.y, last.y, f.evert), Limit(angles.z, last.z, f.splay));
+        }
+
+        private static float Limit(float angle, float last, Vector2 range) =>
+            angle >= range.x && angle <= range.y ? angle : Mathf.Clamp(last + Mathf.DeltaAngle(last, angle), range.x, range.y);
+
+        // The web's angles held as the leg swings under it, from where they last were: the closer a joint comes to the end
+        // of its range the more of the leg's swing toward that end its stop takes, all of it at the end itself.
+        private Vector3 Cushion(Vector3 angles, Vector3 last)
+        {
+            var f = flipper;
+            return new Vector3(Cushion(angles.x, last.x, f.flex, f.cushion), Cushion(angles.y, last.y, f.evert, f.cushion), Cushion(angles.z, last.z, f.splay, f.cushion));
+        }
+
+        private static float Cushion(float angle, float last, Vector2 range, float margin)
+        {
+            float swing = Mathf.DeltaAngle(last, angle);
+            float room = Mathf.Abs((swing > 0f ? range.y : range.x) - last);
+            float taken = Mathf.SmoothStep(1f, 0f, room / Mathf.Max(1e-3f, margin));
+            return Mathf.Clamp(last + swing * (1f - taken), range.x, range.y);
+        }
+
+        // How far beyond the ankle's ranges a pose's angles lie, all told (deg).
+        private float Beyond(Vector3 angles)
+        {
+            var f = flipper;
+            return Beyond(angles.x, f.flex) + Beyond(angles.y, f.evert) + Beyond(angles.z, f.splay);
+        }
+
+        private static float Beyond(float angle, Vector2 range) =>
+            angle >= range.x && angle <= range.y ? 0f : Mathf.Min(Mathf.Abs(Mathf.DeltaAngle(angle, range.x)), Mathf.Abs(Mathf.DeltaAngle(angle, range.y)));
+
         private void RestoreFlippers()
         {
             for (int i = 0; i < OtterRig.LimbCount; i++)
@@ -827,9 +902,9 @@ namespace OtterLocomotion
                 if (l.ik != null && !l.ik.alignEndRotation) l.end.localRotation = l.endRest;
                 l.web.localRotation = l.webRest;
                 l.web.localScale = l.webScale;
-                l.aimLocal = l.girdle.InverseTransformDirection(l.web.TransformDirection(l.normalLocal));
+                l.poseLocal = Quaternion.Inverse(l.girdle.rotation) * Quaternion.LookRotation(l.web.TransformDirection(l.toesLocal), l.web.TransformDirection(l.normalLocal));
+                l.ankle = Vector3.zero;
                 l.turned = 0f;
-                l.twist = 0f;
                 l.width = 1f;
                 l.hinge = 0f;
                 l.stand = 0f;
@@ -914,24 +989,28 @@ namespace OtterLocomotion
             l.flukePitch = Mathf.Clamp(fluke.feather * path, -fluke.attack, fluke.attack);
         }
 
-        // The fluke's web normal: level, pitched into its path. Sweeping toward the belly its trailing edge rises, so the
-        // dorsal face tips forward. Signed to the face nearer the web's rest.
-        // Both faces of the web push alike, so it keeps the face it shows: turning over would sweep it face-on through
-        // the water ahead. It takes the other only once that is clearly nearer, as when a paddling web stood square to
-        // the back lies down into the fluke, or once the shin has carried its face out of the ankle's reach.
-        private Vector3 FlukeNormal(ref Limb l, Vector3 rest, Vector3 aim)
+        // The fluke's web as the ankle's angles: level, pitched into its path, toes trailing straight back along the
+        // hips. Sweeping toward the belly its trailing edge rises, so the dorsal face tips forward.
+        // Both faces of the web push alike, so it keeps the face it shows as it lies down into the fluke (normal: where
+        // it points then): turning over would sweep it face-on through the water ahead. It takes the other only once the
+        // shin has carried its face well out of the joints' reach and the other is clearly within it; not as the fluke
+        // gives way to the kick again and the web stands back up away from it.
+        private Vector3 FlukeAngles(ref Limb l, Quaternion rest, Vector3 normal)
         {
             LevelAxes(l, out var back, out var belly);
             float pitch = l.flukePitch * Mathf.Deg2Rad;
             Vector3 n = -belly * Mathf.Cos(pitch) - back * Mathf.Sin(pitch);
-            if (l.flukeFace == 0f || Vector3.Dot(aim, n * l.flukeFace) < -0.3f) l.flukeFace = Vector3.Dot(aim, n) >= 0f ? 1f : -1f;
-            n *= l.flukeFace;
-            if (Vector3.Angle(rest, n) > flipper.maxTurnDeg && Vector3.Angle(rest, -n) <= flipper.maxTurnDeg)
+            if (l.flukeFace == 0f) l.flukeFace = Vector3.Dot(normal, n) >= 0f ? 1f : -1f;
+            Vector3 toes = Vector3.ProjectOnPlane(-l.girdle.TransformDirection(l.forwardLocal), n);
+            if (toes.sqrMagnitude < 1e-6f) toes = Vector3.ProjectOnPlane(rest * Vector3.forward, n);
+            Vector3 kept = Angles(rest, Quaternion.LookRotation(toes, n * l.flukeFace), l.side);
+            Vector3 other = Angles(rest, Quaternion.LookRotation(toes, -n * l.flukeFace), l.side);
+            if (Beyond(other) + 15f < Beyond(kept))
             {
                 l.flukeFace = -l.flukeFace;
-                n = -n;
+                kept = other;
             }
-            return n;
+            return Limit(kept, l.ankle);
         }
 
         // How far out a hind foot's kick loop swings for the turn (HindTurn), from the side of the turn the leg is on now
