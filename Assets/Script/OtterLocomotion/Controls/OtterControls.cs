@@ -5,32 +5,39 @@ using UnityEngine;
 namespace OtterLocomotion
 {
     /// <summary>
-    /// The player's controls (行动操作): the mouse's gestures (PointerGestures) shift the gears (GearMachine), which set
-    /// the gait, heading and speed the brain swims to; a click's kick, a jump and each shift go out as Control events.
-    /// A right click inside the ring round the otter picks it up and a left click inside it lets go; picked up, the
-    /// pointer outside the ring is its guide point, which the head looks at and the body turns after. Everything else
-    /// is done on the water. Turns the body toward the heading at the brain's yaw rate target and brakes it while the
-    /// right button is held. Takes over from MovementControllerRB: that stays off, its ring UI hidden, and its getters
-    /// report these controls to the older head, spine and camera scripts.
+    /// The player's controls (行动操作): the gestures (ControlGestures) of the go and back keys and the mouse shift the
+    /// gears (GearMachine), which set the gait, heading and speed the brain swims to; a click's kick, a jump, each shift
+    /// and picking the otter up or letting it go go out as Control events. The go key picks it up and shifts up, held
+    /// cruising it sprints, and in the dolphin wave it jumps; the back key shifts down and, parked, lets it go, and held
+    /// it brakes to a stop and lets it go. The mouse is the stick: picked up, the pointer outside the ring round the
+    /// otter is its guide point, which the head looks at and the body turns after; a click kicks toward it, picked up
+    /// or not. Turns the body toward the heading at the brain's yaw rate target and brakes it while the back key is
+    /// held. Takes over from MovementControllerRB: that stays off, its ring UI hidden, and its getters report these
+    /// controls to the older head, spine and camera scripts.
     /// </summary>
     [DefaultExecutionOrder(200)]
     [DisallowMultipleComponent]
     public class OtterControls : MonoBehaviour, MovementControllerRB.ISteeringSource
     {
-        /// <summary>Stands in for the mouse (scripted playback, tests): both buttons and the screen position in pixels.</summary>
-        public interface IPointer
+        /// <summary>Stands in for the mouse and keys (scripted playback, tests): the mouse button, the go and back keys, and the pointer's screen position in pixels.</summary>
+        public interface IInput
         {
-            bool Left { get; }
-            bool Right { get; }
+            bool Click { get; }
+            bool Go { get; }
+            bool Back { get; }
             Vector2 ScreenPosition { get; }
         }
 
+        [Tooltip("Picks the otter up, shifts up, held cruising sprints, and in the dolphin wave jumps.")]
+        public KeyCode goKey = KeyCode.W;
+        [Tooltip("Shifts down, parked lets the otter go; held, brakes to a stop and lets it go.")]
+        public KeyCode backKey = KeyCode.S;
         [Tooltip("The camera the pointer is read through. Empty: the one drawn last onto the screen, which is what the player sees (not necessarily the main camera).")]
         public Camera inputCamera;
         public OtterLocomotionBrain brain;
         public StrokePropulsion strokes;
         public MovementControllerRB legacy;
-        [Tooltip("The ring round the otter, from the middle of its back (body lengths): a press inside it lands on the otter, and selected, the pointer guides it from outside it.")]
+        [Tooltip("The ring round the otter, from the middle of its back (body lengths): picked up, the pointer guides it from outside it; a click inside it kicks along the heading.")]
         public float ringRadiusBL = 0.6f;
         public Gear initialGear = Gear.Park;
         public GestureSettings gestures = new GestureSettings();
@@ -39,22 +46,23 @@ namespace OtterLocomotion
         [Header("Body")]
         [Tooltip("Time for the body's turning to follow the brain's yaw rate target (s).")]
         public float turnResponse = 0.1f;
-        [Tooltip("Deceleration while the right button is held (body lengths/s^2).")]
+        [Tooltip("Deceleration while the back key is held (body lengths/s^2).")]
         public float brakeBL = 4f;
 
         [Header("Debug")]
         public bool logEvents = true;
 
-        public IPointer PointerOverride { get; set; }
+        public IInput InputOverride { get; set; }
         public GearMachine Gears => machine;
-        /// <summary>Kicks, jumps and gear shifts, as they happen.</summary>
+        /// <summary>Kicks, jumps, gear shifts, picking up and letting go, as they happen.</summary>
         public event Action<ControlEvent> Control;
         public event Action<Gesture> Gestured;
         /// <summary>The pointer at PointerY, and whether it is on the otter (inside the ring), this frame.</summary>
         public Vector3 PointerPoint { get; private set; }
         public bool PointerOverOtter { get; private set; }
-        public bool LeftHeld { get; private set; }
-        public bool RightHeld { get; private set; }
+        public bool ClickHeld { get; private set; }
+        public bool GoHeld { get; private set; }
+        public bool BackHeld { get; private set; }
         /// <summary>The camera the pointer is read through: inputCamera, or the one drawn last onto the screen.</summary>
         public Camera PointerCamera
         {
@@ -84,7 +92,7 @@ namespace OtterLocomotion
         /// <summary>The head, at the pointer's level: where the guide is seen from.</summary>
         public Vector3 HeadPoint => (head != null ? Flat(head.position) : Flat(transform.position + transform.forward * (0.4f * BodyLength))) + Vector3.up * PointerY;
 
-        private readonly PointerGestures pointer = new PointerGestures();
+        private readonly ControlGestures input = new ControlGestures();
         private readonly GearMachine machine = new GearMachine();
         private readonly List<Gesture> gestureList = new List<Gesture>();
         private readonly List<ControlEvent> events = new List<ControlEvent>();
@@ -124,7 +132,7 @@ namespace OtterLocomotion
         private void OnEnable()
         {
             if (body == null) return;
-            pointer.Reset();
+            input.Reset();
             machine.Reset(Body(), initialGear);
             PointerPoint = body.position + transform.forward;
             if (legacy != null)
@@ -145,16 +153,18 @@ namespace OtterLocomotion
         {
             if (body == null) return;
             Vector2 screen;
-            if (PointerOverride != null)
+            if (InputOverride != null)
             {
-                LeftHeld = PointerOverride.Left;
-                RightHeld = PointerOverride.Right;
-                screen = PointerOverride.ScreenPosition;
+                ClickHeld = InputOverride.Click;
+                GoHeld = InputOverride.Go;
+                BackHeld = InputOverride.Back;
+                screen = InputOverride.ScreenPosition;
             }
             else
             {
-                LeftHeld = Input.GetMouseButton(0);
-                RightHeld = Input.GetMouseButton(1);
+                ClickHeld = Input.GetMouseButton(0);
+                GoHeld = Input.GetKey(goKey);
+                BackHeld = Input.GetKey(backKey);
                 screen = Input.mousePosition;
             }
             if (TryPointerPoint(screen, out var point)) PointerPoint = point;
@@ -162,8 +172,8 @@ namespace OtterLocomotion
 
             gestureList.Clear();
             events.Clear();
-            pointer.Step(gestures, Time.time, LeftHeld, RightHeld, PointerPoint, PointerOverOtter, gestureList);
-            machine.Step(gears, gestures, gestureList, Time.time, PointerPoint, PointerOverOtter, Body(), events);
+            input.Step(gestures, Time.time, ClickHeld, GoHeld, BackHeld, PointerPoint, PointerOverOtter, gestureList);
+            machine.Step(gears, gestureList, Time.time, PointerPoint, PointerOverOtter, Body(), events);
             foreach (var g in gestureList) Gestured?.Invoke(g);
             foreach (var e in events)
             {

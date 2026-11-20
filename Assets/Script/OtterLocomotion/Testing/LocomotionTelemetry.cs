@@ -90,7 +90,7 @@ namespace OtterLocomotion.Testing
             public float guideYaw, guideDist;
             public int seg;
             /// <summary>Mouse buttons; a hind power stroke began this frame; a click's kick is being kicked.</summary>
-            public bool left, right, kick, kicking;
+            public bool go, back, kick, kicking;
             public Gear gear;
             public Gait gait;
             public float[] limb, limbOut;
@@ -352,7 +352,7 @@ namespace OtterLocomotion.Testing
             var gears = controls.Gears;
             var s = new Sample
             {
-                t = Time.time, dt = dt, seg = playback.SegmentIndex, left = controls.LeftHeld, right = controls.RightHeld,
+                t = Time.time, dt = dt, seg = playback.SegmentIndex, go = controls.GoHeld, back = controls.BackHeld,
                 gear = gears.Gear, gait = gears.Gait, intentYaw = Yaw(gears.Heading), aim = gears.AimBlend,
                 bodyYaw = yaw, yawRate = yawRate,
                 speedFwd = Vector3.Dot(v, fwd), speedLat = Vector3.Dot(v, right),
@@ -536,7 +536,7 @@ namespace OtterLocomotion.Testing
             // left/right = mouse buttons; intentYaw = the heading the controls ask for; aim = how much the head and spine aim (0..1);
             // kick = a hind power stroke began; kicking = a click's kick is being kicked; guideYaw/guideDist = the neck's
             // look point from the chest (deg from the body's heading, m)
-            var sb = new StringBuilder("t,seg,left,right,gear,gait,intentYaw,aim,bodyYaw,yawRate,speedFwd,speedLat,targetSpeed,kick,kicking,headYaw,chestBend,chestRoll,guideYaw,guideDist");
+            var sb = new StringBuilder("t,seg,go,back,gear,gait,intentYaw,aim,bodyYaw,yawRate,speedFwd,speedLat,targetSpeed,kick,kicking,headYaw,chestBend,chestRoll,guideYaw,guideDist");
             foreach (var l in limbs) sb.Append(',').Append(l.name).Append("_cm");
             // horizontal offset away from the body midline, + = outward; side = which side of the midline the limb is on
             // now (+1 right), which swaps left and right while on the back
@@ -594,7 +594,7 @@ namespace OtterLocomotion.Testing
             foreach (var s in samples)
             {
                 sb.Append(string.Format(ci, "{0:F4},{1},{2},{3},{4},{5},{6:F2},{7:F2},{8:F2},{9:F1},{10:F3},{11:F3},{12:F2},{13},{14},{15:F2},{16:F2},{17:F2},{18:F1},{19:F2}",
-                    s.t - t0, s.seg, s.left ? 1 : 0, s.right ? 1 : 0, s.gear, s.gait, s.intentYaw, s.aim, s.bodyYaw, s.yawRate, s.speedFwd, s.speedLat,
+                    s.t - t0, s.seg, s.go ? 1 : 0, s.back ? 1 : 0, s.gear, s.gait, s.intentYaw, s.aim, s.bodyYaw, s.yawRate, s.speedFwd, s.speedLat,
                     s.targetSpeed, s.kick ? 1 : 0, s.kicking ? 1 : 0, s.headYaw, s.chestBend, s.chestRoll, s.guideYaw, s.guideDist));                foreach (var x in s.limb) sb.Append(',').Append(x.ToString("F2", ci));
                 foreach (var x in s.limbOut) sb.Append(',').Append(x.ToString("F2", ci));
                 foreach (var x in s.limbSide) sb.Append(',').Append(x);

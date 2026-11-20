@@ -5,19 +5,20 @@ using UnityEngine;
 namespace OtterLocomotion.Testing
 {
     /// <summary>
-    /// Scripted mouse input for repeatable locomotion tests. Each segment does one thing with the buttons, as the
-    /// player would: a click, double click or long press on the water, steering the otter picked up (a right click on
-    /// it, then the pointer as its guide), letting it go (a left click on it), a right tap or hold on the water;
-    /// pointing toward a yaw relative to the otter's facing when playback started (+ = clockwise seen from above,
-    /// i.e. right), held there or swept round the otter from it. Between pointing segments the pointer stays where it last pointed from the otter, as a still mouse
-    /// does under the following camera. Feeds OtterControls through its pointer override, so its gestures and gears
-    /// apply exactly as with the mouse. Locks the frame rate so runs repeat.
+    /// Scripted mouse and key input for repeatable locomotion tests. Each segment does one thing, as the player would:
+    /// a click on the water, a press or hold of the go key, steering the otter picked up (the go key, then the pointer
+    /// as its guide), a press or hold of the back key; pointing toward a yaw relative to the otter's facing when
+    /// playback started (+ = clockwise seen from above, i.e. right), held there or swept round the otter from it.
+    /// Between pointing segments the pointer stays where it last pointed from the otter, as a still mouse does under
+    /// the following camera. Feeds OtterControls through its input override, so its gestures and gears apply exactly
+    /// as with the mouse and keys. Locks the frame rate so runs repeat.
     /// </summary>
     [DefaultExecutionOrder(-100)]
     [DisallowMultipleComponent]
-    public class OtterInputPlayback : MonoBehaviour, OtterControls.IPointer
+    public class OtterInputPlayback : MonoBehaviour, OtterControls.IInput
     {
-        public enum Action { Idle, Click, DoubleClick, Hold, Steer, LetGo, RightTap, RightHold }
+        /// <summary>Go and Steer pick the otter up first with a press of the go key if it is not picked up yet.</summary>
+        public enum Action { Idle, Click, Go, GoHold, Steer, Back, BackHold }
 
         [Serializable]
         public struct Segment
@@ -42,7 +43,7 @@ namespace OtterLocomotion.Testing
                 this.sweepDegPerSec = sweepDegPerSec;
             }
 
-            public bool Points => action == Action.Click || action == Action.DoubleClick || action == Action.Hold || action == Action.Steer;
+            public bool Points => action == Action.Click || action == Action.Go || action == Action.GoHold || action == Action.Steer;
         }
 
         public OtterControls controls;
@@ -50,17 +51,18 @@ namespace OtterLocomotion.Testing
         public List<Segment> segments = new List<Segment>();
         [Tooltip("Fixed frames per second while playing back (Time.captureFramerate); 0 leaves the frame rate free.")]
         public int captureFramerate = 60;
-        [Tooltip("Buttons up at the start of each segment (s), so its press is a new one; steering it while it is picked up already doesn't pick it up again.")]
+        [Tooltip("Button and keys up at the start of each segment (s), so its press is a new one; steering it while it is picked up already doesn't pick it up again.")]
         public float lead = 0.05f;
-        [Tooltip("How long a click holds the button down, and the gap between a double click's two clicks (s).")]
+        [Tooltip("How long a click or a key press holds it down, and the gap between picking the otter up and the press that shifts (s).")]
         public float tap = 0.08f;
         public float gap = 0.1f;
-        [Tooltip("Usual distance from the otter (body lengths) of a click or long press, and of the guide point while steering.")]
+        [Tooltip("Usual distance from the otter (body lengths) of a click or a go press, and of the guide point while steering.")]
         public float clickDistanceBL = 2f;
         public float guideDistanceBL = 1.5f;
 
-        public bool Left { get; private set; }
-        public bool Right { get; private set; }
+        public bool Click { get; private set; }
+        public bool Go { get; private set; }
+        public bool Back { get; private set; }
         public Vector2 ScreenPosition { get; private set; }
         public bool Finished { get; private set; }
         public int SegmentIndex { get; private set; } = -1;
@@ -72,12 +74,12 @@ namespace OtterLocomotion.Testing
         private float startTime;
         private int previousCaptureFramerate;
         private Vector3 pointed;
-        private bool pickUp;
+        private bool pickUp, holdOn;
 
         /// <summary>
-        /// Every gear and gesture of the controls once: parked clicks, picking it up and steering it, the double clicks
-        /// up to slow and to cruising, turns and clicks in each, the long-press sprint into the wave, a jump, the glide
-        /// out of it, the right tap down, the brake to a stop and letting it go.
+        /// Every gear and gesture of the controls once: parked clicks, picking it up and steering it, the go key up to
+        /// slow and to cruising, turns and clicks in each, the held go key's sprint into the wave, a jump, the glide out
+        /// of it, the back key down, and held, the brake to a stop that lets it go.
         /// </summary>
         public static List<Segment> BaselineScript() => new List<Segment>
         {
@@ -85,20 +87,20 @@ namespace OtterLocomotion.Testing
             new Segment("parked: click ahead, one kick", 2.0f, Action.Click, 0f),
             new Segment("parked: click right 90, turn and kick", 2.5f, Action.Click, 90f),
             new Segment("parked: pick it up, steer left 90, small arc", 2.5f, Action.Steer, 0f),
-            new Segment("parked: double click, slow", 3.0f, Action.DoubleClick, 0f),
+            new Segment("parked: go, slow", 3.0f, Action.Go, 0f),
             new Segment("slow: straight on the back", 2.5f, Action.Idle),
             new Segment("slow: steer right 90", 3.0f, Action.Steer, 90f),
             new Segment("slow: click left 45, kick", 2.0f, Action.Click, 45f),
-            new Segment("slow: double click, cruise", 3.0f, Action.DoubleClick, 45f),
+            new Segment("slow: go, cruise", 3.0f, Action.Go, 45f),
             new Segment("cruise: straight on the belly", 2.5f, Action.Idle),
             new Segment("cruise: steer left 90", 3.0f, Action.Steer, -45f),
-            new Segment("cruise: long press, sprint", 3.5f, Action.Hold, -45f),
+            new Segment("cruise: hold go, sprint", 3.5f, Action.GoHold, -45f),
             new Segment("sprint: let go in the wave", 0.3f, Action.Idle),
-            new Segment("sprint: double click, jump", 1.2f, Action.DoubleClick, -45f),
+            new Segment("sprint: go, jump", 1.2f, Action.Go, -45f),
             new Segment("sprint: glide out of the wave", 3.0f, Action.Idle),
-            new Segment("cruise: right tap, slow", 3.0f, Action.RightTap),
-            new Segment("slow: right hold, brake", 2.0f, Action.RightHold),
-            new Segment("parked: let go of it, rest", 1.5f, Action.LetGo),
+            new Segment("cruise: back, slow", 3.0f, Action.Back),
+            new Segment("slow: hold back, brake and let go of it", 2.0f, Action.BackHold),
+            new Segment("parked: rest", 1.5f, Action.Idle),
         };
 
         /// <summary>Small (20°) and large (120° / 160°) turns each way in every gear, plus a gentle sweep in 15° steps cruising.</summary>
@@ -109,14 +111,14 @@ namespace OtterLocomotion.Testing
             new Segment("parked: small right 20", 1.5f, Action.Steer, 0f),
             new Segment("parked: large right 120", 2.5f, Action.Steer, 120f),
             new Segment("parked: large left 160", 3.0f, Action.Steer, -40f),
-            new Segment("parked: let go", 1.0f, Action.LetGo),
-            new Segment("parked: double click, slow", 2.5f, Action.DoubleClick, -40f),
+            new Segment("parked: let go", 1.0f, Action.Back),
+            new Segment("parked: pick it up, go, slow", 2.5f, Action.Go, -40f),
             new Segment("slow: small left 20", 2.0f, Action.Steer, -60f),
             new Segment("slow: small right 20", 2.0f, Action.Steer, -40f),
             new Segment("slow: large right 120", 3.0f, Action.Steer, 80f),
             new Segment("slow: large left 160", 3.5f, Action.Steer, -80f),
-            new Segment("slow: let go", 1.0f, Action.LetGo),
-            new Segment("slow: double click, cruise", 3.0f, Action.DoubleClick, -80f),
+            new Segment("slow: hold the heading", 1.0f, Action.Idle),
+            new Segment("slow: go, cruise", 3.0f, Action.Go, -80f),
             new Segment("cruise: small right 20", 2.0f, Action.Steer, -60f),
             new Segment("cruise: small left 20", 2.0f, Action.Steer, -80f),
             new Segment("cruise: large right 120", 3.0f, Action.Steer, 40f),
@@ -125,10 +127,10 @@ namespace OtterLocomotion.Testing
             new Segment("cruise: sweep right 15 (2/4)", 0.7f, Action.Steer, -90f),
             new Segment("cruise: sweep right 15 (3/4)", 0.7f, Action.Steer, -75f),
             new Segment("cruise: sweep right 15 (4/4)", 0.7f, Action.Steer, -60f),
-            new Segment("cruise: let go", 1.0f, Action.LetGo),
-            new Segment("cruise: long press, sprint", 3.0f, Action.Hold, -60f),
+            new Segment("cruise: hold the heading", 1.0f, Action.Idle),
+            new Segment("cruise: hold go, sprint", 3.0f, Action.GoHold, -60f),
             new Segment("sprint: large right 120 in the wave", 2.0f, Action.Steer, 60f),
-            new Segment("sprint: let go, glide", 2.5f, Action.LetGo),
+            new Segment("sprint: glide", 2.5f, Action.Idle),
         };
 
         /// <summary>Long straight runs in each gear: a parked kick's glide, slow on the back, cruising, the sprint into the wave, its glide, the brake.</summary>
@@ -136,13 +138,13 @@ namespace OtterLocomotion.Testing
         {
             new Segment("parked: idle", 1.0f, Action.Idle),
             new Segment("parked: click ahead, kick and glide", 3.0f, Action.Click, 0f),
-            new Segment("parked: double click, slow", 0.6f, Action.DoubleClick, 0f),
+            new Segment("parked: pick it up, go, slow", 0.6f, Action.Go, 0f),
             new Segment("slow: on the back", 5.0f, Action.Idle),
-            new Segment("slow: double click, cruise", 0.6f, Action.DoubleClick, 0f),
+            new Segment("slow: go, cruise", 0.6f, Action.Go, 0f),
             new Segment("cruise: on the belly", 5.0f, Action.Idle),
-            new Segment("cruise: long press, sprint into the wave", 6.0f, Action.Hold, 0f),
+            new Segment("cruise: hold go, sprint into the wave", 6.0f, Action.GoHold, 0f),
             new Segment("sprint: let go, slow out of the wave", 4.0f, Action.Idle),
-            new Segment("cruise: right hold, brake", 2.0f, Action.RightHold),
+            new Segment("cruise: hold back, brake and let go of it", 2.0f, Action.BackHold),
             new Segment("parked: rest", 2.0f, Action.Idle),
         };
 
@@ -154,19 +156,19 @@ namespace OtterLocomotion.Testing
         public static List<Segment> CircleScript() => new List<Segment>
         {
             new Segment("parked: idle", 1.0f, Action.Idle),
-            new Segment("parked: double click, slow", 2.0f, Action.DoubleClick, 0f),
+            new Segment("parked: pick it up, go, slow", 2.0f, Action.Go, 0f),
             new Segment("slow: straight on the back", 2.5f, Action.Idle),
             new Segment("slow: steer round to the right", 6.0f, Action.Steer, 20f, 0f, 60f),
-            new Segment("slow: double click, cruise", 2.5f, Action.DoubleClick, 20f),
+            new Segment("slow: go, cruise", 2.5f, Action.Go, 20f),
             new Segment("cruise: straight on the belly", 2.5f, Action.Idle),
             new Segment("cruise: steer round to the left", 6.0f, Action.Steer, 0f, 0f, -60f),
             new Segment("cruise: steer round tight to the right", 4.0f, Action.Steer, 30f, 0f, 120f),
-            new Segment("cruise: long press, sprint", 3.5f, Action.Hold, 150f),
-            new Segment("sprint: sweep round to the left in the wave", 4.0f, Action.Hold, 150f, 0f, -60f),
+            new Segment("cruise: hold go, sprint", 3.5f, Action.GoHold, 150f),
+            new Segment("sprint: sweep round to the left in the wave", 4.0f, Action.GoHold, 150f, 0f, -60f),
             new Segment("sprint: let go, glide", 2.0f, Action.Idle),
-            new Segment("cruise: right tap, slow", 3.0f, Action.RightTap),
-            new Segment("slow: right hold, brake", 2.0f, Action.RightHold),
-            new Segment("parked: let go of it, rest", 1.5f, Action.LetGo),
+            new Segment("cruise: back, slow", 3.0f, Action.Back),
+            new Segment("slow: hold back, brake and let go of it", 2.0f, Action.BackHold),
+            new Segment("parked: rest", 1.5f, Action.Idle),
         };
 
         public static List<Segment> Script(string name) => name switch
@@ -191,7 +193,7 @@ namespace OtterLocomotion.Testing
             pointed = Pointing(StartYaw, clickDistanceBL);
             previousCaptureFramerate = Time.captureFramerate;
             if (captureFramerate > 0) Time.captureFramerate = captureFramerate;
-            controls.PointerOverride = this;
+            controls.InputOverride = this;
             startTime = Time.time;
         }
 
@@ -208,7 +210,7 @@ namespace OtterLocomotion.Testing
             }
             if (index >= segments.Count)
             {
-                Left = Right = false;
+                Click = Go = Back = false;
                 Finished = true;
                 return;
             }
@@ -216,32 +218,32 @@ namespace OtterLocomotion.Testing
             {
                 SegmentIndex = index;
                 SegmentStartTime = Time.time;
-                pickUp = segments[index].action == Action.Steer && !controls.Gears.Selected;
+                var action = segments[index].action;
+                pickUp = (action == Action.Steer || action == Action.Go) && !controls.Gears.Selected;
+                // a hold going on from the segment before is not let go between them: a fresh go press in the wave jumps
+                holdOn = index > 0 && segments[index - 1].action == action && (action == Action.GoHold || action == Action.BackHold);
             }
 
             var s = segments[index];
             float u = Time.time - SegmentStartTime;
             bool InTap(float from) => u >= from && u < from + tap;
-            Left = s.action switch
+            Click = s.action == Action.Click && InTap(lead);
+            Go = s.action switch
             {
-                Action.Click => InTap(lead),
-                Action.DoubleClick => InTap(lead) || InTap(lead + tap + gap),
-                Action.Hold => u >= lead,
-                Action.LetGo => InTap(lead),
+                Action.Go => InTap(lead) || pickUp && InTap(lead + tap + gap),
+                Action.GoHold => holdOn || u >= lead,
+                Action.Steer => pickUp && InTap(lead),
                 _ => false,
             };
-            Right = s.action switch
+            Back = s.action switch
             {
-                Action.RightTap => InTap(lead),
-                Action.RightHold => u >= lead,
-                Action.Steer => pickUp && InTap(lead),
+                Action.Back => InTap(lead),
+                Action.BackHold => holdOn || u >= lead,
                 _ => false,
             };
 
             if (s.Points) pointed = Pointing(TargetYaw(index) + s.sweepDegPerSec * u, s.distanceBL > 0f ? s.distanceBL : s.action == Action.Steer ? guideDistanceBL : clickDistanceBL);
-            // picking it up and letting it go are clicks on the otter
-            bool onOtter = (s.action == Action.Steer && Right) || (s.action == Action.LetGo && Left);
-            ScreenPosition = ToScreen(onOtter ? controls.GrabPoint : controls.transform.position + pointed);
+            ScreenPosition = ToScreen(controls.transform.position + pointed);
         }
 
         private Vector3 Pointing(float yaw, float distanceBL)
@@ -253,7 +255,7 @@ namespace OtterLocomotion.Testing
 
         private void OnDisable()
         {
-            if (controls != null && ReferenceEquals(controls.PointerOverride, this)) controls.PointerOverride = null;
+            if (controls != null && ReferenceEquals(controls.InputOverride, this)) controls.InputOverride = null;
             Time.captureFramerate = previousCaptureFramerate;
         }
 

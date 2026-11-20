@@ -34,7 +34,7 @@ namespace OtterLocomotion
         public float jumpGrace = 0.6f;
 
         [Header("Kicks")]
-        [Tooltip("Strength (0..1) of the kick a click gives when parked, and when swimming.")]
+        [Tooltip("Strength (0..1) of the kick a click gives when parked (picked up or not), and when swimming.")]
         [Range(0f, 1f)] public float parkKick = 0.6f;
         [Range(0f, 1f)] public float swimKick = 1f;
 
@@ -45,7 +45,7 @@ namespace OtterLocomotion
         public float headLead = 0.12f;
     }
 
-    public enum ControlEventKind { Kick, Jump, Shift }
+    public enum ControlEventKind { Kick, Jump, Shift, Select, Deselect }
 
     public struct ControlEvent
     {
@@ -61,6 +61,8 @@ namespace OtterLocomotion
         {
             ControlEventKind.Kick => $"Kick {strength:F1}",
             ControlEventKind.Jump => "Jump",
+            ControlEventKind.Select => "Select",
+            ControlEventKind.Deselect => "Deselect",
             _ => $"{from}->{to} ({reason})",
         };
     }
@@ -75,26 +77,27 @@ namespace OtterLocomotion
     }
 
     /// <summary>
-    /// The gears the mouse shifts through (行动操作). Parked and swimming slowly the otter lies on its back; cruising and
-    /// sprinting it swims on its belly. Selected, the pointer is its guide point in whatever gear it is in: the head
-    /// looks at it and the body turns after the head, headLead behind, until it is let go. A click on the water turns it
-    /// toward the click and kicks once, without shifting; a double click shifts up from
-    /// parked to slow and from slow to cruising, its first click kicking as a click does. Cruising, a long press
-    /// sprints along the heading: kicking at first, then in the dolphin wave; let go before the wave it cruises on, let
-    /// go in the wave it slows of itself, keeping the wave while still fast and for at least jumpGrace. In the wave a
-    /// double click jumps instead, neither click kicking; whether a double click jumps or shifts goes by the gear when
-    /// its first press came. The right button shifts down a gear as it goes down, and held it brakes to parked; either
-    /// way a pending jump is off. Clicks while in the air are spent.
+    /// The gears the go and back keys climb and come down (行动操作). Not picked up, the otter lies parked on its back:
+    /// the pointer does not guide it and it does not shift. The go key picks it up, then each press shifts up, from
+    /// parked to slow and from slow to cruising; parked and swimming slowly it lies on its back, cruising and sprinting
+    /// it swims on its belly. Pressed cruising and held, it sprints along the heading: kicking at first, then in the
+    /// dolphin wave; let go before the wave it cruises on, let go in the wave it slows of itself, keeping the wave while
+    /// still fast and for at least jumpGrace, and a press in the wave jumps (held on, it sprints on). Each press of the
+    /// back key shifts down, and parked lets it go; held, it brakes to parked and lets it go, so let go it is always
+    /// parked on its back. Picked up, the pointer is its guide point: the head looks at it and the body turns after the
+    /// head, headLead behind. A click on the water, picked up or not, turns it toward the click and kicks once without
+    /// shifting (sprinting it only turns); on the otter, where it points nowhere, it kicks along the heading. Presses and
+    /// clicks while in the air are spent.
     /// </summary>
     public sealed class GearMachine
     {
         public Gear Gear { get; private set; }
         /// <summary>Sprinting in the dolphin wave, rather than still kicking up to it.</summary>
         public bool Dolphin { get; private set; }
-        /// <summary>A long press is driving the sprint on.</summary>
+        /// <summary>The go key, held, is driving the sprint on.</summary>
         public bool Accelerating { get; private set; }
         public bool Braking { get; private set; }
-        /// <summary>Picked up by a right click on it, guided by the pointer until a left click on it lets go.</summary>
+        /// <summary>Picked up by the go key, guided by the pointer until the back key lets it go.</summary>
         public bool Selected { get; private set; }
         /// <summary>Where the head looks to go (world, unit, on the water): from the head toward the guide point or the click.</summary>
         public Vector3 Heading { get; private set; } = Vector3.forward;
@@ -117,100 +120,75 @@ namespace OtterLocomotion
             _ => Gait.ProneTogether,
         };
 
-        private Gear pressGear;
-        private bool pressEligible;
-        private bool clickPending;
-        private Vector3 pendingPoint;
-        private float pendingUntil, sprintSince, releasedAt, aimUntil;
+        private Gear goGear;
+        private float sprintSince, releasedAt, aimUntil;
         private readonly List<(float time, Vector3 heading)> looked = new List<(float, Vector3)>();
 
+        /// <param name="initial">Above parked, it starts picked up.</param>
         public void Reset(in GearBody body, Gear initial = Gear.Park)
         {
             Gear = initial;
-            Dolphin = Accelerating = Braking = Selected = false;
+            Dolphin = Accelerating = Braking = false;
+            Selected = initial > Gear.Park;
             Heading = BodyHeading = Flat(body.forward, Vector3.forward);
             looked.Clear();
             AimPoint = body.head + Heading;
             AimBlend = 0f;
             SpeedBL = 0f;
-            clickPending = pressEligible = false;
             aimUntil = float.NegativeInfinity;
         }
 
         /// <param name="pointer">The pointer on the water now: selected, the guide point, once it is off the otter.</param>
-        public void Step(GearSettings s, GestureSettings gs, List<Gesture> gestures, float time, Vector3 pointer, bool pointerOnOtter, in GearBody b, List<ControlEvent> events)
+        public void Step(GearSettings s, List<Gesture> gestures, float time, Vector3 pointer, bool pointerOnOtter, in GearBody b, List<ControlEvent> events)
         {
             foreach (var g in gestures)
             {
                 switch (g.kind)
                 {
-                    case GestureKind.Select:
-                        Selected = true;
-                        break;
-                    case GestureKind.Deselect:
-                        if (Selected) aimUntil = time;
-                        Selected = false;
-                        break;
-                    case GestureKind.Press:
-                        if (!g.second)
-                        {
-                            pressGear = Gear;
-                            pressEligible = JumpEligible;
-                        }
-                        // the first click of a double click in the wave waits to see whether a second comes
-                        else clickPending = false;
-                        break;
                     case GestureKind.Click:
-                        if (b.airborne) break;
-                        if (!g.second)
-                        {
-                            if (pressEligible)
-                            {
-                                clickPending = true;
-                                pendingPoint = g.point;
-                                pendingUntil = time + gs.doubleClickTime;
-                            }
-                            else Click(s, g.point, time, b, events);
-                        }
-                        else if (pressEligible) events.Add(new ControlEvent { kind = ControlEventKind.Jump, time = time, direction = Heading });
-                        else if (pressGear == Gear.Park) Shift(Gear.Slow, "double click", time, events);
-                        else if (pressGear == Gear.Slow) Shift(Gear.Cruise, "double click", time, events);
-                        else Click(s, g.point, time, b, events);
+                        if (!b.airborne) Click(s, g, time, b, events);
                         break;
-                    case GestureKind.HoldBegin:
-                        if (b.airborne || Gear < Gear.Cruise) break;
+                    case GestureKind.GoPress:
+                        // only a press that came cruising or sprinting goes on to sprint when held
+                        goGear = Selected ? Gear : Gear.Park;
+                        if (b.airborne) break;
+                        if (!Selected)
+                        {
+                            Selected = true;
+                            events.Add(new ControlEvent { kind = ControlEventKind.Select, time = time });
+                        }
+                        else if (JumpEligible) events.Add(new ControlEvent { kind = ControlEventKind.Jump, time = time, direction = Heading });
+                        else if (Gear < Gear.Cruise) Shift(Gear + 1, "go", time, events);
+                        break;
+                    case GestureKind.GoHoldBegin:
+                        if (b.airborne || goGear < Gear.Cruise) break;
                         Accelerating = true;
                         if (Gear != Gear.Sprint)
                         {
                             sprintSince = time;
-                            Shift(Gear.Sprint, "long press", time, events);
+                            Shift(Gear.Sprint, "go held", time, events);
                         }
                         break;
-                    case GestureKind.HoldEnd:
+                    case GestureKind.GoRelease:
                         if (!Accelerating) break;
                         Accelerating = false;
                         releasedAt = time;
                         if (!Dolphin) Shift(Gear.Cruise, "let go before the wave", time, events);
                         break;
-                    case GestureKind.RightPress:
+                    case GestureKind.BackPress:
                         Accelerating = false;
-                        clickPending = pressEligible = false;
-                        if (Gear > Gear.Park) Shift(Gear - 1, "right click", time, events);
+                        if (Gear > Gear.Park) Shift(Gear - 1, "back", time, events);
+                        else Deselect(time, events);
                         break;
-                    case GestureKind.RightHoldBegin:
+                    case GestureKind.BackHoldBegin:
                         Braking = true;
                         Shift(Gear.Park, "brake", time, events);
+                        Deselect(time, events);
                         break;
-                    case GestureKind.RightRelease:
+                    case GestureKind.BackRelease:
                         Braking = false;
                         break;
                 }
-            }
-
-            if (clickPending && time >= pendingUntil)
-            {
-                clickPending = false;
-                Click(s, pendingPoint, time, b, events);
             }
 
             if (Gear == Gear.Sprint && !b.airborne)
@@ -247,14 +225,24 @@ namespace OtterLocomotion
             };
         }
 
-        private void Click(GearSettings s, Vector3 point, float time, in GearBody b, List<ControlEvent> events)
+        private void Click(GearSettings s, in Gesture g, float time, in GearBody b, List<ControlEvent> events)
         {
-            Vector3 to = Flat(point - b.head, Heading);
-            Heading = to;
-            AimPoint = point;
-            aimUntil = time;
+            if (!g.onOtter)
+            {
+                Heading = Flat(g.point - b.head, Heading);
+                AimPoint = g.point;
+                aimUntil = time;
+            }
             if (Gear == Gear.Sprint) return;
-            events.Add(new ControlEvent { kind = ControlEventKind.Kick, time = time, direction = to, strength = Gear == Gear.Park ? s.parkKick : s.swimKick });
+            events.Add(new ControlEvent { kind = ControlEventKind.Kick, time = time, direction = Heading, strength = Gear == Gear.Park ? s.parkKick : s.swimKick });
+        }
+
+        private void Deselect(float time, List<ControlEvent> events)
+        {
+            if (!Selected) return;
+            Selected = false;
+            aimUntil = time;
+            events.Add(new ControlEvent { kind = ControlEventKind.Deselect, time = time });
         }
 
         private void Shift(Gear to, string reason, float time, List<ControlEvent> events)

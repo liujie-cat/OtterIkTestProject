@@ -4,17 +4,33 @@ namespace OtterLocomotion
 {
     /// <summary>
     /// What the controls show, at the pointer's level and drawn over everything as a cursor is: the ring round the otter,
-    /// inside which a press lands on it, green while it is selected; selected, an arrow from the ring to the guide point,
-    /// along the line the head looks down.
+    /// coloured by the state of the controls and swelling a moment at each kick, jump, shift, pick-up and let-go;
+    /// picked up, an arrow in the ring's colour from it to the guide point, along the line the head looks down.
     /// </summary>
     [DefaultExecutionOrder(210)]
     [DisallowMultipleComponent]
     public class ControlsOverlay : MonoBehaviour
     {
         public OtterControls controls;
-        public Color ringColor = new Color(1f, 1f, 1f, 0.6f);
+        [Header("State colours")]
+        [Tooltip("未选中: not picked up, lying parked on its back.")]
+        public Color unselectedColor = new Color(1f, 1f, 1f, 0.6f);
+        [Tooltip("选中: picked up, parked.")]
         public Color selectedColor = new Color(0.3f, 1f, 0.4f, 1f);
-        public Color arrowColor = new Color(1f, 0.92f, 0.016f, 1f);
+        [Tooltip("仰泳: swimming slowly on its back.")]
+        public Color slowColor = new Color(0.25f, 0.8f, 1f, 1f);
+        [Tooltip("巡航: cruising on its belly.")]
+        public Color cruiseColor = new Color(1f, 0.92f, 0.016f, 1f);
+        [Tooltip("海豚冲刺: sprinting, kicking up to the dolphin wave and in it.")]
+        public Color sprintColor = new Color(1f, 0.45f, 0.1f, 1f);
+        [Tooltip("海豚跳: flashed for jumpFlash seconds at a jump.")]
+        public Color jumpColor = new Color(1f, 0.3f, 0.9f, 1f);
+        public float jumpFlash = 0.6f;
+        [Tooltip("How long (s) the ring takes to change colour.")]
+        public float colorTime = 0.15f;
+        [Tooltip("Each kick, jump, shift, pick-up and let-go swells the ring's line to this many times its width, easing back over pulseTime (s).")]
+        public float pulse = 2.5f;
+        public float pulseTime = 0.3f;
         [Tooltip("The ring's line width, the arrow's shaft width and its head's length (m).")]
         public float ringWidth = 0.015f;
         public float width = 0.025f;
@@ -23,6 +39,8 @@ namespace OtterLocomotion
         private const int Segments = 64;
         private LineRenderer ring, shaft, tip;
         private Material material;
+        private Color shown;
+        private float pulsedAt = float.NegativeInfinity, jumpedAt = float.NegativeInfinity;
 
         /// <summary>Everything drawn, for cameras that show only chosen renderers.</summary>
         public Renderer[] Renderers => new Renderer[] { ring, shaft, tip };
@@ -38,6 +56,31 @@ namespace OtterLocomotion
             ring.loop = true;
             shaft = Line("Guide arrow", 2);
             tip = Line("Guide arrow head", 2);
+            shown = unselectedColor;
+        }
+
+        private void OnEnable()
+        {
+            if (controls != null) controls.Control += OnControl;
+        }
+
+        private void OnControl(ControlEvent e)
+        {
+            pulsedAt = Time.time;
+            if (e.kind == ControlEventKind.Jump) jumpedAt = Time.time;
+        }
+
+        private Color StateColor(GearMachine gears)
+        {
+            if (Time.time - jumpedAt < jumpFlash) return jumpColor;
+            if (!gears.Selected) return unselectedColor;
+            return gears.Gear switch
+            {
+                Gear.Park => selectedColor,
+                Gear.Slow => slowColor,
+                Gear.Cruise => cruiseColor,
+                _ => sprintColor,
+            };
         }
 
         private LineRenderer Line(string name, int points)
@@ -65,8 +108,11 @@ namespace OtterLocomotion
             var gears = controls.Gears;
             Vector3 centre = controls.GrabPoint;
             float radius = controls.RingRadius;
-            ring.startColor = ring.endColor = gears.Selected ? selectedColor : ringColor;
-            ring.startWidth = ring.endWidth = ringWidth;
+            Color state = StateColor(gears);
+            shown = colorTime > 0f ? Color.Lerp(shown, state, 1f - Mathf.Exp(-Time.deltaTime / colorTime)) : state;
+            float swell = pulseTime > 0f ? Mathf.Clamp01(1f - (Time.time - pulsedAt) / pulseTime) : 0f;
+            ring.startColor = ring.endColor = shown;
+            ring.startWidth = ring.endWidth = ringWidth * Mathf.Lerp(1f, pulse, swell * swell);
             for (int i = 0; i < Segments; i++)
             {
                 float a = i * (2f * Mathf.PI / Segments);
@@ -86,7 +132,7 @@ namespace OtterLocomotion
             if (length < 1e-3f) return;
             Vector3 neck = to - dir * Mathf.Min(headLength, 0.5f * length);
             shaft.enabled = tip.enabled = true;
-            shaft.startColor = shaft.endColor = tip.startColor = tip.endColor = arrowColor;
+            shaft.startColor = shaft.endColor = tip.startColor = tip.endColor = shown;
             shaft.startWidth = shaft.endWidth = width;
             shaft.SetPosition(0, from);
             shaft.SetPosition(1, neck);
@@ -98,6 +144,7 @@ namespace OtterLocomotion
 
         private void OnDisable()
         {
+            if (controls != null) controls.Control -= OnControl;
             if (ring != null) ring.enabled = false;
             if (shaft != null) shaft.enabled = false;
             if (tip != null) tip.enabled = false;
