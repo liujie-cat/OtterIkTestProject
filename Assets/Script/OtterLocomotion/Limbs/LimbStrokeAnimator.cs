@@ -984,12 +984,14 @@ namespace OtterLocomotion
 
         // The fluke pitches the web into the water it meets, from the way it actually moves through it: the hips' own
         // heave and pitch carry the foot as much as the leg's sweep does, and the web whips behind the ankle, so a beat
-        // timed from the rhythm alone would pitch it out of step with its path and push as much back as on
+        // timed from the rhythm alone would pitch it out of step with its path and push as much back as on. Whipped back
+        // through the water the web goes by how steeply it moves as well, so as the beat turns over it pitches through
+        // level, not over from one stop to the other the moment its slight heave changes sign
         private void FlukePitch(ref Limb l, Vector3 water)
         {
             LevelAxes(l, out var back, out var belly);
             float ahead = -Vector3.Dot(water, back), down = Vector3.Dot(water, belly);
-            float path = Mathf.Atan2(down, Mathf.Max(ahead, 0.02f)) * Mathf.Rad2Deg;
+            float path = Mathf.Atan2(down, Mathf.Max(Mathf.Abs(ahead), 0.02f)) * Mathf.Rad2Deg;
             l.flukePitch = Mathf.Clamp(fluke.feather * path, -fluke.attack, fluke.attack);
         }
 
