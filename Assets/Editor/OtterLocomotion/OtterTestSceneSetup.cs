@@ -405,12 +405,15 @@ namespace OtterLocomotion.EditorTools
         static readonly Dictionary<Type, Component> defaults = new Dictionary<Type, Component>();
 
         // Hidden, inactive instances hold the code defaults (field initializers), compared property by property.
+        // Inactive before the component goes on, so it never wakes, not even when made as Play ends; awake, it would
+        // build what its OnDestroy can only free in Play.
         static Component Defaults(Type type)
         {
             if (defaults.TryGetValue(type, out var c) && c != null) return c;
-            var go = EditorUtility.CreateGameObjectWithHideFlags($"{type.Name} defaults", HideFlags.HideAndDontSave, type);
+            var go = new GameObject($"{type.Name} defaults") { hideFlags = HideFlags.HideAndDontSave };
             go.SetActive(false);
-            c = go.GetComponent(type);
+            c = go.AddComponent(type);
+            c.hideFlags = HideFlags.HideAndDontSave;
             if (defaults.Count == 0)
                 AssemblyReloadEvents.beforeAssemblyReload += () =>
                 {
