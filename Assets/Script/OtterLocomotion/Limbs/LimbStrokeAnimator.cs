@@ -277,13 +277,31 @@ namespace OtterLocomotion
     }
 
     /// <summary>
+    /// A forepaw in the water trails the chest's turning: as the chest swings it round on its shoulder the water holds it
+    /// back, and it catches up as the chest settles, so it lags the chest's turn, bank and pitch by the chest's turning
+    /// rate times lagTime. A stroking paw drives itself; one out of the water, on the chest on the back, rides with it
+    /// and eases back from however far it trailed.
+    /// </summary>
+    [Serializable]
+    public class ForeFollow
+    {
+        public bool enabled = true;
+        [Tooltip("Time constant of a trailing paw easing back to rest on the chest (s).")]
+        public float lagTime = 0.08f;
+        [Tooltip("The most a paw trails the chest (deg).")]
+        public float maxLag = 40f;
+        [Tooltip("Depth over which the wrist goes from out of the water to in it (m), about the paw's thickness.")]
+        public float wetDepth = 0.01f;
+    }
+
+    /// <summary>
     /// Moves the limb IK targets along stroke paths from OtterLocomotionBrain's rhythm: phase and strength per limb,
     /// so the limbs show what the allocation asks of them. Hind feet draw in and kick out on a loop about the hip joint
     /// (HindKick), splay out to either side in a turn (HindTurn), and sprinting prone hold out behind as a fluke
     /// (FlukeStroke); forepaws sweep along the allocated
-    /// force direction, and rest when they have nothing to do: under the chest on the belly, on the chest and belly on
-    /// the back (ChestRest). Paths hang off the
-    /// chest / hip bone, so they follow the spine's bend and roll. After the IK solve the hind flippers are turned at
+    /// force direction in the chest's own frame, and rest when they have nothing to do: under the chest on the belly, on
+    /// the chest and belly on the back (ChestRest); in the water they trail the chest's turning (ForeFollow). Paths hang
+    /// off the chest / hip bone, so they follow the spine's bend and roll. After the IK solve the hind flippers are turned at
     /// the ankle and toes (FlipperPose) to paddle, square through the push and trailing in the flow through the draw;
     /// on the back the forepaws are laid flat on the chest.
     /// Runs after the spine and before the IK solve. While enabled it switches off the older limb drivers that write
@@ -308,6 +326,7 @@ namespace OtterLocomotion
         public FlipperPose flipper = new FlipperPose();
         public StrokeShape foreStroke = new StrokeShape();
         public ChestRest chestRest = new ChestRest();
+        public ForeFollow foreFollow = new ForeFollow();
         [Tooltip("Time constant of a stroke growing in when a limb starts and fading out when it rests (s).")]
         public float sizeTime = 0.1f;
         [Tooltip("Time constant of the written IK targets (s); hides the jump when a new stroke changes direction.")]
@@ -326,6 +345,11 @@ namespace OtterLocomotion
             public Transform paw;
             public Quaternion pawRest;
             public Vector3 palmLocal, fingersLocal;
+            /// <summary>Forepaw: the chest's turn as the water lets the paw follow it (world, ForeFollow) and the chest's
+            /// rotation it was taken against, how far the paw trails it (deg), and how much of the paw is in the water (0..1).</summary>
+            public Quaternion carried, chestBefore;
+            public bool hasCarried;
+            public float lag, wet;
             /// <summary>The chain's root joint (shoulder / hip joint) in girdle space.</summary>
             public Vector3 jointLocal;
             public float length;
@@ -381,6 +405,7 @@ namespace OtterLocomotion
         private Transform chestBone;
         private readonly List<Behaviour> suspended = new List<Behaviour>();
         private AfterLimbIK afterIK;
+        private Water water;
         private bool started;
         /// <summary>The turn the hind kicks follow, -1..1 of a full turn, + = right.</summary>
         private float turn;
@@ -404,6 +429,13 @@ namespace OtterLocomotion
             return l.web != null ? new Vector4(l.turned, l.push, l.width, l.hinge) : Vector4.zero;
         }
 
+        /// <summary>How far a forepaw trails the chest's turning (deg, ForeFollow), and how much of it is in the water (0..1); zeros for a hind foot.</summary>
+        public Vector2 ForeTrail(LimbId limb)
+        {
+            var l = limbs[(int)limb];
+            return OtterRig.IsFore(limb) ? new Vector2(l.lag, l.wet) : Vector2.zero;
+        }
+
         /// <summary>A hind flipper's turn from its rest on the shin as the ankle's flex, evert and splay (deg, Angles); zeros for a forepaw.</summary>
         public Vector3 AnkleAngles(LimbId limb)
         {
@@ -420,6 +452,7 @@ namespace OtterLocomotion
         private void Start()
         {
             Capture();
+            water = FindFirstObjectByType<Water>();
             started = true;
             SuspendOldDrivers();
             FreeKnees(true);
@@ -718,6 +751,7 @@ namespace OtterLocomotion
                 Vector3 goal = RestLocal(i, l) + l.girdle.InverseTransformVector(StrokeOffset(i, l, st, phase));
                 l.currentLocal = Vector3.Lerp(l.currentLocal, goal, blend);
                 l.target.position = l.girdle.TransformPoint(l.currentLocal);
+                if (OtterRig.IsFore((LimbId)i)) Trail(ref l);
                 if (l.pole != null)
                 {
                     KickAxes(l, out var joint, out var back, out var outward, out var belly);
@@ -734,6 +768,31 @@ namespace OtterLocomotion
                     l.push = st.active && l.size > 1e-4f ? set : 0f;
                 }
             }
+        }
+
+        // A forepaw in the water trails the chest's turning (ForeFollow), about the shoulder joint so it keeps its reach:
+        // the water holds it where it was while the chest turns, and it eases back to rest. A stroking paw drives itself,
+        // and one out of the water rides with the chest, keeping how far it trails, so neither going in nor coming out jumps.
+        private void Trail(ref Limb l)
+        {
+            var f = foreFollow;
+            Quaternion chest = l.girdle.rotation;
+            if (!l.hasCarried) l.carried = l.chestBefore = chest;
+            l.hasCarried = true;
+            float depth = water != null ? water.Depth(l.target.position) : (0.5f - brain.Posture.SupineFraction) * f.wetDepth;
+            l.wet = Mathf.Clamp01(0.5f + depth / Mathf.Max(1e-4f, f.wetDepth));
+            float stroking = Mathf.Clamp01(l.size / Mathf.Max(1e-4f, foreStroke.Length(l.length, 0f)));
+            float drag = l.wet * (1f - stroking);
+            Quaternion ride = chest * Quaternion.Inverse(l.chestBefore) * l.carried;
+            Quaternion held = Quaternion.Slerp(ride, l.carried, drag);
+            l.carried = Quaternion.Slerp(held, chest, 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, f.lagTime)));
+            if (!f.enabled) l.carried = chest;
+            if (Quaternion.Angle(l.carried, chest) > f.maxLag) l.carried = Quaternion.RotateTowards(chest, l.carried, f.maxLag);
+            l.chestBefore = chest;
+            Quaternion lag = l.carried * Quaternion.Inverse(chest);
+            l.lag = Quaternion.Angle(Quaternion.identity, lag);
+            Vector3 joint = l.ik.root.bone.position;
+            l.target.position = joint + lag * (l.target.position - joint);
         }
 
         private void PoseFlippers()
@@ -938,17 +997,15 @@ namespace OtterLocomotion
             bool fore = OtterRig.IsFore((LimbId)i);
             if (l.size < 1e-5f && (fore || Fluke < 1e-3f)) return Vector3.zero;
             Vector3 rest = l.girdle.TransformPoint(l.restLocal);
+            KickAxes(l, out var joint, out var back, out var outward, out var belly);
             if (fore)
             {
-                Vector3 up = Vector3.up;
-                Vector3 forward = Vector3.ProjectOnPlane(l.girdle.TransformDirection(l.forwardLocal), up).normalized;
-                Vector3 right = Vector3.Cross(up, forward);
-                float side = Vector3.Dot(rest - l.girdle.position, right) >= 0f ? 1f : -1f;
-                Vector3 power = (forward * st.direction.x + right * st.direction.y).normalized;
-                return foreStroke.Offset(phase, st.powerFraction, power, right * side, up, l.size);
+                // in the chest's own frame, so the stroke turns, banks and pitches with it; the allocation's sideways is the body's right
+                Vector3 right = Vector3.Dot(outward, brain.State.right) >= 0f ? outward : -outward;
+                Vector3 power = (-back * st.direction.x + right * st.direction.y).normalized;
+                return foreStroke.Offset(phase, st.powerFraction, power, outward, -belly, l.size);
             }
 
-            KickAxes(l, out var joint, out var back, out var outward, out var belly);
             Vector3 offset = Vector3.zero;
             if (l.size >= 1e-5f)
             {

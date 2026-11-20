@@ -139,6 +139,10 @@ namespace OtterLocomotion.Testing
             public float[] webWet;
             /// <summary>Per hind foot: how deep its hip joint lies under the surface (cm), NaN without a Water.</summary>
             public float[] hipDepth;
+            /// <summary>Per forepaw (FL, FR), from LimbStrokeAnimator: how far it trails the chest's turning (deg) and how much of it is in the water (0..1).</summary>
+            public float[] foreTrail, foreWet;
+            /// <summary>How fast the chest bone turns in the world (deg/s).</summary>
+            public float chestSpin;
             public Posture posture;
             public float supine, roll, speedTarget, requestedSpeed, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
             public bool allocated;
@@ -190,6 +194,9 @@ namespace OtterLocomotion.Testing
         private bool kickThisFrame, pulseThisFrame;
         private float prevYaw;
         private bool hasPrevYaw;
+        private Quaternion prevChest;
+        private bool hasPrevChest;
+        private static readonly LimbId[] Forepaws = { LimbId.FL, LimbId.FR };
 
         private void Start()
         {
@@ -435,6 +442,14 @@ namespace OtterLocomotion.Testing
             s.webPush = feet.Select(f => webThrust != null && webThrust.isActiveAndEnabled && System.Enum.TryParse<LimbId>(f.name, out var id) ? webThrust.Push(id) : 0f).ToArray();
             s.webWet = feet.Select(f => webThrust != null && webThrust.isActiveAndEnabled && System.Enum.TryParse<LimbId>(f.name, out var id) ? webThrust.Immersion(id) : float.NaN).ToArray();
             s.hipDepth = feet.Select(f => water != null ? water.Depth(f.hipJoint.position) * 100f : float.NaN).ToArray();
+            s.foreTrail = Forepaws.Select(id => animator != null ? animator.ForeTrail(id).x : 0f).ToArray();
+            s.foreWet = Forepaws.Select(id => animator != null ? animator.ForeTrail(id).y : 0f).ToArray();
+            if (chest != null)
+            {
+                s.chestSpin = hasPrevChest ? Quaternion.Angle(prevChest, chest.rotation) / dt : 0f;
+                prevChest = chest.rotation;
+                hasPrevChest = true;
+            }
             // spine bones point +Y toward the head
             s.waist = hip != null && chest != null
                 ? Vector3.SignedAngle(Vector3.ProjectOnPlane(hip.up, Vector3.up), Vector3.ProjectOnPlane(chest.up, Vector3.up), Vector3.up)
@@ -580,6 +595,9 @@ namespace OtterLocomotion.Testing
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_tup,").Append(f.name).Append("_tfwd");
             // the ankle's flex, evert and splay from the web's rest on the shin (deg)
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_flex,").Append(f.name).Append("_evert,").Append(f.name).Append("_splay");
+            // how far each forepaw trails the chest's turning (deg) and how much of it is in the water; the chest's turning rate (deg/s)
+            foreach (var id in Forepaws) sb.Append(',').Append(id).Append("_trail,").Append(id).Append("_pawWet");
+            sb.Append(",chestSpin");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedAsked,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -626,6 +644,8 @@ namespace OtterLocomotion.Testing
                 for (int k = 0; k < s.footWorldUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footWorldUp[k], s.footNormalUp[k]));
                 for (int k = 0; k < s.footToesUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footToesUp[k], s.footToesFwd[k]));
                 foreach (var a in s.ankle) sb.Append(string.Format(ci, ",{0:F1},{1:F1},{2:F1}", a.x, a.y, a.z));
+                for (int k = 0; k < Forepaws.Length; k++) sb.Append(string.Format(ci, ",{0:F1},{1:F2}", s.foreTrail[k], s.foreWet[k]));
+                sb.Append(',').Append(s.chestSpin.ToString("F0", ci));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.requestedSpeed, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
@@ -717,10 +737,32 @@ namespace OtterLocomotion.Testing
                 FootMetrics(sb, idx);
                 PathMetrics(sb, idx);
                 FlukeMetrics(sb, idx);
+                ForeMetrics(sb, idx);
                 BodyMetrics(sb, idx);
             }
             sb.AppendLine($"\nfeel targets met: {passCount}/{checkCount}");
             return sb.ToString();
+        }
+
+        // The forepaws against the chest: how fast the chest turns (95th percentile), how far each paw trails it (95th
+        // percentile and peak), and how much of the time each is in the water.
+        private void ForeMetrics(StringBuilder sb, List<int> idx)
+        {
+            if (animator == null) return;
+            var ci = CultureInfo.InvariantCulture;
+            float P(IEnumerable<float> xs, float q)
+            {
+                var o = xs.OrderBy(x => x).ToList();
+                return o.Count > 0 ? o[Mathf.Clamp(Mathf.RoundToInt(q * (o.Count - 1)), 0, o.Count - 1)] : 0f;
+            }
+            var parts = new List<string>();
+            for (int k = 0; k < Forepaws.Length; k++)
+            {
+                var trail = idx.Select(i => samples[i].foreTrail[k]).ToList();
+                float wet = idx.Count(i => samples[i].foreWet[k] > 0.5f) / (float)idx.Count;
+                parts.Add($"{Forepaws[k]} trails {P(trail, 0.95f).ToString("F1", ci)} deg (peak {trail.Max().ToString("F1", ci)}), in water {wet:P0}");
+            }
+            sb.AppendLine($"  forepaws: chest turning {P(idx.Select(i => samples[i].chestSpin), 0.95f).ToString("F0", ci)} deg/s | {string.Join(" | ", parts)}");
         }
 
         // How the trunk and tail bend side to side: the waist's range and its swing about its own mean (half the 5th..95th
