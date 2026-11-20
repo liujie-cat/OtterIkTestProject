@@ -143,8 +143,8 @@ namespace OtterLocomotion.Testing
             public float[] foreTrail, foreWet;
             /// <summary>Per forepaw, its paddle (LimbStrokeAnimator.ForePaddleState): wrist from the shoulder's rest forward and out (cm), the shoulder blade's reach forward (cm), and how far the paddle is taken up (0..1).</summary>
             public Vector4[] forePaddle;
-            /// <summary>Per forepaw, from LimbStrokeAnimator.ForeRolling: how much of a roll's stroke it takes and how far over to its rest on the chest it is (0..1 each).</summary>
-            public Vector2[] foreRoll;
+            /// <summary>Per forepaw, from LimbStrokeAnimator.ForeRolling: how much of a roll's stroke it takes and how far over to its rest on the chest it is (0..1 each), and its arm's angle about the chest's length in the world (deg).</summary>
+            public Vector3[] foreRoll;
             /// <summary>How fast the chest bone turns in the world (deg/s), and its roll over without the bank (deg, LimbStrokeAnimator.ChestRoll).</summary>
             public float chestSpin, chestOver;
             public Posture posture;
@@ -449,7 +449,7 @@ namespace OtterLocomotion.Testing
             s.foreTrail = Forepaws.Select(id => animator != null ? animator.ForeTrail(id).x : 0f).ToArray();
             s.foreWet = Forepaws.Select(id => animator != null ? animator.ForeTrail(id).y : 0f).ToArray();
             s.forePaddle = Forepaws.Select(id => animator != null ? animator.ForePaddleState(id) : Vector4.zero).ToArray();
-            s.foreRoll = Forepaws.Select(id => animator != null ? animator.ForeRolling(id) : Vector2.zero).ToArray();
+            s.foreRoll = Forepaws.Select(id => animator != null ? animator.ForeRolling(id) : Vector3.zero).ToArray();
             s.chestOver = animator != null ? animator.ChestRoll : 0f;
             if (chest != null)
             {
@@ -607,9 +607,9 @@ namespace OtterLocomotion.Testing
             // each forepaw's paddle: wrist from the shoulder's rest forward and out (cm), the shoulder blade's reach forward (cm), how far it is taken up
             foreach (var id in Forepaws) sb.Append(',').Append(id).Append("_wfwd,").Append(id).Append("_wout,").Append(id).Append("_blade,").Append(id).Append("_paddle");
             sb.Append(",chestSpin");
-            // the chest's roll over without the bank (deg); each forepaw's share of the roll's stroke and how far over to its rest on the chest
+            // the chest's roll over without the bank (deg); each forepaw's share of the roll's stroke, how far over to its rest on the chest, and its arm's angle about the chest's length from straight down (deg)
             sb.Append(",chestOver");
-            foreach (var id in Forepaws) sb.Append(',').Append(id).Append("_roll,").Append(id).Append("_over");
+            foreach (var id in Forepaws) sb.Append(',').Append(id).Append("_roll,").Append(id).Append("_over,").Append(id).Append("_arm");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedAsked,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -660,7 +660,7 @@ namespace OtterLocomotion.Testing
                 foreach (var p in s.forePaddle) sb.Append(string.Format(ci, ",{0:F1},{1:F1},{2:F2},{3:F2}", p.x, p.y, p.z, p.w));
                 sb.Append(',').Append(s.chestSpin.ToString("F0", ci));
                 sb.Append(',').Append(s.chestOver.ToString("F1", ci));
-                foreach (var r in s.foreRoll) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", r.x, r.y));
+                foreach (var r in s.foreRoll) sb.Append(string.Format(ci, ",{0:F2},{1:F2},{2:F1}", r.x, r.y, r.z));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.requestedSpeed, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
@@ -787,8 +787,8 @@ namespace OtterLocomotion.Testing
                 paddles.Add($"{Forepaws[k]} {on.Count / (float)idx.Count:P0} of frames: wrist fwd {on.Min(p => p.x):F1}..{on.Max(p => p.x):F1} out {on.Min(p => p.y):F1}..{on.Max(p => p.y):F1} cm from the shoulder at rest, which its blade takes {on.Min(p => p.z):F1}..{on.Max(p => p.z):F1} cm forward");
             }
             sb.AppendLine("  paddle: " + (paddles.Count > 0 ? string.Join(" | ", paddles) : "none"));
-            // rolling over: how far and how fast the chest goes over, the leading paw's reach while it holds the water,
-            // and when the other has got to its new rest
+            // rolling over: how far and how fast the chest goes over, the leading paw's sweep back through the water against
+            // the roll and its reach, and when the other has got to its new rest
             var rolled = idx.Where(i => samples[i].foreRoll.Any(r => r.x > 0.05f)).ToList();
             if (rolled.Count == 0) return;
             var over = idx.Select(i => Mathf.Abs(samples[i].chestOver)).ToList();
@@ -800,7 +800,24 @@ namespace OtterLocomotion.Testing
                 if (held.Count > 0)
                 {
                     var w = held.Select(i => samples[i].forePaddle[k]).ToList();
-                    roles.Add($"{Forepaws[k]} strokes, holding {(samples[held[held.Count - 1]].t - samples[held[0]].t).ToString("F2", ci)} s from {(samples[held[0]].t - t0).ToString("F2", ci)} s: wrist fwd {w.Min(p => p.x):F1}..{w.Max(p => p.x):F1} out {w.Min(p => p.y):F1}..{w.Max(p => p.y):F1} cm, blade {w.Min(p => p.z):F1}..{w.Max(p => p.z):F1} cm");
+                    // the arm's turn in the world about the chest's length, the way the chest rolls: its longest run back against the roll
+                    var stroke = idx.Where(i => samples[i].foreRoll[k].x > 0.05f).ToList();
+                    float sense = Mathf.Sign(-Mathf.DeltaAngle(samples[stroke[0]].chestOver, samples[stroke[stroke.Count - 1]].chestOver));
+                    float arm = 0f, top = 0f, back = 0f, rolledBack = 0f, chestTurn = 0f, chestTurnTop = 0f;
+                    int backFrom = 0, backTo = 0, topAt = 0;
+                    for (int j = 1; j < stroke.Count; j++)
+                    {
+                        var a = samples[stroke[j - 1]];
+                        var b = samples[stroke[j]];
+                        arm += sense * Mathf.DeltaAngle(a.foreRoll[k].z, b.foreRoll[k].z);
+                        chestTurn -= sense * Mathf.DeltaAngle(a.chestOver, b.chestOver);
+                        if (arm > top) { top = arm; topAt = j; chestTurnTop = chestTurn; }
+                        if (top - arm > back) { back = top - arm; backFrom = topAt; backTo = j; rolledBack = chestTurn - chestTurnTop; }
+                    }
+                    string sweep = back > 0f
+                        ? $"sweeps {back:F0} deg back against the roll in {(samples[stroke[backTo]].t - samples[stroke[backFrom]].t).ToString("F2", ci)} s from {(samples[stroke[backFrom]].t - t0).ToString("F2", ci)} s, the chest rolling {rolledBack:F0} meanwhile"
+                        : "never against the roll";
+                    roles.Add($"{Forepaws[k]} strokes, holding {(samples[held[held.Count - 1]].t - samples[held[0]].t).ToString("F2", ci)} s from {(samples[held[0]].t - t0).ToString("F2", ci)} s, {sweep}, rides {arm:F0} deg with it in all: wrist fwd {w.Min(p => p.x):F1}..{w.Max(p => p.x):F1} out {w.Min(p => p.y):F1}..{w.Max(p => p.y):F1} cm, blade {w.Min(p => p.z):F1}..{w.Max(p => p.z):F1} cm");
                     continue;
                 }
                 float from = samples[idx[0]].foreRoll[k].y, to = samples[idx[idx.Count - 1]].foreRoll[k].y;

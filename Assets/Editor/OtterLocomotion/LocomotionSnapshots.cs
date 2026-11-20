@@ -16,8 +16,9 @@ namespace OtterLocomotion.EditorTools
     /// perspective close-up riding with the hips, and a perspective view held still in the world over the whole strip,
     /// which the otter swims through. Forepaw strips ride with the chest instead, seen from above, from below, where
     /// the paws work under the chest, and from the side outside the turn, where the paddling paw is (rolling over, the
-    /// side it rolls down onto, where the paw taking the roll's stroke is), their close-up perspective from that side a
-    /// little ahead and below, all without the sea. Written to Logs/Snapshots.
+    /// side it rolls down onto, where the paw taking the roll's stroke is), and a slice through the shoulders and
+    /// forepaws seen from ahead along the body, where a roll's sweep round the shoulder shows; their close-up perspective
+    /// from that side a little ahead and below, all without the sea. Written to Logs/Snapshots.
     /// </summary>
     static class LocomotionSnapshots
     {
@@ -53,8 +54,10 @@ namespace OtterLocomotion.EditorTools
             public readonly bool perspective;
             /// <summary>Looking through a pane of the sea from the surface down (a level view).</summary>
             public readonly bool waterline;
+            /// <summary>How far from the camera it draws (m), 0 for all the way.</summary>
+            public readonly float depth;
 
-            public View(string name, Vector3 position, Quaternion rotation, float size, bool perspective, bool waterline = false)
+            public View(string name, Vector3 position, Quaternion rotation, float size, bool perspective, bool waterline = false, float depth = 0f)
             {
                 this.name = name;
                 this.position = position;
@@ -62,6 +65,7 @@ namespace OtterLocomotion.EditorTools
                 this.size = size;
                 this.perspective = perspective;
                 this.waterline = waterline;
+                this.depth = depth;
             }
         }
 
@@ -110,14 +114,14 @@ namespace OtterLocomotion.EditorTools
                 new Shot(5, 1.5f, "05_slow_straight"), new Shot(5, 1.85f, "05_slow_push"),
                 new Shot(5, 1.55f, "05_slow_straight_feet", 8, 0.1f),
                 new Shot(6, 0.3f, "06_slow_turn_a"), new Shot(6, 0.6f, "06_slow_turn_b"),
-                new Shot(8, 0.12f, "08_roll_prone_paws", 8, 0.07f, paws: true), new Shot(8, 0.9f, "08_roll_prone_c"),
+                new Shot(8, 0.11f, "08_roll_prone_paws", 8, 0.05f, paws: true), new Shot(8, 0.9f, "08_roll_prone_c"),
                 new Shot(9, 1.5f, "09_cruise_straight"),
                 new Shot(9, 1.55f, "09_cruise_straight_feet", 8, 0.08f),
                 new Shot(10, 0.3f, "10_cruise_turn_a"), new Shot(10, 0.6f, "10_cruise_turn_b"),
                 new Shot(11, 0.4f, "11_sprint_kick_feet", 8, 0.06f),
                 new Shot(11, 2.4f, "11_sprint_wave_feet", 8, 0.08f),
                 new Shot(11, 3.2f, "11_sprint_wave"),
-                new Shot(15, 0.1f, "15_roll_supine_paws", 8, 0.07f, paws: true),
+                new Shot(15, 0.1f, "15_roll_supine_paws", 8, 0.05f, paws: true),
             },
         };
 
@@ -185,19 +189,26 @@ namespace OtterLocomotion.EditorTools
                 held = Perspective("world", bounds.center + 0.5f * travel, side, Mathf.Max(extent * 0.7f, half));
                 Release();
                 int rows = (shot.frames + Columns - 1) / Columns;
-                sheets = Enumerable.Range(0, 5).Select(_ => new Texture2D(CellWidth * Columns, CellHeight * rows, TextureFormat.RGB24, false)).ToArray();
+                sheets = Enumerable.Range(0, shot.paws ? 6 : 5).Select(_ => new Texture2D(CellWidth * Columns, CellHeight * rows, TextureFormat.RGB24, false)).ToArray();
             }
             if (sheets == null) return;
             // rolling over, the forepaw taking the roll's stroke is on the side the body rolls down onto
             var strokes = otter.GetComponent<LimbStrokeAnimator>();
             if (shot.paws && strokes != null && strokes.RollLead != 0) outsideSign = strokes.RollLead;
             Vector3 center = girdle.TransformPoint(stripCenterLocal);
+            // looking back along the body at a slice through the shoulders and forepaws, from just ahead of them
+            var arms = shot.paws
+                ? OtterRig.FindLimbChains(otter).Where((c, i) => c != null && OtterRig.IsFore((LimbId)i))
+                    .SelectMany(c => new[] { c.root.bone.position, c.end.bone.position }).Select(p => Vector3.Dot(p - center, forward)).DefaultIfEmpty(0f).ToArray()
+                : new[] { 0f };
+            float ahead = arms.Max() + 0.03f, slice = ahead - arms.Min() + 0.03f;
             var close = shot.paws
                 ? new[]
                 {
                     Orthographic("top", center, Vector3.up, forward, extent * 0.3f, extent),
                     Orthographic("below", center, Vector3.down, forward, extent * 0.3f, extent),
                     Orthographic("outside", center, right * outsideSign, Vector3.up, extent * 0.3f, extent),
+                    new View("ahead", center + forward * ahead, Quaternion.LookRotation(-forward, Vector3.up), extent * 0.3f, false, depth: slice),
                 }
                 : new[]
                 {
@@ -284,6 +295,7 @@ namespace OtterLocomotion.EditorTools
                 {
                     cam.orthographic = !views[v].perspective;
                     cam.orthographicSize = views[v].size;
+                    cam.farClipPlane = views[v].depth > 0f ? views[v].depth : 50f;
                     go.transform.SetPositionAndRotation(views[v].position, views[v].rotation);
                     if (views[v].waterline && water != null && seaMaterial != null)
                         pane = WaterPane(views[v], water.SurfaceY, (float)width / height, seaMaterial);

@@ -335,21 +335,23 @@ namespace OtterLocomotion
 
     /// <summary>
     /// Forepaws in a roll over, paced by how far the chest has rolled, as the spine actually rolls it. The paw on the
-    /// side the body rolls down onto takes one big stroke: it reaches out into the water for the catch and holds it
-    /// while the chest rolls over it, so in the chest's frame the arm sweeps round the shoulder from the side facing
-    /// down as the roll starts (the belly, rolling onto the back; the back, rolling onto the belly) to the side facing
-    /// down as it ends, the shoulder blade reaching it out and drawing it back; as the roll settles it comes round the
-    /// side, folding in to its new rest. The paw on the side coming up presses in, its shoulder blade drawn back, and
-    /// is at its new rest by the time the chest is half over.
+    /// side the body rolls down onto takes one big stroke across the roll, in the plane the shoulder turns in about the
+    /// chest's length: reaching out for the catch toward the side facing down as the roll starts (the belly, rolling
+    /// onto the back; the back, rolling onto the belly) and riding round with the chest, it sweeps round the shoulder
+    /// to the side facing down as the roll ends, faster than the chest rolls, so it goes back through the water against
+    /// the roll and pulls the body over; the shoulder blade reaches it out and draws it back. The spine sets off fast
+    /// and slows as it settles, so the sweep is in the later part of the roll, which a shoulder can outrun; as the roll
+    /// settles the paw comes round, folding in to its new rest. The paw on the side coming up presses in, its shoulder
+    /// blade drawn back, and is at its new rest by the time the chest is half over.
     /// </summary>
     [Serializable]
     public class ForeRoll
     {
         public bool enabled = true;
         [Header("Arc round the shoulder: angles from straight out toward the side facing down (deg)")]
-        [Tooltip("Where the arm catches the water, toward the side facing down as the roll starts, and where it finishes, toward the side facing down as it ends.")]
-        public float catchAngle = 45f;
-        public float finishAngle = 45f;
+        [Tooltip("Where the arm catches the water, toward the side facing down as the roll starts, and where it finishes, toward the side facing down as it ends: the sweep between them must outrun the chest's roll through it.")]
+        public float catchAngle = 60f;
+        public float finishAngle = 60f;
         [Tooltip("Where the arm comes round to, toward the belly, as it folds in to its new rest.")]
         public float foldAngle = 70f;
         [Tooltip("How far ahead of the shoulder the wrist reaches at the catch and at the finish (arm lengths).")]
@@ -359,9 +361,10 @@ namespace OtterLocomotion
         public float reach = 0.95f;
         public float foldReach = 0.5f;
         [Header("Pace: shares of the roll (the angle rolled over 180 deg)")]
-        [Tooltip("By when the arm has reached out for its catch, where its sweep finishes, and by when the paw coming up has settled at its new rest.")]
+        [Tooltip("By when the arm has reached out for its catch, where its sweep starts and finishes, and by when the paw coming up has settled at its new rest.")]
         [Range(0.01f, 0.5f)] public float reachBy = 0.15f;
-        [Range(0.3f, 0.95f)] public float finishAt = 0.75f;
+        [Range(0f, 0.8f)] public float sweepFrom = 0.4f;
+        [Range(0.3f, 0.95f)] public float finishAt = 0.85f;
         [Range(0.05f, 1f)] public float settleBy = 0.5f;
         [Tooltip("Roll the chest keeps from the bank into a turn not quite taken out (deg); within it of either posture the roll is over.")]
         public float settled = 10f;
@@ -377,7 +380,7 @@ namespace OtterLocomotion
         /// finish) and how far it has folded in. <paramref name="toBack"/>: rolling onto the back, the belly faces down first.</summary>
         public Vector3 Point(float progress, bool toBack, out float along, out float fold)
         {
-            along = Mathf.SmoothStep(0f, 1f, progress / finishAt);
+            along = Mathf.SmoothStep(0f, 1f, (progress - sweepFrom) / Mathf.Max(1e-3f, finishAt - sweepFrom));
             fold = Mathf.SmoothStep(0f, 1f, (progress - finishAt) / (1f - finishAt));
             float down = toBack ? 1f : -1f;
             float a = Mathf.Lerp(down * Mathf.Lerp(catchAngle, -finishAngle, along), foldAngle, fold) * Mathf.Deg2Rad;
@@ -393,7 +396,7 @@ namespace OtterLocomotion
     /// (FlukeStroke); forepaws paddle round the shoulder, the shoulder blade reaching and drawing it (ForePaddle), and
     /// rest when they have nothing to do: under the chest on the belly, on
     /// the chest and belly on the back (ChestRest); in the water they trail the chest's turning (ForeFollow). Rolling
-    /// over, the paw on the side going down holds the water while the chest rolls over it and the other settles at its
+    /// over, the paw on the side going down sweeps back through the water against the roll and the other settles at its
     /// new rest, both as far as the chest has actually rolled (ForeRoll). Paths hang
     /// off the chest / hip bone, so they follow the spine's bend and roll. After the IK solve the hind flippers are turned at
     /// the ankle and toes (FlipperPose) to paddle, square through the push and trailing in the flow through the draw;
@@ -545,11 +548,16 @@ namespace OtterLocomotion
         /// <summary>While the chest rolls over, the side whose forepaw takes the roll's stroke (-1 left, +1 right); 0 otherwise.</summary>
         public int RollLead => rollingOver ? rollLead : 0;
 
-        /// <summary>How much of a roll's stroke a forepaw is taking (ForeRoll, 0..1), and how far it has gone over to its rest on the chest (0..1); zeros for a hind foot.</summary>
-        public Vector2 ForeRolling(LimbId limb)
+        /// <summary>How much of a roll's stroke a forepaw is taking (ForeRoll, 0..1), how far it has gone over to its rest on
+        /// the chest (0..1), and the arm's angle about the chest's length in the world, shoulder to wrist from straight down
+        /// (deg, the same way round as the chest turns when ChestRoll falls); zeros for a hind foot.</summary>
+        public Vector3 ForeRolling(LimbId limb)
         {
             var l = limbs[(int)limb];
-            return OtterRig.IsFore(limb) ? new Vector2(l.rolling, l.supine) : Vector2.zero;
+            if (!l.valid || !OtterRig.IsFore(limb)) return Vector3.zero;
+            Vector3 axis = l.girdle.TransformDirection(l.forwardLocal);
+            Vector3 arm = Vector3.ProjectOnPlane(l.ik.end.bone.position - l.ik.root.bone.position, axis);
+            return new Vector3(l.rolling, l.supine, Vector3.SignedAngle(Vector3.ProjectOnPlane(-transform.up, axis), arm, axis));
         }
 
         /// <summary>How far a forepaw trails the chest's turning (deg, ForeFollow), and how much of it is in the water (0..1); zeros for a hind foot.</summary>
