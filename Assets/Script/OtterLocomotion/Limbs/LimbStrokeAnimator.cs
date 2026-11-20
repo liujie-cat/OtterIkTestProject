@@ -19,10 +19,10 @@ namespace OtterLocomotion
     {
         [Header("Arc round the shoulder: angles from straight ahead round toward the side (deg)")]
         [Tooltip("Where the sweep catches the water and where it finishes, sculling out at full drive.")]
-        public float catchAngle = 20f;
-        public float finishAngle = 135f;
+        public float catchAngle = 10f;
+        public float finishAngle = 155f;
         [Tooltip("Tilt of the arc's plane from the chest's level down toward the belly (deg).")]
-        public float dip = 35f;
+        public float dip = 25f;
         [Tooltip("How far the push turns the arc round from sculling straight out (deg): back for a thrust, forward for a brake.")]
         public float maxTurnBack = 35f;
         public float maxTurnForward = 45f;
@@ -30,16 +30,16 @@ namespace OtterLocomotion
         [Range(0.1f, 1f)] public float lightAmplitude = 0.5f;
         [Header("Reach: shoulder to wrist over the arm's length")]
         [Tooltip("Stretched through the sweep, folded in close through the recovery.")]
-        public float sweepReach = 0.9f;
+        public float sweepReach = 0.95f;
         public float recoveryReach = 0.5f;
         [Tooltip("How far the sweep bows down toward the belly at its middle, and the recovery comes up in toward the chest (arm lengths).")]
         public float sweepDepth = 0.1f;
         public float recoveryLift = 0.15f;
         [Header("Shoulder blade")]
         [Tooltip("How far it reaches the shoulder forward for the catch and draws it back at the finish, and lifts it at the catch (m).")]
-        public float protract = 0.02f;
-        public float retract = 0.012f;
-        public float lift = 0.008f;
+        public float protract = 0.03f;
+        public float retract = 0.02f;
+        public float lift = 0.012f;
         [Header("Paw")]
         [Tooltip("Share of the recovery at either end over which the paw turns between square and edge-on.")]
         [Range(0.05f, 0.5f)] public float featherTurn = 0.2f;

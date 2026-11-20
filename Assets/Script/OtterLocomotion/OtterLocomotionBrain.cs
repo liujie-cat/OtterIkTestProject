@@ -192,7 +192,7 @@ namespace OtterLocomotion
                 rhythm.Kick(pendingKick.strength);
                 kickPending = false;
             }
-            rhythm.Step(rhythmSettings, allocator, Intent.gait, dt);
+            rhythm.Step(rhythmSettings, allocator, Intent.gait, demand.yawRateTarget, dt);
         }
 
         private LocomotionIntent ReadIntent()

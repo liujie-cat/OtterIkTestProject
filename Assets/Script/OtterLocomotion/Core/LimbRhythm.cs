@@ -34,8 +34,10 @@ namespace OtterLocomotion
         public RhythmProfile hindTogether = new RhythmProfile(0.7f, 3f, 0.25f, 3f);
         [Tooltip("Hind feet taking turns: swimming slowly on the back, and turning on the spot when parked.")]
         public RhythmProfile hindAlternate = new RhythmProfile(0.6f, 2f, 0.25f, 3f);
-        [Tooltip("Forepaws paddling: a slow, full sweep, the outside paw steering a cruise turn round like a single oar.")]
-        public RhythmProfile forePaddle = new RhythmProfile(1.2f, 2.2f, 0.55f, 1.5f);
+        [Tooltip("Forepaws paddling: a slow, full sweep, the outside paw steering a cruise turn round like a single oar. Its rate is set by the turn (foreTurnPerStroke), within these bounds.")]
+        public RhythmProfile forePaddle = new RhythmProfile(0.5f, 1.1f, 0.55f, 1.5f);
+        [Tooltip("Degrees the body is asked to turn for each forepaw stroke. About the arc the paw sweeps round the shoulder, so the paw holds the water while the body swings round it: a turn takes a few big strokes, not a quick patter.")]
+        public float foreTurnPerStroke = 90f;
 
         [Header("Drive = allocated force / full-drive force")]
         [Tooltip("Allocated force (N) at which a limb strokes at full size and rate.")]
@@ -91,8 +93,8 @@ namespace OtterLocomotion
 
     /// <summary>
     /// Per-limb phase oscillators (a small central pattern generator) driven by the allocation: how hard a limb is
-    /// asked to push sets its stroke strength and rate, the force direction sets its stroke direction, fixed when each
-    /// power phase begins. Left and right of a girdle pull toward alternating strokes; the hind feet kick together in
+    /// asked to push sets its stroke strength and a hind foot's rate, the force direction sets its stroke direction,
+    /// fixed when each power phase begins. A forepaw strokes once for so many degrees the body is asked to turn. Left and right of a girdle pull toward alternating strokes; the hind feet kick together in
     /// the gaits on the belly. A limb with nothing to do finishes its cycle and rests; a fresh demand in the late
     /// recovery hurries the rest of it through, and a limb starting from rest pushes immediately, a forepaw once it has
     /// reached forward for its catch. A click's kick
@@ -112,6 +114,7 @@ namespace OtterLocomotion
         private readonly float[] stepPhase = new float[OtterRig.LimbCount];
         /// <summary>Both hind feet were at rest when a kick came, so they kick it together whatever the gait.</summary>
         private bool kickFromRest;
+        private float turnRate;
 
         public void Reset()
         {
@@ -137,8 +140,10 @@ namespace OtterLocomotion
         }
 
         /// <param name="gait">The controls' hind gait: together on the belly, taking turns on the back.</param>
-        public void Step(RhythmSettings s, ControlAllocator allocation, Gait gait, float dt)
+        /// <param name="yawRateTarget">Turn rate the body is asked for (deg/s), which paces the forepaws.</param>
+        public void Step(RhythmSettings s, ControlAllocator allocation, Gait gait, float yawRateTarget, float dt)
         {
+            turnRate = Mathf.Abs(yawRateTarget);
             ref var hindL = ref limbs[(int)LimbId.HL];
             ref var hindR = ref limbs[(int)LimbId.HR];
             // parked, the kick's pair recovers together and comes to rest together
@@ -188,7 +193,7 @@ namespace OtterLocomotion
                 if (!l.active) { l.rate = 0f; continue; }
                 l.parking = !want[i];
                 var profile = Profile(s, i);
-                float rate = Mathf.Lerp(profile.minHz, profile.maxHz, l.drive);
+                float rate = Rate(s, i, l.drive);
                 if (limbs[Partner(i)].active)
                     rate += profile.coupling * Wrap(stepPhase[Partner(i)] - stepPhase[i] - PartnerLead(i));
                 rate = Mathf.Max(0.2f * profile.minHz, rate);
@@ -222,6 +227,14 @@ namespace OtterLocomotion
         private RhythmProfile Profile(RhythmSettings s, int limb) =>
             OtterRig.IsFore((LimbId)limb) ? s.forePaddle : HindTogether ? s.hindTogether : s.hindAlternate;
 
+        /// <summary>Stroke rate (cycles/s) at a drive: a hind foot's by how hard it pushes, a forepaw's by how fast the body is asked to turn.</summary>
+        private float Rate(RhythmSettings s, int limb, float drive)
+        {
+            var profile = Profile(s, limb);
+            if (OtterRig.IsFore((LimbId)limb)) return Mathf.Clamp(turnRate / Mathf.Max(1f, s.foreTurnPerStroke), profile.minHz, profile.maxHz);
+            return Mathf.Lerp(profile.minHz, profile.maxHz, drive);
+        }
+
         /// <summary>How far the partner's phase should run ahead of this limb's (cycles).</summary>
         private float PartnerLead(int limb)
         {
@@ -243,7 +256,7 @@ namespace OtterLocomotion
             if (p.active)
             {
                 float slot = Mathf.Repeat(p.phase - PartnerLead(i), 1f);
-                float rate = Mathf.Max(0.1f, Mathf.Lerp(Profile(s, i).minHz, Profile(s, i).maxHz, l.targetDrive));
+                float rate = Mathf.Max(0.1f, Rate(s, i, l.targetDrive));
                 bool soon = slot < 0.5f * l.powerFraction || (1f - slot) / rate <= s.maxJoinDelay;
                 // a pair starting together has to split up to alternate, so the second one always takes its slot
                 if (soon || startedNow[Partner(i)]) phase = slot;

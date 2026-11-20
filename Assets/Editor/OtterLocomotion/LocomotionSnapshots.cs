@@ -15,7 +15,8 @@ namespace OtterLocomotion.EditorTools
     /// (frames left to right, then the next row): close-ups of the hind feet from above, behind and the left, a
     /// perspective close-up riding with the hips, and a perspective view held still in the world over the whole strip,
     /// which the otter swims through. Forepaw strips ride with the chest instead, seen from above, from below, where
-    /// the paws work under the chest, and from the side outside the turn, where the paddling paw is. Written to Logs/Snapshots.
+    /// the paws work under the chest, and from the side outside the turn, where the paddling paw is, their close-up
+    /// perspective from outside the turn a little ahead and below, all without the sea. Written to Logs/Snapshots.
     /// </summary>
     static class LocomotionSnapshots
     {
@@ -88,9 +89,9 @@ namespace OtterLocomotion.EditorTools
             {
                 new Shot(3, 1.70f, "03_slow_circle_push", 8, 1f / 60f),
                 new Shot(3, 4.0f, "03_slow_circle_feet", 8, 0.06f), new Shot(3, 5.0f, "03_slow_circle"),
-                new Shot(6, 3.0f, "06_cruise_circle_paws", 8, 0.07f, paws: true),
+                new Shot(6, 1.5f, "06_cruise_circle_paws", 8, 0.19f, paws: true),
                 new Shot(6, 4.0f, "06_cruise_circle_feet", 8, 0.06f), new Shot(6, 5.0f, "06_cruise_circle"),
-                new Shot(7, 1.2f, "07_cruise_tight_paws", 8, 0.07f, paws: true),
+                new Shot(7, 1.2f, "07_cruise_tight_paws", 8, 0.12f, paws: true),
                 new Shot(7, 2.5f, "07_cruise_tight_feet", 8, 0.06f), new Shot(7, 3.5f, "07_cruise_tight"),
                 new Shot(9, 2.5f, "09_sprint_circle_feet", 8, 0.05f),
             },
@@ -200,7 +201,9 @@ namespace OtterLocomotion.EditorTools
                     Orthographic("back", center, -forward, Vector3.up, extent * 0.3f, extent, waterline: true),
                     Orthographic("left", center, -right, Vector3.up, extent * 0.3f, extent, waterline: true),
                 };
-            var wide = new[] { Perspective("persp", center, aside, extent * 0.45f), held };
+            // the paddling paw from outside the turn, a little ahead and below, where the chest does not hide it
+            Vector3 look = shot.paws ? (right * outsideSign * 0.8f + forward * 0.35f - Vector3.up * 0.25f).normalized : aside;
+            var wide = new[] { Perspective("persp", center, look, extent * 0.45f), held };
             int column = frame % Columns, row = frame / Columns, rowCount = sheets[0].height / CellHeight;
             Render(body, close, CellWidth, CellHeight, (v, tex) => Place(v, tex));
             Render(scene, wide, CellWidth, CellHeight, (v, tex) => Place(close.Length + v, tex));
