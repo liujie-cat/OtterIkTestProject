@@ -923,9 +923,12 @@ namespace OtterLocomotion.Testing
             var fPeak = PeakBy(x => x.surgeForce);
             var yPeak = PeakBy(x => x.swayForce);
             var bPeak = PeakBy(x => x.bank);
-            // how far the body leaned, lying on the belly or the back: not rolling over between them, nor the spine still
-            // turning over after the posture has
-            var level = seq.Where(x => (x.supine < 0.01f || x.supine > 0.99f) && Mathf.Abs(x.chestBank) < 60f && Mathf.Abs(x.hipBank) < 60f).ToList();
+            // how far the body leaned, lying on the belly or the back: not rolling over between them, nor while the spine
+            // follows a roll-over (or the start) through down to the hips
+            const float spineSettle = 1.5f;
+            float start = samples[0].t;
+            var level = seq.Where(x => (x.supine < 0.01f || x.supine > 0.99f) && x.t - start > spineSettle
+                                       && !postureEvents.Any(e => x.t >= e.t && x.t - e.t < spineSettle)).ToList();
             string leaned = level.Count == 0 ? "" :
                 $", leaned chest {level.OrderByDescending(x => Mathf.Abs(x.chestBank)).First().chestBank:F0} hips {level.OrderByDescending(x => Mathf.Abs(x.hipBank)).First().hipBank:F0} deg";
             sb.AppendLine($"  demand: end {last.posture} (supine {last.supine:F2}), speed target {last.speedTarget:F2} asked {last.requestedSpeed:F2}; " +
