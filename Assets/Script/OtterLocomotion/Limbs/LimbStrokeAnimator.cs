@@ -120,11 +120,11 @@ namespace OtterLocomotion
             return mid + half * cos + 0.5f * (bow - fold) * sin + 0.5f * (bow + fold) * (sin * sin);
         }
 
-        /// <summary>Middle of a loop of the given size, in the same frame as Point.</summary>
-        public Vector3 Center(float amplitude)
+        /// <summary>A point on the line from the tucked pose (0) to the stretched one (1) of a loop of the given size, in the same frame as Point.</summary>
+        public Vector3 Along(float amplitude, float t)
         {
             Poses(amplitude, out var tuck, out var stretch);
-            return 0.5f * (tuck + stretch);
+            return Vector3.Lerp(tuck, stretch, t);
         }
 
         // the two poses for a loop size, shrunk toward each other about their middle
@@ -145,8 +145,10 @@ namespace OtterLocomotion
     }
 
     /// <summary>
-    /// Turning, the hind feet kick out to either side: each kick loop swings outward about its own middle, round the
-    /// hip's dorso-ventral axis. The foot on the inside of the turn does the turning: it kicks back and out toward the
+    /// Turning, the hind feet kick out to either side: the hip opens each leg out round its dorso-ventral axis as the
+    /// leg stretches through the push, none of it tucked and all of it stretched, and closes it again through the draw.
+    /// Turned at the hip joint, the foot keeps its reach all round the loop: the leg neither folds up into the hip nor
+    /// runs out of reach. The foot on the inside of the turn does the turning: it kicks back and out toward the
     /// middle of the turn, pushing the hindquarters the other way, so the head comes round. The outside foot kicks
     /// nearly straight back and carries the body on along its path. Turning on the spot, the inside foot's kick swings
     /// on round toward the middle of the turn, sculling the hindquarters around.
@@ -953,11 +955,13 @@ namespace OtterLocomotion
                 float amplitude = Mathf.Max(l.size, LightKick), supine = brain.Posture.SupineFraction;
                 Vector3 p = Vector3.Lerp(hindKick.Point(hindKick.LoopAt(phase, st.powerFraction), amplitude),
                                          backKick.Point(backKick.LoopAt(phase, st.powerFraction), amplitude), supine);
-                Vector3 m = Vector3.Lerp(hindKick.Center(amplitude), backKick.Center(amplitude), supine);
-                // the turn swings the loop out about its own middle, so the leg doesn't swing bodily across the belly
-                float yaw = l.yaw * Mathf.Deg2Rad, cos = Mathf.Cos(yaw), sin = Mathf.Sin(yaw);
+                Vector3 tuck = Vector3.Lerp(hindKick.Along(amplitude, 0f), backKick.Along(amplitude, 0f), supine);
+                Vector3 push = Vector3.Lerp(hindKick.Along(amplitude, 1f), backKick.Along(amplitude, 1f), supine) - tuck;
+                // the turn opens the leg out at the hip as it stretches (HindTurn), from none tucked to all of it stretched
+                float opened = Mathf.SmoothStep(0f, 1f, Vector3.Dot(p - tuck, push) / Mathf.Max(1e-6f, push.sqrMagnitude));
+                float yaw = l.yaw * opened * Mathf.Deg2Rad, cos = Mathf.Cos(yaw), sin = Mathf.Sin(yaw);
                 Vector3 swungBack = back * cos + outward * sin, swungOut = outward * cos - back * sin;
-                Vector3 ankle = joint + l.length * (back * m.x + outward * m.y + belly * p.z + swungBack * (p.x - m.x) + swungOut * (p.y - m.y));
+                Vector3 ankle = joint + l.length * (swungBack * p.x + swungOut * p.y + belly * p.z);
                 offset = (ankle - rest) * KickEngagement(l.size);
             }
             // the kick's loop runs up ahead of the hip, far from the fluke's line behind it, so it gives way early
