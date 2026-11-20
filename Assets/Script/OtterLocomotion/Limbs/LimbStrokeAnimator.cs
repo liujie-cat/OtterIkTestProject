@@ -334,12 +334,67 @@ namespace OtterLocomotion
     }
 
     /// <summary>
+    /// Forepaws in a roll over, paced by how far the chest has rolled, as the spine actually rolls it. The paw on the
+    /// side the body rolls down onto takes one big stroke: it reaches out into the water for the catch and holds it
+    /// while the chest rolls over it, so in the chest's frame the arm sweeps round the shoulder from the side facing
+    /// down as the roll starts (the belly, rolling onto the back; the back, rolling onto the belly) to the side facing
+    /// down as it ends, the shoulder blade reaching it out and drawing it back; as the roll settles it comes round the
+    /// side, folding in to its new rest. The paw on the side coming up presses in, its shoulder blade drawn back, and
+    /// is at its new rest by the time the chest is half over.
+    /// </summary>
+    [Serializable]
+    public class ForeRoll
+    {
+        public bool enabled = true;
+        [Header("Arc round the shoulder: angles from straight out toward the side facing down (deg)")]
+        [Tooltip("Where the arm catches the water, toward the side facing down as the roll starts, and where it finishes, toward the side facing down as it ends.")]
+        public float catchAngle = 45f;
+        public float finishAngle = 45f;
+        [Tooltip("Where the arm comes round to, toward the belly, as it folds in to its new rest.")]
+        public float foldAngle = 70f;
+        [Tooltip("How far ahead of the shoulder the wrist reaches at the catch and at the finish (arm lengths).")]
+        public float catchForward = 0.35f;
+        public float finishForward = -0.1f;
+        [Tooltip("Shoulder to wrist over the arm's length through the sweep, and folded in at its new rest.")]
+        public float reach = 0.95f;
+        public float foldReach = 0.5f;
+        [Header("Pace: shares of the roll (the angle rolled over 180 deg)")]
+        [Tooltip("By when the arm has reached out for its catch, where its sweep finishes, and by when the paw coming up has settled at its new rest.")]
+        [Range(0.01f, 0.5f)] public float reachBy = 0.15f;
+        [Range(0.3f, 0.95f)] public float finishAt = 0.75f;
+        [Range(0.05f, 1f)] public float settleBy = 0.5f;
+        [Tooltip("Roll the chest keeps from the bank into a turn not quite taken out (deg); within it of either posture the roll is over.")]
+        public float settled = 10f;
+        [Tooltip("Time constant of the stroke taking hold and letting go (s): the chest rolls fastest as it sets off.")]
+        public float holdTime = 0.04f;
+
+        /// <summary>How much of the stroke the leading paw is taking at a share of the roll: reaching out, then folding in.</summary>
+        public float Hold(float progress) =>
+            Mathf.SmoothStep(0f, 1f, progress / reachBy) * (1f - Mathf.SmoothStep(0f, 1f, (progress - finishAt) / (1f - finishAt)));
+
+        /// <summary>The leading wrist's direction from the shoulder at a share of the roll, in the shoulder's frame (x forward,
+        /// y out, z toward the belly) and over the arm's length; how far round the sweep it is (0 at the catch, 1 at the
+        /// finish) and how far it has folded in. <paramref name="toBack"/>: rolling onto the back, the belly faces down first.</summary>
+        public Vector3 Point(float progress, bool toBack, out float along, out float fold)
+        {
+            along = Mathf.SmoothStep(0f, 1f, progress / finishAt);
+            fold = Mathf.SmoothStep(0f, 1f, (progress - finishAt) / (1f - finishAt));
+            float down = toBack ? 1f : -1f;
+            float a = Mathf.Lerp(down * Mathf.Lerp(catchAngle, -finishAngle, along), foldAngle, fold) * Mathf.Deg2Rad;
+            var dir = new Vector3(Mathf.Lerp(catchForward, finishForward, along), Mathf.Cos(a), Mathf.Sin(a)).normalized;
+            return dir * Mathf.Lerp(reach, foldReach, fold);
+        }
+    }
+
+    /// <summary>
     /// Moves the limb IK targets along stroke paths from OtterLocomotionBrain's rhythm: phase and strength per limb,
     /// so the limbs show what the allocation asks of them. Hind feet draw in and kick out on a loop about the hip joint
     /// (HindKick), splay out to either side in a turn (HindTurn), and sprinting prone hold out behind as a fluke
     /// (FlukeStroke); forepaws paddle round the shoulder, the shoulder blade reaching and drawing it (ForePaddle), and
     /// rest when they have nothing to do: under the chest on the belly, on
-    /// the chest and belly on the back (ChestRest); in the water they trail the chest's turning (ForeFollow). Paths hang
+    /// the chest and belly on the back (ChestRest); in the water they trail the chest's turning (ForeFollow). Rolling
+    /// over, the paw on the side going down holds the water while the chest rolls over it and the other settles at its
+    /// new rest, both as far as the chest has actually rolled (ForeRoll). Paths hang
     /// off the chest / hip bone, so they follow the spine's bend and roll. After the IK solve the hind flippers are turned at
     /// the ankle and toes (FlipperPose) to paddle, square through the push and trailing in the flow through the draw;
     /// the forepaws are turned square through their sweep and edge-on through the recovery, and on the back laid flat on the chest.
@@ -366,6 +421,7 @@ namespace OtterLocomotion
         public ForePaddle forePaddle = new ForePaddle();
         public ChestRest chestRest = new ChestRest();
         public ForeFollow foreFollow = new ForeFollow();
+        public ForeRoll foreRoll = new ForeRoll();
         [Tooltip("Time constant of a stroke growing in when a limb starts and fading out when it rests (s).")]
         public float sizeTime = 0.1f;
         [Tooltip("Time constant of the written IK targets (s); hides the jump when a new stroke changes direction.")]
@@ -392,9 +448,11 @@ namespace OtterLocomotion
             /// <summary>Forepaw: the shoulder blade (the chain root's parent, below the chest) and its rest; null without one.</summary>
             public Transform blade;
             public Quaternion bladeRest;
-            /// <summary>Forepaw paddling: where the wrist is going round the arc (world), and how square the paw is to it (ForePaddle.Square).</summary>
+            /// <summary>Forepaw paddling or in the roll's stroke: where the wrist is going round the arc (world), and how square the paw is to it (ForePaddle.Square).</summary>
             public Vector3 sweep;
             public float square;
+            /// <summary>Forepaw: how far it has gone over to its rest on the chest (0..1, ChestRest), and how much of a roll's stroke it is taking (ForeRoll).</summary>
+            public float supine, rolling;
             /// <summary>The chain's root joint (shoulder / hip joint) in girdle space.</summary>
             public Vector3 jointLocal;
             public float length;
@@ -454,6 +512,13 @@ namespace OtterLocomotion
         private bool started;
         /// <summary>The turn the hind kicks follow, -1..1 of a full turn, + = right.</summary>
         private float turn;
+        /// <summary>The roll over (ForeRoll): the posture it goes to, whether the chest is still on its way there, how far
+        /// it has gone (0..1), which side leads (-1 left, +1 right, 0 not yet known), and how much of its stroke is under way.</summary>
+        private Posture rollTo;
+        private bool rollingOver;
+        private float rollProgress = 1f;
+        private int rollLead;
+        private float rolling;
 
         public bool HasLimbs => limbs.Any(l => l.valid);
 
@@ -472,6 +537,19 @@ namespace OtterLocomotion
         {
             var l = limbs[(int)limb];
             return l.web != null ? new Vector4(l.turned, l.push, l.width, l.hinge) : Vector4.zero;
+        }
+
+        /// <summary>The chest's roll over from the belly as the spine rolls it, without its bank into a turn (deg, + = right side down): 0 on the belly, ±180 on the back.</summary>
+        public float ChestRoll { get; private set; }
+
+        /// <summary>While the chest rolls over, the side whose forepaw takes the roll's stroke (-1 left, +1 right); 0 otherwise.</summary>
+        public int RollLead => rollingOver ? rollLead : 0;
+
+        /// <summary>How much of a roll's stroke a forepaw is taking (ForeRoll, 0..1), and how far it has gone over to its rest on the chest (0..1); zeros for a hind foot.</summary>
+        public Vector2 ForeRolling(LimbId limb)
+        {
+            var l = limbs[(int)limb];
+            return OtterRig.IsFore(limb) ? new Vector2(l.rolling, l.supine) : Vector2.zero;
         }
 
         /// <summary>How far a forepaw trails the chest's turning (deg, ForeFollow), and how much of it is in the water (0..1); zeros for a hind foot.</summary>
@@ -680,7 +758,7 @@ namespace OtterLocomotion
 
         // a forepaw on the back lies on the chest; rolling over, it moves between there and its rest under the chest
         private Vector3 RestLocal(int i, in Limb l) =>
-            OtterRig.IsFore((LimbId)i) && chestRest.enabled ? Vector3.Lerp(l.restLocal, l.chestLocal, brain.Posture.SupineFraction) : l.restLocal;
+            OtterRig.IsFore((LimbId)i) && chestRest.enabled ? Vector3.Lerp(l.restLocal, l.chestLocal, l.supine) : l.restLocal;
 
         // The web's normal from the skinned mesh, signed to the face that is dorsal with the leg trailing at rest. Its
         // width runs across the toes.
@@ -741,15 +819,15 @@ namespace OtterLocomotion
         private void PosePaws()
         {
             if (!isActiveAndEnabled || brain == null || !brain.HasLimbGeometry) return;
-            float supine = chestRest.enabled ? brain.Posture.SupineFraction : 0f;
             float inward = chestRest.inward * Mathf.Deg2Rad;
             for (int i = 0; i < OtterRig.LimbCount; i++)
             {
                 ref var l = ref limbs[i];
                 if (!l.valid || l.paw == null) continue;
                 if (!l.ik.alignEndRotation) l.paw.localRotation = l.pawRest;
-                float engaged = PaddleEngagement(l.size);
+                float engaged = Mathf.Max(PaddleEngagement(l.size), l.rolling);
                 if (engaged > 1e-3f && l.sweep.sqrMagnitude > 1e-12f) l.paw.rotation = Quaternion.Slerp(l.paw.rotation, Feathered(l), engaged);
+                float supine = chestRest.enabled ? l.supine * (1f - l.rolling) : 0f;
                 if (supine < 1e-3f) continue;
                 Vector3 fwd = l.girdle.TransformDirection(l.forwardLocal).normalized;
                 Vector3 dorsal = Vector3.ProjectOnPlane(l.girdle.TransformDirection(l.upLocal), fwd).normalized;
@@ -825,6 +903,7 @@ namespace OtterLocomotion
             float turnGoal = Mathf.Clamp(demand.yawRateTarget / Mathf.Max(1f, hindTurn.fullTurnRate), -1f, 1f);
             turn = Mathf.Lerp(turn, turnGoal, 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, hindTurn.response)));
             float travel = Mathf.Clamp01(demand.speedTarget / Mathf.Max(1e-3f, hindTurn.travelSpeedBL * brain.Parameters.bodyLength));
+            Roll();
             for (int i = 0; i < OtterRig.LimbCount; i++)
             {
                 ref var l = ref limbs[i];
@@ -833,8 +912,12 @@ namespace OtterLocomotion
                 var st = brain.Rhythm.limbs[i];
                 l.size = Mathf.Lerp(l.size, TargetSize(i, l, st), grow);
                 if (!fore) l.yaw = KickYaw(l, travel);
+                else RollOver(i, ref l);
                 float phase = st.active ? Mathf.Repeat(st.phase + st.rate * ahead, 1f) : 0f;
                 Vector3 goal = RestLocal(i, l) + l.girdle.InverseTransformVector(StrokeOffset(i, l, st, phase));
+                // rolling over, the roll takes the forepaws from any paddle: the leading one into its stroke, the other to its rest
+                if (fore && rolling > 0f)
+                    goal = Vector3.Lerp(goal, l.rolling > 0f ? l.girdle.InverseTransformPoint(RollWrist(l, rollProgress, out _, out _)) : RestLocal(i, l), rolling);
                 l.currentLocal = Vector3.Lerp(l.currentLocal, goal, blend);
                 l.target.position = l.girdle.TransformPoint(l.currentLocal);
                 if (fore)
@@ -860,13 +943,75 @@ namespace OtterLocomotion
             }
         }
 
-        // The shoulder blade and the elbow set for a forepaw's paddle (ForePaddle), as far as the paw has taken it up, and
-        // which way the wrist is going round the arc, for the paw's set after the IK
+        // The chest's roll over, measured on the chest bone about its own length with its bank into the turn taken out,
+        // and how far it has gone toward the posture asked for, short of what the bank leaves (ForeRoll.settled). A roll
+        // runs from the posture changing until the chest gets there: the spine eases into a bank after the bank asked
+        // for, so in a turn the measure strays by more than that, though nothing rolls over. The side lowest half way
+        // over leads: the one the body rolls down onto, whichever way the spine rolls it.
+        private void Roll()
+        {
+            var c = limbs[(int)LimbId.FL].valid ? limbs[(int)LimbId.FL] : limbs[(int)LimbId.FR];
+            if (!c.valid) return;
+            var r = foreRoll;
+            Vector3 axis = c.girdle.TransformDirection(c.forwardLocal);
+            Vector3 dorsal = Vector3.ProjectOnPlane(c.girdle.TransformDirection(c.upLocal), axis);
+            Vector3 up = Vector3.ProjectOnPlane(transform.up, axis);
+            ChestRoll = Mathf.DeltaAngle(brain.Demand.bankTargetDeg, Vector3.SignedAngle(dorsal, up, axis));
+            float over = Mathf.Abs(ChestRoll);
+            if (brain.Posture.Current != rollTo)
+            {
+                rollTo = brain.Posture.Current;
+                rollingOver = true;
+                rollLead = 0;
+            }
+            float progress = Mathf.Clamp01((rollTo == Posture.Supine ? over : 180f - over) / Mathf.Max(1f, 180f - r.settled));
+            if (rollingOver && (progress >= 1f || !brain.Posture.IsFlipping && progress > r.finishAt)) rollingOver = false;
+            rollProgress = rollingOver ? progress : 1f;
+            if (rollingOver && over > 2f * r.settled && over < 180f - 2f * r.settled) rollLead = ChestRoll > 0f ? 1 : -1;
+            float hold = r.enabled && rollingOver && rollLead != 0 ? r.Hold(rollProgress) : 0f;
+            rolling = Mathf.Lerp(rolling, hold, 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, r.holdTime)));
+        }
+
+        // A forepaw's part in the roll over (ForeRoll), and how far over to its rest on the chest it is: the leading paw
+        // goes over with the chest, the other gets to its new rest early.
+        private void RollOver(int i, ref Limb l)
+        {
+            bool lead = OtterRig.Side((LimbId)i) == rollLead;
+            float over = lead || !foreRoll.enabled ? rollProgress : Mathf.SmoothStep(0f, 1f, rollProgress / foreRoll.settleBy);
+            l.supine = rollTo == Posture.Supine ? over : 1f - over;
+            l.rolling = lead ? rolling : 0f;
+        }
+
+        // The leading forepaw's wrist in the roll's stroke at a share of the roll (ForeRoll.Point), round its shoulder as
+        // the shoulder blade carries it, in the chest's own frame
+        private Vector3 RollWrist(in Limb l, float progress, out float along, out float fold)
+        {
+            KickAxes(l, out var joint, out var back, out var outward, out var belly);
+            Vector3 at = foreRoll.Point(progress, rollTo == Posture.Supine, out along, out fold);
+            Vector3 shoulder = Shoulder(l, joint, back, belly, forePaddle.Shoulder(along) * rolling);
+            return shoulder + l.length * (-back * at.x + outward * at.y + belly * at.z);
+        }
+
+        // The shoulder blade and the elbow set for a forepaw's paddle (ForePaddle) or its part in a roll over (ForeRoll),
+        // as far as the paw has taken them up, and which way the wrist is going round its arc, for the paw's set after the IK
         private void Paddle(int i, ref Limb l, in LimbStroke st, float phase)
         {
             float engaged = PaddleEngagement(l.size);
             KickAxes(l, out var joint, out var back, out var outward, out var belly);
-            Vector3 shoulder = Shoulder(l, joint, back, belly, phase, st.powerFraction, engaged);
+            // rolling over, the leading paw's shoulder blade reaches it out for the catch and draws it back through the
+            // sweep; the other's draws the shoulder back and in
+            Vector3 rollSweep = Vector3.zero;
+            float rollSquare = 0f;
+            Vector2 rollBlade = new Vector2(-forePaddle.retract, 0f);
+            if (l.rolling > 0f)
+            {
+                Vector3 at = RollWrist(l, rollProgress, out float along, out float fold);
+                rollSweep = RollWrist(l, Mathf.Min(1f, rollProgress + 0.01f), out _, out _) - at;
+                rollSquare = 1f - fold;
+                rollBlade = forePaddle.Shoulder(along);
+            }
+            Vector2 o = Vector2.Lerp(forePaddle.Shoulder(ForePaddle.Along(phase, st.powerFraction)) * engaged, rollBlade, rolling);
+            Vector3 shoulder = Shoulder(l, joint, back, belly, o);
             if (l.blade != null)
             {
                 Vector3 pivot = l.blade.position;
@@ -877,25 +1022,27 @@ namespace OtterLocomotion
                 var p = forePaddle;
                 l.pole.localPosition = l.poleRestLocal;
                 Vector3 elbow = shoulder + l.length * (back * p.elbowBack - belly * p.elbowUp + outward * p.elbowOut);
-                l.pole.position = Vector3.Lerp(l.pole.position, elbow, engaged);
+                l.pole.position = Vector3.Lerp(l.pole.position, elbow, Mathf.Max(engaged, l.rolling));
             }
-            l.sweep = engaged > 0f ? StrokeOffset(i, l, st, Mathf.Repeat(phase + 0.01f, 1f)) - StrokeOffset(i, l, st, phase) : Vector3.zero;
-            l.square = forePaddle.Square(phase, st.powerFraction);
+            Vector3 sweep = engaged > 0f ? StrokeOffset(i, l, st, Mathf.Repeat(phase + 0.01f, 1f)) - StrokeOffset(i, l, st, phase) : Vector3.zero;
+            l.sweep = Vector3.Lerp(sweep, rollSweep, l.rolling);
+            l.square = Mathf.Lerp(forePaddle.Square(phase, st.powerFraction), rollSquare, l.rolling);
         }
 
-        // The shoulder as the shoulder blade carries it for the paddle (ForePaddle): reached forward and up for the catch,
-        // drawn back at the finish. It swings on the blade, keeping its distance from where the blade hangs off the chest.
-        private Vector3 Shoulder(in Limb l, Vector3 joint, Vector3 back, Vector3 belly, float phase, float powerFraction, float engaged)
+        // The shoulder as the shoulder blade carries it (ForePaddle.Shoulder: m forward, and up toward the back), e.g.
+        // reached forward and up for a catch, drawn back at the finish. It swings on the blade, keeping its distance from
+        // where the blade hangs off the chest.
+        private static Vector3 Shoulder(in Limb l, Vector3 joint, Vector3 back, Vector3 belly, Vector2 o)
         {
-            if (l.blade == null || engaged <= 0f) return joint;
-            Vector2 o = forePaddle.Shoulder(ForePaddle.Along(phase, powerFraction)) * engaged;
+            if (l.blade == null || o == Vector2.zero) return joint;
             Vector3 pivot = l.blade.position, blade = joint - pivot;
             return pivot + (blade - back * o.x - belly * o.y).normalized * blade.magnitude;
         }
 
         // A forepaw in the water trails the chest's turning (ForeFollow), about the shoulder joint so it keeps its reach:
         // the water holds it where it was while the chest turns, and it eases back to rest. A stroking paw drives itself,
-        // and one out of the water rides with the chest, keeping how far it trails, so neither going in nor coming out jumps.
+        // as both do through a roll over (ForeRoll), and one out of the water rides with the chest, keeping how far it
+        // trails, so neither going in nor coming out jumps.
         private void Trail(ref Limb l)
         {
             var f = foreFollow;
@@ -904,7 +1051,7 @@ namespace OtterLocomotion
             l.hasCarried = true;
             float depth = water != null ? water.Depth(l.target.position) : (0.5f - brain.Posture.SupineFraction) * f.wetDepth;
             l.wet = Mathf.Clamp01(0.5f + depth / Mathf.Max(1e-4f, f.wetDepth));
-            float drag = l.wet * (1f - PaddleEngagement(l.size));
+            float drag = l.wet * (1f - PaddleEngagement(l.size)) * (1f - rolling);
             Quaternion ride = chest * Quaternion.Inverse(l.chestBefore) * l.carried;
             Quaternion held = Quaternion.Slerp(ride, l.carried, drag);
             l.carried = Quaternion.Slerp(held, chest, 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, f.lagTime)));
@@ -1131,7 +1278,8 @@ namespace OtterLocomotion
                 float engaged = PaddleEngagement(l.size);
                 float round = Mathf.Clamp(Mathf.Atan2(-st.direction.x, Mathf.Abs(st.direction.y)) * Mathf.Rad2Deg, -p.maxTurnForward, p.maxTurnBack);
                 Vector3 at = p.Point(phase, st.powerFraction, Mathf.Max(l.size, p.lightAmplitude), round);
-                Vector3 wrist = Shoulder(l, joint, back, belly, phase, st.powerFraction, engaged) + l.length * (-back * at.x + outward * at.y + belly * at.z);
+                Vector3 shoulder = Shoulder(l, joint, back, belly, p.Shoulder(ForePaddle.Along(phase, st.powerFraction)) * engaged);
+                Vector3 wrist = shoulder + l.length * (-back * at.x + outward * at.y + belly * at.z);
                 return (wrist - rest) * engaged;
             }
 

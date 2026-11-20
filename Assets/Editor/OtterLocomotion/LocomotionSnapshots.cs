@@ -15,8 +15,9 @@ namespace OtterLocomotion.EditorTools
     /// (frames left to right, then the next row): close-ups of the hind feet from above, behind and the left, a
     /// perspective close-up riding with the hips, and a perspective view held still in the world over the whole strip,
     /// which the otter swims through. Forepaw strips ride with the chest instead, seen from above, from below, where
-    /// the paws work under the chest, and from the side outside the turn, where the paddling paw is, their close-up
-    /// perspective from outside the turn a little ahead and below, all without the sea. Written to Logs/Snapshots.
+    /// the paws work under the chest, and from the side outside the turn, where the paddling paw is (rolling over, the
+    /// side it rolls down onto, where the paw taking the roll's stroke is), their close-up perspective from that side a
+    /// little ahead and below, all without the sea. Written to Logs/Snapshots.
     /// </summary>
     static class LocomotionSnapshots
     {
@@ -109,14 +110,14 @@ namespace OtterLocomotion.EditorTools
                 new Shot(5, 1.5f, "05_slow_straight"), new Shot(5, 1.85f, "05_slow_push"),
                 new Shot(5, 1.55f, "05_slow_straight_feet", 8, 0.1f),
                 new Shot(6, 0.3f, "06_slow_turn_a"), new Shot(6, 0.6f, "06_slow_turn_b"),
-                new Shot(8, 0.3f, "08_roll_prone_a"), new Shot(8, 0.6f, "08_roll_prone_b"), new Shot(8, 0.9f, "08_roll_prone_c"),
+                new Shot(8, 0.12f, "08_roll_prone_paws", 8, 0.07f, paws: true), new Shot(8, 0.9f, "08_roll_prone_c"),
                 new Shot(9, 1.5f, "09_cruise_straight"),
                 new Shot(9, 1.55f, "09_cruise_straight_feet", 8, 0.08f),
                 new Shot(10, 0.3f, "10_cruise_turn_a"), new Shot(10, 0.6f, "10_cruise_turn_b"),
                 new Shot(11, 0.4f, "11_sprint_kick_feet", 8, 0.06f),
                 new Shot(11, 2.4f, "11_sprint_wave_feet", 8, 0.08f),
                 new Shot(11, 3.2f, "11_sprint_wave"),
-                new Shot(15, 0.3f, "15_roll_supine_a"), new Shot(15, 0.6f, "15_roll_supine_b"),
+                new Shot(15, 0.1f, "15_roll_supine_paws", 8, 0.07f, paws: true),
             },
         };
 
@@ -187,6 +188,9 @@ namespace OtterLocomotion.EditorTools
                 sheets = Enumerable.Range(0, 5).Select(_ => new Texture2D(CellWidth * Columns, CellHeight * rows, TextureFormat.RGB24, false)).ToArray();
             }
             if (sheets == null) return;
+            // rolling over, the forepaw taking the roll's stroke is on the side the body rolls down onto
+            var strokes = otter.GetComponent<LimbStrokeAnimator>();
+            if (shot.paws && strokes != null && strokes.RollLead != 0) outsideSign = strokes.RollLead;
             Vector3 center = girdle.TransformPoint(stripCenterLocal);
             var close = shot.paws
                 ? new[]

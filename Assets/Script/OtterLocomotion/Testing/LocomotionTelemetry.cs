@@ -143,8 +143,10 @@ namespace OtterLocomotion.Testing
             public float[] foreTrail, foreWet;
             /// <summary>Per forepaw, its paddle (LimbStrokeAnimator.ForePaddleState): wrist from the shoulder's rest forward and out (cm), the shoulder blade's reach forward (cm), and how far the paddle is taken up (0..1).</summary>
             public Vector4[] forePaddle;
-            /// <summary>How fast the chest bone turns in the world (deg/s).</summary>
-            public float chestSpin;
+            /// <summary>Per forepaw, from LimbStrokeAnimator.ForeRolling: how much of a roll's stroke it takes and how far over to its rest on the chest it is (0..1 each).</summary>
+            public Vector2[] foreRoll;
+            /// <summary>How fast the chest bone turns in the world (deg/s), and its roll over without the bank (deg, LimbStrokeAnimator.ChestRoll).</summary>
+            public float chestSpin, chestOver;
             public Posture posture;
             public float supine, roll, speedTarget, requestedSpeed, yawRateTarget, surgeForce, swayForce, yawMoment, bank;
             public bool allocated;
@@ -447,6 +449,8 @@ namespace OtterLocomotion.Testing
             s.foreTrail = Forepaws.Select(id => animator != null ? animator.ForeTrail(id).x : 0f).ToArray();
             s.foreWet = Forepaws.Select(id => animator != null ? animator.ForeTrail(id).y : 0f).ToArray();
             s.forePaddle = Forepaws.Select(id => animator != null ? animator.ForePaddleState(id) : Vector4.zero).ToArray();
+            s.foreRoll = Forepaws.Select(id => animator != null ? animator.ForeRolling(id) : Vector2.zero).ToArray();
+            s.chestOver = animator != null ? animator.ChestRoll : 0f;
             if (chest != null)
             {
                 s.chestSpin = hasPrevChest ? Quaternion.Angle(prevChest, chest.rotation) / dt : 0f;
@@ -603,6 +607,9 @@ namespace OtterLocomotion.Testing
             // each forepaw's paddle: wrist from the shoulder's rest forward and out (cm), the shoulder blade's reach forward (cm), how far it is taken up
             foreach (var id in Forepaws) sb.Append(',').Append(id).Append("_wfwd,").Append(id).Append("_wout,").Append(id).Append("_blade,").Append(id).Append("_paddle");
             sb.Append(",chestSpin");
+            // the chest's roll over without the bank (deg); each forepaw's share of the roll's stroke and how far over to its rest on the chest
+            sb.Append(",chestOver");
+            foreach (var id in Forepaws) sb.Append(',').Append(id).Append("_roll,").Append(id).Append("_over");
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedAsked,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -652,6 +659,8 @@ namespace OtterLocomotion.Testing
                 for (int k = 0; k < Forepaws.Length; k++) sb.Append(string.Format(ci, ",{0:F1},{1:F2}", s.foreTrail[k], s.foreWet[k]));
                 foreach (var p in s.forePaddle) sb.Append(string.Format(ci, ",{0:F1},{1:F1},{2:F2},{3:F2}", p.x, p.y, p.z, p.w));
                 sb.Append(',').Append(s.chestSpin.ToString("F0", ci));
+                sb.Append(',').Append(s.chestOver.ToString("F1", ci));
+                foreach (var r in s.foreRoll) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", r.x, r.y));
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.requestedSpeed, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
@@ -778,6 +787,28 @@ namespace OtterLocomotion.Testing
                 paddles.Add($"{Forepaws[k]} {on.Count / (float)idx.Count:P0} of frames: wrist fwd {on.Min(p => p.x):F1}..{on.Max(p => p.x):F1} out {on.Min(p => p.y):F1}..{on.Max(p => p.y):F1} cm from the shoulder at rest, which its blade takes {on.Min(p => p.z):F1}..{on.Max(p => p.z):F1} cm forward");
             }
             sb.AppendLine("  paddle: " + (paddles.Count > 0 ? string.Join(" | ", paddles) : "none"));
+            // rolling over: how far and how fast the chest goes over, the leading paw's reach while it holds the water,
+            // and when the other has got to its new rest
+            var rolled = idx.Where(i => samples[i].foreRoll.Any(r => r.x > 0.05f)).ToList();
+            if (rolled.Count == 0) return;
+            var over = idx.Select(i => Mathf.Abs(samples[i].chestOver)).ToList();
+            float t0 = samples[idx[0]].t;
+            var roles = new List<string>();
+            for (int k = 0; k < Forepaws.Length; k++)
+            {
+                var held = idx.Where(i => samples[i].foreRoll[k].x > 0.5f).ToList();
+                if (held.Count > 0)
+                {
+                    var w = held.Select(i => samples[i].forePaddle[k]).ToList();
+                    roles.Add($"{Forepaws[k]} strokes, holding {(samples[held[held.Count - 1]].t - samples[held[0]].t).ToString("F2", ci)} s from {(samples[held[0]].t - t0).ToString("F2", ci)} s: wrist fwd {w.Min(p => p.x):F1}..{w.Max(p => p.x):F1} out {w.Min(p => p.y):F1}..{w.Max(p => p.y):F1} cm, blade {w.Min(p => p.z):F1}..{w.Max(p => p.z):F1} cm");
+                    continue;
+                }
+                float from = samples[idx[0]].foreRoll[k].y, to = samples[idx[idx.Count - 1]].foreRoll[k].y;
+                int there = idx.FindIndex(i => Mathf.Abs(samples[i].foreRoll[k].y - to) <= 0.1f * Mathf.Abs(to - from));
+                roles.Add($"{Forepaws[k]} settles, {from:F2} -> {to:F2} over to the chest rest, within 10 % at {(there >= 0 ? (samples[idx[there]].t - t0).ToString("F2", ci) : "-")} s");
+            }
+            int half = idx.FindIndex(i => Mathf.Abs(Mathf.Abs(samples[i].chestOver) - over[0]) >= 90f);
+            sb.AppendLine($"  roll: chest {over[0]:F0} -> {over[over.Count - 1]:F0} deg over, half way at {(half >= 0 ? (samples[idx[half]].t - t0).ToString("F2", ci) : "-")} s | {string.Join(" | ", roles)}");
         }
 
         // How the trunk and tail bend side to side: the waist's range and its swing about its own mean (half the 5th..95th
