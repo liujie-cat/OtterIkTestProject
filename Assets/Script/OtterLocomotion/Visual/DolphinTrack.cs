@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using OtterIK.Neo.Experiment;
 using UnityEngine;
@@ -11,9 +12,12 @@ namespace OtterLocomotion
     /// (LimbRhythm's dolphinStrideBL) from crest to crest, and the fluke beats once each time the body swims over one.
     /// Each part of the body passes along the same track in turn. The chest is held on it, the body heaving to its
     /// height against the water's lift (Buoyancy); the spine's joints are pitched so each lies on it at its place along
-    /// the body, an additive provider on the spine harmonizer, whose chain smoothing gives way while the wave is on;
-    /// the head (NeckLook) and the tail (TailRudder) ride it too. The hips go over a crest at a set point of the
-    /// fluke's beat. Adds itself to the harmonizer's providers for this Play.
+    /// the body, and turned, seen from above, onto the way the body's centre came, so in a turn the track bends with
+    /// it and what is behind the centre follows round its curve. An additive provider on the spine harmonizer, whose
+    /// chain smoothing gives way while the wave is on, as do, well into it, the other providers' turns of the spine
+    /// (the aim's and SpineKickSway's); the head
+    /// (NeckLook) and the tail (TailRudder) ride the track too. The hips go over a crest at a set point of the fluke's
+    /// beat. Adds itself to the harmonizer's providers for this Play.
     /// </summary>
     [DefaultExecutionOrder(910)]
     [DisallowMultipleComponent]
@@ -45,10 +49,21 @@ namespace OtterLocomotion
         private Transform[] shadows;
         private Vector3[] restSegment;
         private float hipsAlong;
-        // each shadow's pitch onto the track (deg) about the body's side, in the shadows' root space
-        private float[] pitch = new float[0];
-        private Vector3 side = Vector3.right;
+        // each shadow's pitch onto the track about the body's side and turn about up onto the centre's way (deg), in
+        // the shadows' root space
+        private float[] pitch = new float[0], turn = new float[0];
+        private Vector3 side = Vector3.right, up = Vector3.up;
+        // the way the body's centre came, seen from above (oldest first), a point at least TrailSpacing apart: each
+        // stretch it travelled laid along the heading it had then, so turning on the spot or sliding sideways the body
+        // turns whole; where the centre is on it now, and where it really was last frame
+        private readonly List<Vector3> trail = new List<Vector3>();
+        private Vector3 head, lastCentre;
+        private const float TrailSpacing = 0.01f;
+        private const int TrailPoints = 120;
         private float restFlexibility, restDamping;
+        // the other providers that turn the spine, and their weights
+        private ExpSpinePoseProviderBase[] steering = new ExpSpinePoseProviderBase[0];
+        private float[] steeringWeight = new float[0];
         private bool added;
 
         public override bool Additive => true;
@@ -116,8 +131,12 @@ namespace OtterLocomotion
             }
             hipsAlong = Vector3.Dot(hips, shadows[0].parent.InverseTransformDirection(Heading));
             pitch = new float[n];
+            turn = new float[n];
             restFlexibility = harmonizer.flexibility;
             restDamping = harmonizer.dampingHalfLife;
+            steering = harmonizer.providers.OfType<ExpShadowAimProvider>().Cast<ExpSpinePoseProviderBase>()
+                .Append(GetComponent<SpineKickSway>()).Where(p => p != null).Distinct().ToArray();
+            steeringWeight = steering.Select(p => p.globalWeight).ToArray();
             if (!harmonizer.providers.Contains(this))
             {
                 harmonizer.providers.Add(this);
@@ -130,7 +149,11 @@ namespace OtterLocomotion
             if (shadows == null) return;
             harmonizer.flexibility = restFlexibility;
             harmonizer.dampingHalfLife = restDamping;
+            for (int s = 0; s < steering.Length; s++)
+                if (steering[s] != null) steering[s].globalWeight = steeringWeight[s];
             Array.Clear(pitch, 0, pitch.Length);
+            Array.Clear(turn, 0, turn.Length);
+            trail.Clear();
         }
 
         private void OnDestroy()
@@ -145,16 +168,26 @@ namespace OtterLocomotion
             float w = Weight;
             harmonizer.flexibility = Mathf.Lerp(restFlexibility, waveFlexibility, w);
             harmonizer.dampingHalfLife = Mathf.Lerp(restDamping, waveDamping, w);
+            float giveWay = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.5f, 1f, w));
+            for (int s = 0; s < steering.Length; s++)
+                if (steering[s] != null) steering[s].globalWeight = steeringWeight[s] * (1f - giveWay);
             int n = shadows.Length;
+            Vector3 centre = Flat(transform.TransformPoint(body.centerOfMass));
+            Record(centre);
+            centre = head;
             if (w <= 1e-3f)
             {
                 Array.Clear(pitch, 0, n);
+                Array.Clear(turn, 0, n);
                 return;
             }
             Transform root = shadows[0].parent;
-            Vector3 up = root.InverseTransformDirection(Vector3.up), ahead = root.InverseTransformDirection(Heading);
+            up = root.InverseTransformDirection(Vector3.up);
+            Vector3 ahead = root.InverseTransformDirection(Heading);
             side = Vector3.Cross(up, ahead).normalized;
             float phase = Phase(Time.time), chest = Wave(0f, phase);
+            // how far ahead of the chest the centre is along the body (m; behind it, so negative)
+            float centreAlong = Vector3.Dot(lastCentre - Flat(shadows[n - 1].position), Heading);
             // from the chest back, each joint where the track runs at its place along the body, as far off it as at
             // rest, its segment from the joint ahead keeping its length: the joint's shadow ahead turns the segment there
             Vector3 restAt = Vector3.zero;
@@ -175,11 +208,52 @@ namespace OtterLocomotion
                 y = restHeight + Wave(to, phase) - chest;
                 Vector3 laid = ahead * (to - along) + up * (y - height) + side * across;
                 pitch[i + 1] = w * Vector3.SignedAngle(segment, laid, side);
+                // and seen from above, from where the centre was at the joint ahead's place behind it to where it was at this one's
+                Vector3 back = Behind(centre, centreAlong - to) - Behind(centre, centreAlong - along), restBack = Flat(root.TransformDirection(segment));
+                turn[i + 1] = back.sqrMagnitude > 1e-10f && restBack.sqrMagnitude > 1e-10f ? w * Vector3.SignedAngle(restBack, back, Vector3.up) : 0f;
                 along = to;
                 height = y;
             }
             // the hips' own bone, which carries the tail and legs, along the track there
             pitch[0] = w * Vector3.SignedAngle(-ahead, -ahead - up * Slope(along, phase), side);
+            Vector3 hipsWay = Behind(centre, centreAlong - along + 2f * TrailSpacing) - Behind(centre, centreAlong - along - 2f * TrailSpacing);
+            turn[0] = hipsWay.sqrMagnitude > 1e-10f ? w * Vector3.SignedAngle(-Heading, hipsWay, Vector3.up) : 0f;
+        }
+
+        private static Vector3 Flat(Vector3 v) => new Vector3(v.x, 0f, v.z);
+
+        // the centre's way on from where it really is, a point each TrailSpacing at least, the oldest let go; afresh
+        // after a jump
+        private void Record(Vector3 at)
+        {
+            float step = Vector3.Distance(at, lastCentre);
+            lastCentre = at;
+            if (trail.Count == 0 || step > 0.5f)
+            {
+                trail.Clear();
+                head = at;
+                trail.Add(head);
+                return;
+            }
+            head += Heading * step;
+            if ((head - trail[trail.Count - 1]).sqrMagnitude >= TrailSpacing * TrailSpacing) trail.Add(head);
+            if (trail.Count > TrailPoints) trail.RemoveAt(0);
+        }
+
+        // where the centre was, seen from above, a distance back along its way from where it is now; ahead of it along
+        // the heading, and straight back past the oldest point
+        private Vector3 Behind(Vector3 at, float distance)
+        {
+            if (distance < 0f) return at - Heading * distance;
+            Vector3 p = at;
+            for (int j = trail.Count - 1; j >= 0 && distance > 0f; j--)
+            {
+                float d = Vector3.Distance(p, trail[j]);
+                if (d >= distance) return Vector3.Lerp(p, trail[j], distance / d);
+                distance -= d;
+                p = trail[j];
+            }
+            return p - Heading * Mathf.Max(0f, distance);
         }
 
         // the body held to the track's height at the chest, in the water's place, after Buoyancy has pushed for the step
@@ -202,8 +276,8 @@ namespace OtterLocomotion
         {
             targetLocalRot = bindLocalRot;
             weight = 0f;
-            if (index < 0 || index >= pitch.Length || Mathf.Abs(pitch[index]) < 0.01f) return false;
-            targetLocalRot = Quaternion.AngleAxis(pitch[index], side) * bindLocalRot;
+            if (index < 0 || index >= pitch.Length || (Mathf.Abs(pitch[index]) < 0.01f && Mathf.Abs(turn[index]) < 0.01f)) return false;
+            targetLocalRot = Quaternion.AngleAxis(turn[index], up) * Quaternion.AngleAxis(pitch[index], side) * bindLocalRot;
             weight = 1f;
             return true;
         }
