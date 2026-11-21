@@ -32,6 +32,8 @@ namespace OtterLocomotion
         [Tooltip("Hind feet kicking together: cruising and sprinting on the belly, in the dolphin wave, and a click's kick from rest. The web drives only while it sweeps back faster than the body moves on, so the push is quick and the relaxed draw long.")]
         [FormerlySerializedAs("hind")]
         public RhythmProfile hindTogether = new RhythmProfile(0.7f, 3f, 0.25f, 3f);
+        [Tooltip("Hind feet beating as one fluke in the dolphin wave: a slow, long beat the whole body swings to, not the quick kicks.")]
+        public RhythmProfile dolphin = new RhythmProfile(0.9f, 1.6f, 0.25f, 3f);
         [Tooltip("Hind feet taking turns: swimming slowly on the back, and turning on the spot when parked.")]
         public RhythmProfile hindAlternate = new RhythmProfile(0.6f, 2f, 0.25f, 3f);
         [Tooltip("Forepaws paddling: a slow, full sweep, the outside paw steering a cruise turn round like a single oar. Its rate is set by the turn (foreTurnPerStroke), within these bounds.")]
@@ -113,7 +115,7 @@ namespace OtterLocomotion
         private readonly bool[] startedNow = new bool[OtterRig.LimbCount];
         private readonly float[] stepPhase = new float[OtterRig.LimbCount];
         /// <summary>Both hind feet were at rest when a kick came, so they kick it together whatever the gait.</summary>
-        private bool kickFromRest;
+        private bool kickFromRest, dolphin;
         private float turnRate;
 
         public void Reset()
@@ -149,6 +151,7 @@ namespace OtterLocomotion
             // parked, the kick's pair recovers together and comes to rest together
             if (hindL.kick <= 0f && hindR.kick <= 0f && (gait != Gait.Rest || (!hindL.active && !hindR.active))) kickFromRest = false;
             HindTogether = gait == Gait.ProneTogether || gait == Gait.Dolphin || kickFromRest;
+            dolphin = gait == Gait.Dolphin;
 
             for (int i = 0; i < OtterRig.LimbCount; i++)
             {
@@ -225,7 +228,7 @@ namespace OtterLocomotion
         }
 
         private RhythmProfile Profile(RhythmSettings s, int limb) =>
-            OtterRig.IsFore((LimbId)limb) ? s.forePaddle : HindTogether ? s.hindTogether : s.hindAlternate;
+            OtterRig.IsFore((LimbId)limb) ? s.forePaddle : dolphin ? s.dolphin : HindTogether ? s.hindTogether : s.hindAlternate;
 
         /// <summary>Stroke rate (cycles/s) at a drive: a hind foot's by how hard it pushes, a forepaw's by how fast the body is asked to turn.</summary>
         private float Rate(RhythmSettings s, int limb, float drive)
