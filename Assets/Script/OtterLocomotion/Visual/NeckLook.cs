@@ -9,11 +9,11 @@ namespace OtterLocomotion
     /// neck bends in an arc. On its front it looks where it goes, as far as the neck reaches. On its back it lifts its
     /// head and curls the neck over toward its chest, looking down at its belly, and turns only a little toward the
     /// heading, keeping it in the corner of its eye. How far the chest has rolled over decides between the two, so the
-    /// curl comes and goes with the roll. In the dolphin wave (LimbStrokeAnimator.Fluke) the head rides the wave
-    /// instead of holding level: the neck pitches so the nose rises and dips about the water's surface on the wave's
-    /// beat, ahead of the hips, and the crest runs from the head back along the body; the head points the snout along
-    /// the nose's way through the water, so it bores in nose first as it dips. The neck is set on the chest
-    /// every frame from the skin's rest shape, so it keeps its length whatever moved or regrouped the bones before.
+    /// curl comes and goes with the roll. In the dolphin wave the head rides the track the body swims along
+    /// (DolphinTrack) instead of holding level: the neck pitches to carry the head joint onto it where it is along the
+    /// body, and the head pitches to put the nose onto it further on, so the snout points along the track and bores in
+    /// nose first as it dips. The neck is set on the chest every frame from the skin's rest shape, so it keeps its
+    /// length whatever moved or regrouped the bones before.
     /// </summary>
     [DefaultExecutionOrder(320)]
     [DisallowMultipleComponent]
@@ -42,16 +42,11 @@ namespace OtterLocomotion
 
         [Header("In the dolphin wave")]
         [Tooltip("Found on this object when empty. Without it, or without a Water, the head only looks where it goes.")]
-        public LimbStrokeAnimator animator;
-        [Tooltip("The nose rides up and down about the water's surface: its middle height above the surface, and how far it rises above and dips below that (m).")]
-        public float noseMiddle = 0f;
-        public float noseSwing = 0.03f;
-        [Tooltip("Where in the wave's beat the nose is highest (cycles): ahead of the hips, so a crest runs from the head back along the body to the tail.")]
-        [Range(0f, 1f)] public float noseTop = 0.08f;
-        [Tooltip("Most the neck pitches up or down for it, on top of where it looks (deg).")]
+        public DolphinTrack track;
+        [Tooltip("How far above the track the head joint and the nose ride (m): the track runs along the spine, and the head sits higher on the neck.")]
+        public float rideHeight = 0.02f;
+        [Tooltip("Most the neck pitches up or down to carry the head on the track, and the head from where it looks to put the nose on it, on top of where it looks (deg).")]
         public float maxBob = 40f;
-        [Tooltip("How far behind the nose the head follows its path through the water, as a share of the snout's length (0 = riding with the nose, 1 = through where the nose was), so the snout points down the path and bores in nose first as it dips rather than meeting the water with its chin; and the most the head pitches from where it looks for it (deg).")]
-        [Range(0f, 1f)] public float snoutAlong = 0.6f;
         public float maxTilt = 30f;
 
         /// <summary>Where the neck is told to look (world): ahead along the heading, or at the pointer while guided.</summary>
@@ -67,18 +62,15 @@ namespace OtterLocomotion
         // where the neck points, in the chest's space, from its rest line (+Y, along the spine)
         private Vector3 look = Vector3.up;
         private Water water;
-        // the nose from the head joint at rest, in the chest's space; how far the neck pitches up to carry the head for the
-        // wave, and the head from where it looks to point the snout along its way (deg); the wave's beat (cycles/s) and its
-        // phase last frame
+        // the nose from the head joint at rest, in the chest's space; how far the neck pitches up to carry the head onto
+        // the track, and the head from where it looks to put the nose on it (deg)
         private Vector3 noseRest;
-        private float bob, tilt, beat, lastPhase = -1f;
-        private Rigidbody body;
+        private float bob, tilt;
 
         private void Awake()
         {
             if (controls == null) controls = GetComponent<OtterControls>();
-            if (animator == null) animator = GetComponent<LimbStrokeAnimator>();
-            body = GetComponent<Rigidbody>();
+            if (track == null) track = GetComponent<DolphinTrack>();
         }
 
         // the bones are found by name: SpineDecouplerWithShadows and the old neck controller regroup them as they wake
@@ -146,37 +138,24 @@ namespace OtterLocomotion
             look = Vector3.Slerp(look, Vector3.Slerp(front, back, OnBack), 1f - Mathf.Exp(-followSpeed * dt));
 
             Quaternion full = Quaternion.FromToRotation(Vector3.up, look), head = full;
-            float fluke = animator != null && animator.isActiveAndEnabled ? animator.Fluke : 0f;
-            if (fluke > 1e-3f && water != null && noseRest != Vector3.zero)
+            float wave = track != null && track.isActiveAndEnabled ? track.Weight : 0f;
+            if (wave > 1e-3f && water != null && noseRest != Vector3.zero)
             {
-                float phase = animator.FlukePhase;
-                if (lastPhase >= 0f) beat = Mathf.Lerp(beat, Mathf.Min(4f, Mathf.Repeat(phase - lastPhase, 1f) / dt), 1f - Mathf.Exp(-5f * dt));
-                lastPhase = phase;
-                // the head follows the nose along its path through the water: the neck carries the head joint at the
-                // height the nose had when it was there, and the head pitches from where it looks to put the nose at its
-                // height now, so the snout points down the path and bores in as it dips. Newton steps on each, from
-                // where they were last frame
-                float way = Mathf.Max(0.2f, body != null ? Vector3.ProjectOnPlane(body.velocity, Vector3.up).magnitude : 0f);
-                float behind = snoutAlong * noseRest.magnitude / way * beat;
-                float noseGoal = NoseGoal(phase), headGoal = NoseGoal(phase - behind);
+                // Newton steps on each, from where they were last frame
                 for (int k = 0; k < 2; k++)
                 {
-                    float h = HeadHeight(Pitched(full, bob)), slope = HeadHeight(Pitched(full, bob + 1f)) - h;
-                    if (slope > 1e-5f) bob = Mathf.Clamp(bob + (headGoal - h) / slope, -maxBob, maxBob);
+                    float h = HeadOff(Pitched(full, bob)), slope = HeadOff(Pitched(full, bob + 1f)) - h;
+                    if (slope > 1e-5f) bob = Mathf.Clamp(bob - h / slope, -maxBob, maxBob);
                 }
                 for (int k = 0; k < 2; k++)
                 {
-                    float h = NoseHeight(Pitched(full, bob), Pitched(full, tilt)), slope = NoseHeight(Pitched(full, bob), Pitched(full, tilt + 1f)) - h;
-                    if (slope > 1e-5f) tilt = Mathf.Clamp(tilt + (noseGoal - h) / slope, -maxTilt, maxTilt);
+                    float h = NoseOff(Pitched(full, bob), Pitched(full, tilt)), slope = NoseOff(Pitched(full, bob), Pitched(full, tilt + 1f)) - h;
+                    if (slope > 1e-5f) tilt = Mathf.Clamp(tilt - h / slope, -maxTilt, maxTilt);
                 }
-                head = Pitched(full, fluke * tilt);
-                full = Pitched(full, fluke * bob);
+                head = Pitched(full, wave * tilt);
+                full = Pitched(full, wave * bob);
             }
-            else
-            {
-                bob = tilt = 0f;
-                lastPhase = -1f;
-            }
+            else bob = tilt = 0f;
             Quaternion before = Quaternion.identity;
             Vector3 at = restPosition[0];
             for (int i = 0; i < joints.Length; i++)
@@ -191,9 +170,6 @@ namespace OtterLocomotion
         // The neck's turn pitched up toward the back by deg, about the chest's side axis (+X; +Z is ventral)
         private static Quaternion Pitched(Quaternion full, float deg) => Quaternion.AngleAxis(-deg, Vector3.right) * full;
 
-        // How high the nose rides above the water's surface on the wave's beat (m)
-        private float NoseGoal(float phase) => noseMiddle + noseSwing * Mathf.Cos(2f * Mathf.PI * (phase - noseTop));
-
         // Where the head joint would be, in the chest's space, with the neck turned by full, each joint its share as
         // LateUpdate sets them
         private Vector3 HeadAt(Quaternion full)
@@ -204,9 +180,10 @@ namespace OtterLocomotion
             return at;
         }
 
-        // How high the head joint, and the nose with the head turned by head, would be above the water's surface (m)
-        private float HeadHeight(Quaternion full) => -water.Depth(chest.TransformPoint(HeadAt(full)));
-        private float NoseHeight(Quaternion full, Quaternion head) => -water.Depth(chest.TransformPoint(HeadAt(full) + head * noseRest));
+        // How high the head joint, and the nose with the head turned by head, would be above where they ride on the track (m)
+        private float HeadOff(Quaternion full) => OffTrack(chest.TransformPoint(HeadAt(full)));
+        private float NoseOff(Quaternion full, Quaternion head) => OffTrack(chest.TransformPoint(HeadAt(full) + head * noseRest));
+        private float OffTrack(Vector3 point) => -water.Depth(point) - track.Height(point) - rideHeight;
 
         // A direction in the chest's space from angles off the spine (+Y): to the right (+X) and toward the belly (+Z).
         // Side first turns about the belly axis and then dips, so the side angle holds however far it dips; curl first

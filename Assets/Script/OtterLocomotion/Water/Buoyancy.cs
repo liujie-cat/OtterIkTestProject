@@ -27,6 +27,8 @@ namespace OtterLocomotion
         public float Draft => water != null && skin != null ? water.SurfaceY - body.position.y - skin.Bottom : 0f;
         /// <summary>How hard the water pushes back as the body sinks below its draft (N/m), at the start.</summary>
         public float Stiffness { get; private set; }
+        /// <summary>The water's push up on the body this physics step, its lift less the damping of the bob (N).</summary>
+        public float Push { get; private set; }
 
         private Rigidbody body;
         private Water water;
@@ -113,7 +115,8 @@ namespace OtterLocomotion
             float lift = Submerged / density;
             // the water stills the bob the more of the body is in it
             float damping = 2f * heaveDamping * Mathf.Sqrt(Stiffness * body.mass) * Mathf.Min(1f, lift);
-            body.AddForce(Vector3.up * (body.mass * -Physics.gravity.y * lift - damping * body.velocity.y), ForceMode.Force);
+            Push = body.mass * -Physics.gravity.y * lift - damping * body.velocity.y;
+            body.AddForce(Vector3.up * Push, ForceMode.Force);
         }
     }
 }

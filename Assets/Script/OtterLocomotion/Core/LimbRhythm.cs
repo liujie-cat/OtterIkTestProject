@@ -32,8 +32,10 @@ namespace OtterLocomotion
         [Tooltip("Hind feet kicking together: cruising and sprinting on the belly, in the dolphin wave, and a click's kick from rest. The web drives only while it sweeps back faster than the body moves on, so the push is quick and the relaxed draw long.")]
         [FormerlySerializedAs("hind")]
         public RhythmProfile hindTogether = new RhythmProfile(0.7f, 3f, 0.25f, 3f);
-        [Tooltip("Hind feet beating as one fluke in the dolphin wave: a slow, long beat the whole body swings to, not the quick kicks.")]
-        public RhythmProfile dolphin = new RhythmProfile(0.9f, 1.6f, 0.25f, 3f);
+        [Tooltip("Hind feet beating as one fluke in the dolphin wave: a slow, long beat the whole body swims along, once for each stride (dolphinStrideBL) at the speed it is asked for, within these rates, however hard it pushes.")]
+        public RhythmProfile dolphin = new RhythmProfile(0.4f, 1.6f, 0.25f, 3f);
+        [Tooltip("How far the body swims for each beat of the dolphin wave (body lengths): the wave's length through the water, which the whole body follows (DolphinTrack).")]
+        public float dolphinStrideBL = 2.5f;
         [Tooltip("Hind feet taking turns: swimming slowly on the back, and turning on the spot when parked.")]
         public RhythmProfile hindAlternate = new RhythmProfile(0.6f, 2f, 0.25f, 3f);
         [Tooltip("Forepaws paddling: a slow, full sweep, the outside paw steering a cruise turn round like a single oar. Its rate is set by the turn (foreTurnPerStroke), within these bounds.")]
@@ -116,7 +118,7 @@ namespace OtterLocomotion
         private readonly float[] stepPhase = new float[OtterRig.LimbCount];
         /// <summary>Both hind feet were at rest when a kick came, so they kick it together whatever the gait.</summary>
         private bool kickFromRest, dolphin;
-        private float turnRate;
+        private float turnRate, strideRate;
 
         public void Reset()
         {
@@ -143,9 +145,12 @@ namespace OtterLocomotion
 
         /// <param name="gait">The controls' hind gait: together on the belly, taking turns on the back.</param>
         /// <param name="yawRateTarget">Turn rate the body is asked for (deg/s), which paces the forepaws.</param>
-        public void Step(RhythmSettings s, ControlAllocator allocation, Gait gait, float yawRateTarget, float dt)
+        /// <param name="strides">Strides of the dolphin wave each second at the speed the body is asked for, or swims at
+        /// when faster, which pace the fluke: the wave runs on through the water while the body gathers way.</param>
+        public void Step(RhythmSettings s, ControlAllocator allocation, Gait gait, float yawRateTarget, float strides, float dt)
         {
             turnRate = Mathf.Abs(yawRateTarget);
+            strideRate = strides;
             ref var hindL = ref limbs[(int)LimbId.HL];
             ref var hindR = ref limbs[(int)LimbId.HR];
             // parked, the kick's pair recovers together and comes to rest together
@@ -201,9 +206,10 @@ namespace OtterLocomotion
                     rate += profile.coupling * Wrap(stepPhase[Partner(i)] - stepPhase[i] - PartnerLead(i));
                 rate = Mathf.Max(0.2f * profile.minHz, rate);
 
+                // a fresh demand hurries the recovery; not the fluke's, which keeps to the wave the body swims along
                 float window = (1f - l.powerFraction) * s.resetWindow;
                 bool freshKick = l.kick > 0f && !l.kicking;
-                if (!l.parking && !startedNow[i] && l.phase >= l.powerFraction && l.phase >= 1f - window &&
+                if (!l.parking && !startedNow[i] && !Fluking(i) && l.phase >= l.powerFraction && l.phase >= 1f - window &&
                     (freshKick || l.targetDrive > l.strokeDrive + s.resetDriveJump || Vector2.Angle(l.targetDirection, l.direction) > s.resetAngleDeg))
                     rate = Mathf.Max(rate, window / Mathf.Max(1e-3f, s.resetTime));
                 l.phase += rate * dt;
@@ -230,11 +236,15 @@ namespace OtterLocomotion
         private RhythmProfile Profile(RhythmSettings s, int limb) =>
             OtterRig.IsFore((LimbId)limb) ? s.forePaddle : dolphin ? s.dolphin : HindTogether ? s.hindTogether : s.hindAlternate;
 
-        /// <summary>Stroke rate (cycles/s) at a drive: a hind foot's by how hard it pushes, a forepaw's by how fast the body is asked to turn.</summary>
+        private bool Fluking(int limb) => dolphin && !OtterRig.IsFore((LimbId)limb);
+
+        /// <summary>Stroke rate (cycles/s) at a drive: a hind foot's by how hard it pushes, or in the dolphin wave by how
+        /// fast the body swims; a forepaw's by how fast the body is asked to turn.</summary>
         private float Rate(RhythmSettings s, int limb, float drive)
         {
             var profile = Profile(s, limb);
             if (OtterRig.IsFore((LimbId)limb)) return Mathf.Clamp(turnRate / Mathf.Max(1f, s.foreTurnPerStroke), profile.minHz, profile.maxHz);
+            if (Fluking(limb)) return Mathf.Clamp(strideRate, profile.minHz, profile.maxHz);
             return Mathf.Lerp(profile.minHz, profile.maxHz, drive);
         }
 

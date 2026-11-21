@@ -42,6 +42,7 @@ namespace OtterLocomotion.EditorTools
             (typeof(HindLegColliders), "后腿碰撞体"),
             (typeof(TailRudder), "尾舵"),
             (typeof(SpineKickSway), "腰部摆动"),
+            (typeof(DolphinTrack), "海豚轨迹"),
             (typeof(NeckLook), "脖子看向"),
             (typeof(WaterReference), "水中参照"),
         };

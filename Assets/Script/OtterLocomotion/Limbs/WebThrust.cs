@@ -12,8 +12,9 @@ namespace OtterLocomotion
     /// sweeping back faster than the body moves forward drives the body on; one dragged forward, a recovery not
     /// feathered edge-on or a foot left trailing, holds it back. Only the part of a web under the water's surface
     /// pushes; out in the air it takes nothing. The push along the body's heading is kept, and the push up and down,
-    /// scaled by heave, so the body heaves on the strokes as Buoyancy floats it; both are more in the dolphin wave;
-    /// OtterControls turns the body, and the physics body does not pitch or roll.
+    /// scaled by heave, so the body heaves on the strokes as Buoyancy floats it; in the dolphin wave the push along is
+    /// more and the one up and down goes, the body held to the wave it swims along (DolphinTrack). OtterControls turns
+    /// the body, and the physics body does not pitch or roll.
     /// </summary>
     [DefaultExecutionOrder(380)]
     [DisallowMultipleComponent]
@@ -34,12 +35,12 @@ namespace OtterLocomotion
                  "follow its path through the bend; a web slanted to that sweep is pushed back and the otter stalls in every " +
                  "turn. Off, the webs move through the water with the body's travel and their own strokes.")]
         public bool sweptByTurn = false;
-        [Tooltip("How hard the webs' push up and down heaves the body (0 = not at all, 1 = as they push), and in the dolphin wave (LimbStrokeAnimator.Fluke), where more stands in for the trunk's own undulation pushing on the water, which only the webs model.")]
+        [Tooltip("How hard the webs' push up and down heaves the body (0 = not at all, 1 = as they push); none in the dolphin wave (LimbStrokeAnimator.Fluke), where the body rides the wave it swims along.")]
         public float heave = 1f;
-        public float waveHeave = 2.5f;
-        [Tooltip("How hard the dolphin wave drives the body on top of the webs, as a share of their push along the heading (0 = the webs alone): it stands in for the trunk's own undulation pushing on the water, which runs down the body through the beat and so is steady, the webs' push averaged over waveSmoothing (s). Without it the wave's slow beat would not hold the sprint.")]
-        public float wavePush = 0.8f;
-        public float waveSmoothing = 0.5f;
+        [Tooltip("How hard the dolphin wave drives the body on top of the webs at full drive (N): the whole body's undulation pushing on the water, which the webs alone do not model and without which the wave's slow beat would not hold the sprint. It surges with each beat, by this share of its mean either way, most as the fluke sweeps down (cycles into the beat), so the body gathers way with every stroke.")]
+        public float wavePush = 1f;
+        [Range(0f, 1f)] public float waveSurge = 0.6f;
+        [Range(0f, 1f)] public float wavePushAt = 0f;
 
         private class Web
         {
@@ -57,8 +58,7 @@ namespace OtterLocomotion
         private Water water;
         private Rigidbody body;
         private Vector3 impulse, force;
-        /// <summary>The webs' push along the heading averaged over waveSmoothing (N).</summary>
-        private float time, webPush;
+        private float time;
         private bool started;
         private Vector3 previousPivot, previousHeading;
 
@@ -116,7 +116,7 @@ namespace OtterLocomotion
         private void OnDisable()
         {
             impulse = force = Vector3.zero;
-            time = webPush = 0f;
+            time = 0f;
         }
 
         private void Setup()
@@ -159,7 +159,7 @@ namespace OtterLocomotion
             // where each web would be had the body only travelled since last frame, not swung round
             Quaternion swing = sweptByTurn || previousHeading == Vector3.zero ? Quaternion.identity : Quaternion.FromToRotation(previousHeading, facing);
             float wave = animator != null && animator.isActiveAndEnabled ? animator.Fluke : 0f;
-            float lifting = Mathf.Lerp(heave, waveHeave, wave), pushed = 0f;
+            float lifting = heave * (1f - wave);
             Vector3 total = Vector3.zero;
             foreach (var w in webs)
             {
@@ -180,11 +180,10 @@ namespace OtterLocomotion
                 Vector3 f = -(waterPush * Mathf.Abs(face) + slicePush * along) * w.area * areaScale * spread * w.wet * face * n;
                 w.push = Vector3.Dot(f, heading);
                 w.lift = f.y;
-                pushed += w.push;
                 total += heading * w.push + Vector3.up * (lifting * w.lift);
             }
-            webPush = Mathf.Lerp(webPush, pushed, 1f - Mathf.Exp(-dt / Mathf.Max(1e-3f, waveSmoothing)));
-            total += heading * (wavePush * wave * Mathf.Max(0f, webPush));
+            if (wave > 0f)
+                total += heading * (wavePush * wave * animator.FlukeDrive * (1f + waveSurge * Mathf.Cos(2f * Mathf.PI * (animator.FlukePhase - wavePushAt))));
             previousPivot = pivot;
             previousHeading = facing;
             impulse += total * dt;

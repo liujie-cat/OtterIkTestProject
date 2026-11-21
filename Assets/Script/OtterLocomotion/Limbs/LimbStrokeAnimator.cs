@@ -212,7 +212,7 @@ namespace OtterLocomotion
     /// Sprinting prone the hind feet stop kicking: the legs stretch out behind along the hips, feet together under the
     /// tail and webs flat side by side, and heave up and down with the spine as one fluke, the feet running behind the
     /// hips like the end of a whip and the webs pitched into the water they meet; the tail keeps out of their way
-    /// (TailRudder). The wave keeps the hind rhythm's beat; SpineKickWave puts it on the spine.
+    /// (TailRudder). The wave keeps the hind rhythm's beat, and the body swims along it (DolphinTrack).
     /// </summary>
     [Serializable]
     public class FlukeStroke
@@ -237,11 +237,6 @@ namespace OtterLocomotion
         public float pitchTime = 0.02f;
         [Tooltip("Web width as a multiple of its rest width.")]
         public float width = 1.3f;
-        [Tooltip("Spine pitch asked for at full drive (deg; the hips 1.5 times this, the chest 0.4), and how far the wave runs behind from chest to hips (rad per joint). The harmonizer's chain stiffness and damping take off about three quarters.")]
-        public float spineAmplitude = 35f;
-        public float spineWaveOffset = 0.8f;
-        [Tooltip("How far behind the beat the spine's wave runs (cycles): the body heaves up and down a little after the webs push, so a later spine puts the hips' crest after the chest's and the wave runs head to tail.")]
-        [Range(0f, 1f)] public float spineLag = 0.25f;
     }
 
     /// <summary>
@@ -906,10 +901,19 @@ namespace OtterLocomotion
             // the hind feet keep one beat when they kick together; the left one's unless it is resting
             var a = brain.Rhythm.limbs[(int)LimbId.HL];
             var b = brain.Rhythm.limbs[(int)LimbId.HR];
-            var lead = a.active ? a : b;
             float drive = Mathf.Max(a.active && !a.parking ? a.drive : 0f, b.active && !b.parking ? b.drive : 0f);
             FlukeDrive = Mathf.Lerp(FlukeDrive, drive, 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, sizeTime)));
-            if (lead.active) FlukePhase = Mathf.Repeat(lead.phase + lead.rate * (Time.time - Time.fixedTime), 1f);
+            FlukePhase = FlukePhaseAt(Time.time);
+        }
+
+        /// <summary>The fluke's beat at a time from this physics step on to the next (cycles): the hind rhythm's phase,
+        /// stepped with physics, run on to it; where it stopped while the hind feet rest.</summary>
+        public float FlukePhaseAt(float time)
+        {
+            if (brain == null) return FlukePhase;
+            var a = brain.Rhythm.limbs[(int)LimbId.HL];
+            var lead = a.active ? a : brain.Rhythm.limbs[(int)LimbId.HR];
+            return lead.active ? Mathf.Repeat(lead.phase + lead.rate * (time - Time.fixedTime), 1f) : FlukePhase;
         }
 
         private void LateUpdate()
