@@ -212,6 +212,10 @@ namespace OtterLocomotion.EditorTools
                 checks.Add(necks.Count == 0
                     ? new Check("旧脖子", Level.Ok, "ExpShadowNeckController 已停用（文件保留），脖子由 NeckLook 摆")
                     : new Check("旧脖子", Level.Fix, $"'{necks[0].name}' 上的 ExpShadowNeckController 还开着，刷新时停用"));
+                int lost = GameObjectUtility.GetMonoBehavioursWithMissingScriptCount(body.gameObject);
+                checks.Add(lost == 0
+                    ? new Check("丢失脚本", Level.Ok, $"'{body.name}' 上没有")
+                    : new Check("丢失脚本", Level.Fix, $"'{body.name}' 上有 {lost} 个脚本已删掉的组件，刷新时移除"));
                 string seaOff = SeaOff();
                 checks.Add(seaOff == null
                     ? new Check("海水", Level.Ok, $"半透明水箱 '{SeaName}'，水面在 {FindSea().GetComponent<Water>().SurfaceY:F2} m")
@@ -318,6 +322,13 @@ namespace OtterLocomotion.EditorTools
                     Undo.RecordObject(neck, "Retire the old neck");
                     neck.enabled = false;
                     Changed($"旧脖子: 停用 '{neck.name}' 上的 ExpShadowNeckController");
+                }
+                int lost = GameObjectUtility.GetMonoBehavioursWithMissingScriptCount(body.gameObject);
+                if (lost > 0)
+                {
+                    Undo.RegisterCompleteObjectUndo(body.gameObject, "Remove missing scripts");
+                    GameObjectUtility.RemoveMonoBehavioursWithMissingScript(body.gameObject);
+                    Changed($"丢失脚本: 移除 '{body.name}' 上 {lost} 个脚本已删掉的组件");
                 }
                 foreach (var (type, title) in Managed)
                 {

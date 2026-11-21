@@ -104,6 +104,15 @@ namespace OtterLocomotion.EditorTools
                 new Shot(7, 2.5f, "07_cruise_tight_feet", 8, 0.06f), new Shot(7, 3.5f, "07_cruise_tight"),
                 new Shot(9, 2.5f, "09_sprint_circle_feet", 8, 0.05f),
             },
+            "dolphin" => new[]
+            {
+                new Shot(4, 2.0f, "04_wave_body", 8, 0.09f, body: true),
+                new Shot(4, 3.0f, "04_wave_feet", 8, 0.06f), new Shot(4, 3.7f, "04_wave"),
+                new Shot(5, 2.5f, "05_sweep_feet", 8, 0.08f),
+                new Shot(6, 0.6f, "06_large_turn_feet", 8, 0.12f),
+                new Shot(6, 1.8f, "06_large_turn_paws", 8, 0.12f, paws: true),
+                new Shot(7, 1.6f, "07_wave_again_body", 8, 0.09f, body: true),
+            },
             "turns" => new[]
             {
                 new Shot(3, 0.15f, "03_park_large_right_feet", 8, 0.08f),

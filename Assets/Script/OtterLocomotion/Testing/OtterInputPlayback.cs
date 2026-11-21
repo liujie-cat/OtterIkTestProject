@@ -172,11 +172,30 @@ namespace OtterLocomotion.Testing
             new Segment("parked: rest", 1.5f, Action.Idle),
         };
 
+        /// <summary>
+        /// The dolphin wave alone: the held go key's sprint into it, a long straight run in it, a gentle sweep it keeps
+        /// the wave through, a large turn it takes on its belly with all four limbs before going back into the wave on
+        /// the new heading, and the glide out of it.
+        /// </summary>
+        public static List<Segment> DolphinScript() => new List<Segment>
+        {
+            new Segment("parked: idle", 1.0f, Action.Idle),
+            new Segment("parked: pick it up, go, slow", 1.5f, Action.Go, 0f),
+            new Segment("slow: go, cruise", 2.0f, Action.Go, 0f),
+            new Segment("cruise: hold go, sprint into the wave", 3.5f, Action.GoHold, 0f),
+            new Segment("sprint: straight in the wave", 4.0f, Action.GoHold, 0f),
+            new Segment("sprint: sweep gently round to the right in the wave", 4.0f, Action.GoHold, 0f, 0f, 30f),
+            new Segment("sprint: large left 140, on the belly", 4.0f, Action.GoHold, -20f),
+            new Segment("sprint: straight on in the wave", 3.0f, Action.GoHold, -20f),
+            new Segment("sprint: let go, glide", 2.5f, Action.Idle),
+        };
+
         public static List<Segment> Script(string name) => name switch
         {
             "turns" => TurnScript(),
             "speeds" => SpeedScript(),
             "circles" => CircleScript(),
+            "dolphin" => DolphinScript(),
             _ => BaselineScript(),
         };
 
