@@ -12,8 +12,8 @@ namespace OtterLocomotion
     /// Each part of the body passes along the same track in turn. The chest is held on it, the body heaving to its
     /// height against the water's lift (Buoyancy); the spine's joints are pitched so each lies on it at its place along
     /// the body, an additive provider on the spine harmonizer, whose chain smoothing gives way while the wave is on;
-    /// the head rides it too (NeckLook). The hips go over a crest at a set point of the fluke's beat. Adds itself to
-    /// the harmonizer's providers for this Play.
+    /// the head (NeckLook) and the tail (TailRudder) ride it too. The hips go over a crest at a set point of the
+    /// fluke's beat. Adds itself to the harmonizer's providers for this Play.
     /// </summary>
     [DefaultExecutionOrder(910)]
     [DisallowMultipleComponent]
@@ -61,6 +61,18 @@ namespace OtterLocomotion
 
         /// <summary>How high above the water's surface the track runs (m) where a point is along the body, now.</summary>
         public float Height(Vector3 point) => middle + Wave(Vector3.Dot(point - shadows[shadows.Length - 1].position, Heading), Phase(Time.time));
+
+        /// <summary>How far the track rises above the hips' line where a point is behind them (m), now, as far as the
+        /// body has gone over to it: the hips lie along the track, so what trails straight back from them lies on it
+        /// once lifted by this much.</summary>
+        public float AboveHipsLine(Vector3 point)
+        {
+            float w = Weight;
+            if (w <= 0f) return 0f;
+            Vector3 chest = shadows[shadows.Length - 1].position, heading = Heading;
+            float phase = Phase(Time.time), hips = Vector3.Dot(shadows[0].position - chest, heading), at = Vector3.Dot(point - chest, heading);
+            return w * (Wave(at, phase) - Wave(hips, phase) - Slope(hips, phase) * (at - hips));
+        }
 
         private Vector3 Heading => Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized;
 
