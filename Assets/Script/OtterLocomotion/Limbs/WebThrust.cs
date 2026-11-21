@@ -11,8 +11,9 @@ namespace OtterLocomotion
     /// face-on share alone, as a hydrofoil is, so the fluke's pitched beat drives as the paddling does. A web
     /// sweeping back faster than the body moves forward drives the body on; one dragged forward, a recovery not
     /// feathered edge-on or a foot left trailing, holds it back. Only the part of a web under the water's surface
-    /// pushes; out in the air it takes nothing. Only the push along the body's heading is kept; OtterControls turns
-    /// the body.
+    /// pushes; out in the air it takes nothing. The push along the body's heading is kept, and with heave the push up
+    /// and down too, so the body heaves on the strokes as Buoyancy floats it; OtterControls turns the body, and the
+    /// physics body does not pitch or roll.
     /// </summary>
     [DefaultExecutionOrder(380)]
     [DisallowMultipleComponent]
@@ -33,6 +34,8 @@ namespace OtterLocomotion
                  "follow its path through the bend; a web slanted to that sweep is pushed back and the otter stalls in every " +
                  "turn. Off, the webs move through the water with the body's travel and their own strokes.")]
         public bool sweptByTurn = false;
+        [Tooltip("Push the body up and down with the webs' push too.")]
+        public bool heave = true;
 
         private class Web
         {
@@ -43,7 +46,7 @@ namespace OtterLocomotion
             public Vector3[] points;
             public float area;
             public bool hasPrevious;
-            public float push, wet;
+            public float push, lift, wet;
         }
 
         private readonly Web[] webs = new Web[2];
@@ -59,6 +62,14 @@ namespace OtterLocomotion
         {
             foreach (var w in webs)
                 if (w != null && w.limb == limb) return w.push;
+            return 0f;
+        }
+
+        /// <summary>A hind web's push on the body upward (N) last frame, applied or not (heave); 0 without one.</summary>
+        public float Lift(LimbId limb)
+        {
+            foreach (var w in webs)
+                if (w != null && w.limb == limb) return w.lift;
             return 0f;
         }
 
@@ -161,7 +172,8 @@ namespace OtterLocomotion
                 // on the share of the web under the surface
                 Vector3 f = -(waterPush * Mathf.Abs(face) + slicePush * along) * w.area * areaScale * spread * w.wet * face * n;
                 w.push = Vector3.Dot(f, heading);
-                total += heading * w.push;
+                w.lift = f.y;
+                total += heading * w.push + (heave ? Vector3.up * w.lift : Vector3.zero);
             }
             previousPivot = pivot;
             previousHeading = facing;

@@ -137,8 +137,8 @@ namespace OtterLocomotion.Testing
             /// <summary>Buoyancy: the share of the skin under the surface, how deep its lowest point lies (cm) and the body's
             /// position above the surface (cm); NaN without it.</summary>
             public float submerged, draft, ride;
-            /// <summary>Per hind foot: WebThrust's push on the body along its heading (N, + = forward), 0 without it.</summary>
-            public float[] webPush;
+            /// <summary>Per hind foot: WebThrust's push on the body along its heading (N, + = forward) and upward (N), 0 without it.</summary>
+            public float[] webPush, webLift;
             /// <summary>Per hind foot: the share of the web under the water's surface (WebThrust), NaN without it.</summary>
             public float[] webWet;
             /// <summary>Per hind foot: how deep its hip joint lies under the surface (cm), NaN without a Water.</summary>
@@ -466,6 +466,7 @@ namespace OtterLocomotion.Testing
             s.tailLift = tail != null && tail.isActiveAndEnabled ? tail.TipLift : float.NaN;
             s.swayBend = sway != null && sway.isActiveAndEnabled ? sway.Bend : float.NaN;
             s.webPush = feet.Select(f => webThrust != null && webThrust.isActiveAndEnabled && System.Enum.TryParse<LimbId>(f.name, out var id) ? webThrust.Push(id) : 0f).ToArray();
+            s.webLift = feet.Select(f => webThrust != null && webThrust.isActiveAndEnabled && System.Enum.TryParse<LimbId>(f.name, out var id) ? webThrust.Lift(id) : 0f).ToArray();
             s.webWet = feet.Select(f => webThrust != null && webThrust.isActiveAndEnabled && System.Enum.TryParse<LimbId>(f.name, out var id) ? webThrust.Immersion(id) : float.NaN).ToArray();
             s.hipDepth = feet.Select(f => water != null ? water.Depth(f.hipJoint.position) * 100f : float.NaN).ToArray();
             s.foreTrail = Forepaws.Select(id => animator != null ? animator.ForeTrail(id).x : 0f).ToArray();
@@ -622,8 +623,9 @@ namespace OtterLocomotion.Testing
             sb.Append(",headTuck,chestBank,hipBank");
             // the share of the skin under the surface; how deep its lowest point lies, cm; the body's position above the surface, cm
             sb.Append(",afloat,draft,ride");
-            // each web's push on the body along its heading, N
+            // each web's push on the body along its heading and upward, N
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wpush");
+            foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wlift");
             // the share of each web under the water's surface; how deep each hip joint lies under it, cm
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wet");
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_hipDepth");
@@ -690,6 +692,7 @@ namespace OtterLocomotion.Testing
                 sb.Append(',').Append(float.IsNaN(s.draft) ? "" : s.draft.ToString("F2", ci));
                 sb.Append(',').Append(float.IsNaN(s.ride) ? "" : s.ride.ToString("F2", ci));
                 foreach (var w in s.webPush) sb.Append(',').Append(w.ToString("F3", ci));
+                foreach (var w in s.webLift) sb.Append(',').Append(w.ToString("F3", ci));
                 foreach (var w in s.webWet) sb.Append(',').Append(float.IsNaN(w) ? "" : w.ToString("F2", ci));
                 foreach (var d in s.hipDepth) sb.Append(',').Append(float.IsNaN(d) ? "" : d.ToString("F2", ci));
                 for (int k = 0; k < s.footWorldUp.Length; k++) sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.footWorldUp[k], s.footNormalUp[k]));
@@ -1107,7 +1110,7 @@ namespace OtterLocomotion.Testing
                 float size = 2f * Mathf.Sqrt(c * c + sn * sn) / seq.Count;
                 return $"±{size.ToString("F1", ci)}{unit} @{Mathf.Repeat(Mathf.Atan2(sn, c) / (2f * Mathf.PI), 1f).ToString("F2", ci)}";
             }
-            var heave = BackLine.Select((n, i) => $"{n} {Fit(x => x.backHeight[i], " cm")}");
+            var heave = BackLine.Select((n, i) => $"{n} {Fit(x => x.backHeight[i], " cm")}").Prepend($"webs' lift {seq.Average(x => x.webLift.Sum()).ToString("F2", ci)} {Fit(x => x.webLift.Sum(), " N")}");
             var pitch = BackPieces.Select((n, i) => $"{n} {Fit(x => x.backPitch[i], " deg")}");
             sb.AppendLine($"  wave (half the swing @ the beat at its top): heave {string.Join(", ", heave)} | pitch {string.Join(", ", pitch)} | nose {Range(seq.Select(x => x.backHeight[0]))} cm above the surface");
         }

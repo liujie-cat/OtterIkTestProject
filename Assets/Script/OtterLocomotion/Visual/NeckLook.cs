@@ -46,7 +46,7 @@ namespace OtterLocomotion
         public float noseMiddle = 0f;
         public float noseSwing = 0.03f;
         [Tooltip("Where in the wave's beat the nose is highest (cycles): ahead of the hips, so a crest runs from the head back along the body to the tail.")]
-        [Range(0f, 1f)] public float noseTop = 0.95f;
+        [Range(0f, 1f)] public float noseTop = 0.15f;
         [Tooltip("Most the neck pitches up or down for it, on top of where it looks (deg).")]
         public float maxBob = 35f;
 
