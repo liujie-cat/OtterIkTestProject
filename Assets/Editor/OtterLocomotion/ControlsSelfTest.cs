@@ -46,10 +46,11 @@ namespace OtterLocomotion.EditorTools
             }
 
             public Sim Wait(float seconds) => Run(seconds);
+            public Sim LetGo() => Run(gs.releaseTime + Frame);
             public Sim Click() => Run(0.1f, click: true).Run(Frame);
-            public Sim Go() => Run(0.1f, go: true).Run(Frame);
-            public Sim HoldGo(float seconds) => Run(seconds, go: true).Run(Frame);
-            public Sim Back() => Run(0.1f, back: true).Run(Frame);
+            public Sim Go() => Run(0.1f, go: true).LetGo();
+            public Sim HoldGo(float seconds) => Run(seconds, go: true).LetGo();
+            public Sim Back() => Run(0.1f, back: true).LetGo();
 
             public Sim Guide(float seconds, Vector3 to)
             {
@@ -86,7 +87,7 @@ namespace OtterLocomotion.EditorTools
             var s = new Sim().Go().Wait(0.5f);
             Check("未选中按 W：只选中，不改档，仍停驻仰姿", s.gears.Selected && s.gears.Gear == Gear.Park && s.Supine && s.events.Count == 1 && s.events[0].kind == ControlEventKind.Select, s);
 
-            s = new Sim().Run(0.6f, go: true).Run(Frame);
+            s = new Sim().Run(0.6f, go: true).LetGo();
             Check("未选中按住 W：只选中，不冲刺", s.gears.Selected && s.gears.Gear == Gear.Park && !s.gears.Accelerating, s);
 
             s = new Sim().Guide(0.3f, Head + Vector3.left).Back().Wait(0.5f);
@@ -118,33 +119,33 @@ namespace OtterLocomotion.EditorTools
             s = new Sim(Gear.Cruise) { speedBL = 1.2f }.HoldGo(0.6f).Wait(0.5f);
             Check("没到海豚就松开 W：继续俯身巡航", s.gears.Gear == Gear.Cruise && s.Kicks == 0, s);
 
-            s = InWave().Run(Frame);
+            s = InWave().LetGo();
             Check("海豚段松开 W：停止加速，仍在海豚段", s.gears.Dolphin && !s.gears.Accelerating && s.gears.SpeedBL == s.settings.cruiseSpeedBL, s);
 
-            s = InWave().Run(Frame).Go().Wait(0.5f);
+            s = InWave().LetGo().Go().Wait(0.5f);
             Check("海豚段点 W：起跳一次，不蹬腿", s.Jumps == 1 && s.Kicks == 0, s);
 
-            s = InWave().Run(Frame).Run(0.5f, go: true);
+            s = InWave().LetGo().Run(0.5f, go: true);
             Check("海豚段按 W 不放：起跳一次，接着继续冲刺", s.Jumps == 1 && s.gears.Accelerating && s.gears.Dolphin, s);
 
-            s = InWave().Run(Frame);
+            s = InWave().LetGo();
             s.speedBL = 1.2f;
             s.Wait(0.05f).Go().Wait(0.5f);
             Check("松开后已减速，但在 jumpGrace 内：仍可起跳", s.Jumps == 1, s);
 
-            s = InWave().Run(Frame);
+            s = InWave().LetGo();
             s.speedBL = 1.2f;
             s.Wait(1f);
             bool cruising = s.gears.Gear == Gear.Cruise && s.gears.Posture == Posture.Prone;
             s.Go().Wait(0.5f);
             Check("宽限过后慢下来：回到巡航，点 W 不起跳", cruising && s.Jumps == 0, s);
 
-            s = InWave().Run(Frame);
+            s = InWave().LetGo();
             s.speedBL = 1.9f;
             s.Wait(1.5f).Go().Wait(0.5f);
             Check("松开很久但还在冲刺速度：仍可起跳", s.Jumps == 1, s);
 
-            s = InWave().Run(Frame).Back();
+            s = InWave().LetGo().Back();
             Check("冲刺中点 S：降回巡航，不再在海豚段", s.gears.Gear == Gear.Cruise && !s.gears.Dolphin && s.gears.Selected, s);
 
             s = new Sim(Gear.Cruise).Back();
@@ -154,12 +155,15 @@ namespace OtterLocomotion.EditorTools
             s.Back();
             Check("S 点按：每下降一档，退出巡航翻回仰姿；停驻再点解除选中", down && parked && !s.gears.Selected && s.gears.Gear == Gear.Park && s.Supine, s);
 
+            s = new Sim(Gear.Cruise).Run(0.05f, back: true).Run(Frame).Run(0.05f, back: true).LetGo();
+            Check("按着 S 闪断一帧：仍算一下，只降一档到仰泳", s.gears.Gear == Gear.Slow && s.gears.Selected && s.events.Count == 1, s);
+
             s = new Sim(Gear.Cruise).Run(0.5f, back: true);
             bool braking = s.gears.Braking && s.gears.Gear == Gear.Park && !s.gears.Selected && s.gears.SpeedBL == 0f;
-            s.Run(Frame);
+            s.LetGo();
             Check("S 按住：急停到停驻并解除选中，回到仰姿；松开结束刹水", braking && !s.gears.Braking && s.Supine, s);
 
-            s = new Sim(Gear.Cruise).Run(0.5f, back: true).Run(Frame).Go().Wait(0.3f);
+            s = new Sim(Gear.Cruise).Run(0.5f, back: true).LetGo().Go().Wait(0.3f);
             Check("急停解除后再按 W：只重新选中，不直接回到巡航", s.gears.Selected && s.gears.Gear == Gear.Park, s);
 
             s = new Sim(Gear.Slow);
@@ -182,10 +186,10 @@ namespace OtterLocomotion.EditorTools
             s = new Sim().Run(0.1f, click: true, onOtter: true).Run(Frame);
             Check("单击海獭（光圈内）：沿当前朝向蹬一次，不转向", s.Kicks == 1 && Vector3.Angle(s.events[0].direction, Vector3.forward) < 1f && Vector3.Angle(s.gears.Heading, Vector3.forward) < 1f, s);
 
-            s = InWave().Run(Frame).Click();
+            s = InWave().LetGo().Click();
             Check("冲刺中单击：只转向，不蹬腿", s.Kicks == 0, s);
 
-            s = InWave().Run(Frame);
+            s = InWave().LetGo();
             s.airborne = true;
             s.Go().Click().Wait(0.5f);
             Check("空中的按键和点击作废", s.Jumps == 0 && s.Kicks == 0, s);

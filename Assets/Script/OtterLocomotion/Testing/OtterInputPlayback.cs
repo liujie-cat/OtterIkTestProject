@@ -133,7 +133,7 @@ namespace OtterLocomotion.Testing
             new Segment("sprint: glide", 2.5f, Action.Idle),
         };
 
-        /// <summary>Long straight runs in each gear: a parked kick's glide, slow on the back, cruising, the sprint into the wave, its glide, the brake.</summary>
+        /// <summary>Long straight runs in each gear: a parked kick's glide, slow on the back, cruising, the sprint into the wave, the back key down out of it to cruising and on to slow on the back, the brake.</summary>
         public static List<Segment> SpeedScript() => new List<Segment>
         {
             new Segment("parked: idle", 1.0f, Action.Idle),
@@ -143,8 +143,9 @@ namespace OtterLocomotion.Testing
             new Segment("slow: go, cruise", 0.6f, Action.Go, 0f),
             new Segment("cruise: on the belly", 5.0f, Action.Idle),
             new Segment("cruise: hold go, sprint into the wave", 6.0f, Action.GoHold, 0f),
-            new Segment("sprint: let go, slow out of the wave", 4.0f, Action.Idle),
-            new Segment("cruise: hold back, brake and let go of it", 2.0f, Action.BackHold),
+            new Segment("sprint: back, cruise", 1.0f, Action.Back),
+            new Segment("cruise: back, slow on the back", 5.0f, Action.Back),
+            new Segment("slow: hold back, brake and let go of it", 2.0f, Action.BackHold),
             new Segment("parked: rest", 2.0f, Action.Idle),
         };
 
