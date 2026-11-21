@@ -237,7 +237,7 @@ namespace OtterLocomotion
         public float pitchTime = 0.02f;
         [Tooltip("Web width as a multiple of its rest width.")]
         public float width = 1.3f;
-        [Tooltip("Spine pitch asked for at full drive (deg; the hips 1.5 times this, the chest 0.4), and how far the wave runs behind from chest to hips (rad per joint). The harmonizer's chain stiffness and damping take off about three quarters.")]
+        [Tooltip("Spine pitch asked for at full drive (deg; the hips 1.5 times this, the chest 0.4; at most 56, past which the harmonizer's Euler split flips the hips over), and how far the wave runs behind from chest to hips (rad per joint). The harmonizer's chain takes off over half, less in the fluke (SpineKickWave.flukeFlexibility).")]
         public float spineAmplitude = 55f;
         public float spineWaveOffset = 0.8f;
         [Tooltip("How far behind the beat the spine's wave runs (cycles): the body heaves up and down a little after the webs push, so a later spine puts the hips' crest after the chest's and the wave runs head to tail.")]

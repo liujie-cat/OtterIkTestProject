@@ -14,7 +14,8 @@ namespace OtterLocomotion
     /// only, pushes in quick succession would hold it bent into a bow. While LimbStrokeAnimator holds the
     /// hind legs out as a fluke, an ExpSpineHarmonicProvider pitches the spine up and down on the hind rhythm's beat
     /// instead, chest to hips, a little behind it (fluke.spineLag), so the hips heave with the feet and the crest runs
-    /// on from the chest to the hips. The pulses KickEventBridge sends on the older movement
+    /// on from the chest to the hips, the harmonizer's chain loosened meanwhile so the wave bends the trunk rather than
+    /// only heaving it. The pulses KickEventBridge sends on the older movement
     /// controller's kick timing are held off meanwhile. Uses the harmonizer's harmonic provider, or adds one for this
     /// Play when it has none.
     /// </summary>
@@ -38,11 +39,19 @@ namespace OtterLocomotion
         [Header("Fluke")]
         [Tooltip("Once the fluke is this far in the harmonic wave takes over from the packets.")]
         [Range(0f, 1f)] public float pulsesOff = 0.5f;
+        [Tooltip("The harmonizer's yaw and pitch chain in the fluke: how far each joint follows the one ahead of it (its flexibility) and how quickly it takes up its target (its damping half-life, s). Less of both and the wave bends the trunk itself, crest and trough on it at once, where the scene's chain smooths most of it away; out of the fluke the scene's own come back.")]
+        [Range(0f, 1f)] public float flukeFlexibility = 0.45f;
+        [Range(0.01f, 1f)] public float flukeDamping = 0.05f;
+
+        // the harmonizer splits each provider's turn into Euler angles, which flip past 90 deg of pitch; the hips ask 1.5 times the amplitude
+        private const float MaxAmplitude = 85f / 1.5f;
 
         private ExpSpineHarmonicProvider wave;
         private ExpSpineKickWavePacketProvider packet;
         private OtterLocomotionBrain brain;
         private bool added;
+        private float sceneFlexibility, sceneDamping;
+        private bool chainHeld;
         private readonly List<Behaviour> suspended = new List<Behaviour>();
 
         /// <summary>A wave packet has been sent down the spine.</summary>
@@ -91,12 +100,39 @@ namespace OtterLocomotion
             float fluke = live ? animator.Fluke : 0f;
             if (fluke > 1e-3f)
             {
-                wave.maxAmplitude = animator.fluke.spineAmplitude;
+                wave.maxAmplitude = Mathf.Min(animator.fluke.spineAmplitude, MaxAmplitude);
                 wave.waveOffset = animator.fluke.spineWaveOffset;
                 wave.Drive(animator.FlukePhase - animator.fluke.spineLag, fluke * animator.FlukeDrive);
             }
             else wave.StopDrive();
+            HoldChain(fluke);
             HoldPulses(live && (fluke >= pulsesOff || (pulseKicks && packet != null)));
+        }
+
+        private void HoldChain(float fluke)
+        {
+            if (fluke <= 1e-3f)
+            {
+                ReleaseChain();
+                return;
+            }
+            if (!chainHeld)
+            {
+                sceneFlexibility = harmonizer.flexibility;
+                sceneDamping = harmonizer.dampingHalfLife;
+                chainHeld = true;
+            }
+            harmonizer.flexibility = Mathf.Lerp(sceneFlexibility, flukeFlexibility, fluke);
+            harmonizer.dampingHalfLife = Mathf.Lerp(sceneDamping, flukeDamping, fluke);
+        }
+
+        private void ReleaseChain()
+        {
+            if (!chainHeld) return;
+            chainHeld = false;
+            if (harmonizer == null) return;
+            harmonizer.flexibility = sceneFlexibility;
+            harmonizer.dampingHalfLife = sceneDamping;
         }
 
         // A hind push starts: a packet down the spine that lasts until the next push, of either foot when they take turns
@@ -131,6 +167,7 @@ namespace OtterLocomotion
         {
             Listen(false);
             if (wave != null) wave.StopDrive();
+            ReleaseChain();
             HoldPulses(false);
         }
 
