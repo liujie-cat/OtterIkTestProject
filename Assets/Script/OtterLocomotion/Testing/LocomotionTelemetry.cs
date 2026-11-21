@@ -112,6 +112,10 @@ namespace OtterLocomotion.Testing
             /// <summary>LimbStrokeAnimator's fluke (0..1) and its beat (cycles); the hip and chest bones' pitch (deg, + = front up); per hind foot the ankle's height over the hip joint (cm, world up).</summary>
             public float fluke, flukePhase, hipPitch, chestPitch;
             public float[] footHeave;
+            /// <summary>Along the back from the nose to the tail tip (BackLine): each point's height above the water's surface
+            /// (cm), how far ahead of the chest it is along the body's heading (cm), and each piece between two of them its
+            /// pitch (BackPieces; deg, + = the end toward the head up).</summary>
+            public float[] backHeight, backAhead, backPitch;
             /// <summary>SpineKickWave sent a wave packet down the spine this frame.</summary>
             public bool pulse;
             /// <summary>Per hind foot: the web's fore-aft speed through the water (m/s, world, + = forward); a push that holds its water keeps it near 0 or below.</summary>
@@ -189,6 +193,11 @@ namespace OtterLocomotion.Testing
         private NeckLook neck;
         /// <summary>The way the snout points, in the head bone's space.</summary>
         private Vector3 snoutLocal;
+        private static readonly string[] BackLine = { "nose", "head", "neck", "chest", "hips", "tail root", "tail tip" };
+        private static readonly string[] BackPieces = { "snout", "neck", "withers", "trunk", "rump", "tail" };
+        // each BackLine point in the space of the bone it rides on
+        private Transform[] backBones;
+        private Vector3[] backLocal;
         private LimbStrokeAnimator animator;
         private SpineKickWave spineWave;
         private TailRudder tail;
@@ -256,6 +265,15 @@ namespace OtterLocomotion.Testing
                 Vector3 nose = headSkin.OrderByDescending(p => (p - chest.position).sqrMagnitude).First();
                 Vector3 middle = headSkin.Aggregate(Vector3.zero, (a, p) => a + p) / headSkin.Count;
                 snoutLocal = head.InverseTransformDirection(nose - middle).normalized;
+                var tailBones = OtterRig.TailBones(controls.transform);
+                var neckBase = OtterRig.FindActiveBone(controls.transform, OtterRig.Neck[0]);
+                if (neckBase != null && hip != null && tailBones.Count >= 2)
+                {
+                    Transform last = tailBones[tailBones.Count - 1];
+                    backBones = new[] { head, head, neckBase, chest, hip, tailBones[0], last };
+                    backLocal = new[] { head.InverseTransformPoint(nose), Vector3.zero, Vector3.zero, Vector3.zero, Vector3.zero, Vector3.zero,
+                                        last.InverseTransformPoint(last.position + 0.8f * (last.position - tailBones[tailBones.Count - 2].position)) };
+                }
             }
             water = FindObjectOfType<Water>();
             float Above(float y) => (y - (water != null ? water.SurfaceY : 0f)) * 100f;
@@ -472,6 +490,14 @@ namespace OtterLocomotion.Testing
                 Vector3 snout = head.TransformDirection(snoutLocal);
                 s.headTuck = Mathf.Atan2(Vector3.Dot(snout, chest.forward), Vector3.Dot(snout, chest.up)) * Mathf.Rad2Deg;
             }
+            if (backBones != null)
+            {
+                var p = backBones.Select((b, i) => b.TransformPoint(backLocal[i])).ToArray();
+                s.backHeight = p.Select(x => (water != null ? -water.Depth(x) : x.y) * 100f).ToArray();
+                Vector3 heading = Vector3.ProjectOnPlane(controls.transform.forward, Vector3.up).normalized;
+                s.backAhead = p.Select(x => Vector3.Dot(x - p[3], heading) * 100f).ToArray();
+                s.backPitch = p.Skip(1).Select((x, i) => Mathf.Asin(Mathf.Clamp((p[i] - x).normalized.y, -1f, 1f)) * Mathf.Rad2Deg).ToArray();
+            }
             bool afloat = buoyancy != null && buoyancy.isActiveAndEnabled && water != null;
             s.submerged = afloat ? buoyancy.Submerged : float.NaN;
             s.draft = afloat ? buoyancy.Draft * 100f : float.NaN;
@@ -615,6 +641,14 @@ namespace OtterLocomotion.Testing
             // the chest's roll over without the bank (deg); each forepaw's share of the roll's stroke, how far over to its rest on the chest, its arm's angle about the chest's length from straight down (deg), and how deep its wrist is (cm)
             sb.Append(",chestOver");
             foreach (var id in Forepaws) sb.Append(',').Append(id).Append("_roll,").Append(id).Append("_over,").Append(id).Append("_arm,").Append(id).Append("_depth");
+            // along the back, nose to tail tip: each point's height above the surface and ahead of the chest along the
+            // heading (cm), and each piece's pitch (deg, + = the end toward the head up)
+            if (backBones != null)
+            {
+                foreach (var n in BackLine) sb.Append(",h_").Append(n.Replace(' ', '_'));
+                foreach (var n in BackLine) sb.Append(",x_").Append(n.Replace(' ', '_'));
+                foreach (var n in BackPieces) sb.Append(",p_").Append(n);
+            }
             if (brain != null) sb.Append(",posture,supine,roll,dSpeedTarget,dSpeedAsked,dYawRate,dSurgeN,dSwayN,dYawNm,dBank");
             bool allocated = brain != null && brain.HasLimbGeometry;
             if (allocated)
@@ -668,6 +702,12 @@ namespace OtterLocomotion.Testing
                 for (int k = 0; k < s.foreRoll.Length; k++)
                     sb.Append(string.Format(ci, ",{0:F2},{1:F2},{2:F1},", s.foreRoll[k].x, s.foreRoll[k].y, s.foreRoll[k].z))
                         .Append(float.IsNaN(s.foreDepth[k]) ? "" : s.foreDepth[k].ToString("F1", ci));
+                if (backBones != null)
+                {
+                    foreach (var h in s.backHeight) sb.Append(',').Append(h.ToString("F2", ci));
+                    foreach (var x in s.backAhead) sb.Append(',').Append(x.ToString("F1", ci));
+                    foreach (var a in s.backPitch) sb.Append(',').Append(a.ToString("F1", ci));
+                }
                 if (brain != null)
                     sb.Append(string.Format(ci, ",{0},{1:F2},{2:F1},{3:F2},{4:F2},{5:F1},{6:F2},{7:F2},{8:F3},{9:F1}",
                         s.posture, s.supine, s.roll, s.speedTarget, s.requestedSpeed, s.yawRateTarget, s.surgeForce, s.swayForce, s.yawMoment, s.bank));
@@ -1052,6 +1092,24 @@ namespace OtterLocomotion.Testing
                 parts.Add($"{feet[k].name} heave {Range(seq.Select(s => s.footHeave[k]))} cm reach {seq.Average(s => s.footReach[k]).ToString("F2", ci)} behind hips {bestLag.ToString("F2", ci)} s");
             }
             sb.AppendLine($"  fluke ({seq.Count} frames): {string.Join(" | ", parts)}");
+            if (backBones == null) return;
+            // each fitted to a cosine of the beat: half its swing, and the beat's phase at its top (cycles); a wave running
+            // back from the head tops out later at each point down the body
+            string Fit(System.Func<Sample, float> f, string unit)
+            {
+                float mean = seq.Average(f), c = 0f, sn = 0f;
+                foreach (var x in seq)
+                {
+                    float a = 2f * Mathf.PI * x.flukePhase, v = f(x) - mean;
+                    c += v * Mathf.Cos(a);
+                    sn += v * Mathf.Sin(a);
+                }
+                float size = 2f * Mathf.Sqrt(c * c + sn * sn) / seq.Count;
+                return $"±{size.ToString("F1", ci)}{unit} @{Mathf.Repeat(Mathf.Atan2(sn, c) / (2f * Mathf.PI), 1f).ToString("F2", ci)}";
+            }
+            var heave = BackLine.Select((n, i) => $"{n} {Fit(x => x.backHeight[i], " cm")}");
+            var pitch = BackPieces.Select((n, i) => $"{n} {Fit(x => x.backPitch[i], " deg")}");
+            sb.AppendLine($"  wave (half the swing @ the beat at its top): heave {string.Join(", ", heave)} | pitch {string.Join(", ", pitch)} | nose {Range(seq.Select(x => x.backHeight[0]))} cm above the surface");
         }
 
         // What the demand layer asked for over the segment, next to what the body actually did.

@@ -18,7 +18,8 @@ namespace OtterLocomotion.EditorTools
     /// the paws work under the chest, and from the side outside the turn, where the paddling paw is (rolling over, the
     /// side it rolls down onto, where the paw taking the roll's stroke is), and a slice through the shoulders and
     /// forepaws seen from ahead along the body, where a roll's sweep round the shoulder shows; their close-up perspective
-    /// from that side a little ahead and below, all without the sea. Written to Logs/Snapshots.
+    /// from that side a little ahead and below, all without the sea. Body strips ride with the chest too, the whole
+    /// body from its left against the waterline, for the wave along it. Written to Logs/Snapshots.
     /// </summary>
     static class LocomotionSnapshots
     {
@@ -32,8 +33,10 @@ namespace OtterLocomotion.EditorTools
             public readonly float interval;
             /// <summary>The strip frames the forepaws under the chest rather than the hind feet.</summary>
             public readonly bool paws;
+            /// <summary>The strip frames the whole body from its left rather than the hind feet.</summary>
+            public readonly bool body;
 
-            public Shot(int segment, float time, string name, int frames = 1, float interval = 0f, bool paws = false)
+            public Shot(int segment, float time, string name, int frames = 1, float interval = 0f, bool paws = false, bool body = false)
             {
                 this.segment = segment;
                 this.time = time;
@@ -41,6 +44,7 @@ namespace OtterLocomotion.EditorTools
                 this.frames = frames;
                 this.interval = interval;
                 this.paws = paws;
+                this.body = body;
             }
         }
 
@@ -119,9 +123,10 @@ namespace OtterLocomotion.EditorTools
                 new Shot(9, 1.55f, "09_cruise_straight_feet", 8, 0.08f),
                 new Shot(10, 0.3f, "10_cruise_turn_a"), new Shot(10, 0.6f, "10_cruise_turn_b"),
                 new Shot(11, 0.4f, "11_sprint_kick_feet", 8, 0.06f),
-                new Shot(11, 2.3f, "11_sprint_wave_feet", 8, 0.08f),
-                new Shot(11, 2.9f, "11_sprint_wave_paws", 8, 0.05f, paws: true),
-                new Shot(11, 3.3f, "11_sprint_wave"),
+                new Shot(11, 2.3f, "11_sprint_wave_feet", 8, 0.06f),
+                new Shot(11, 2.75f, "11_sprint_wave_body", 8, 0.035f, body: true),
+                new Shot(11, 3.02f, "11_sprint_wave_paws", 8, 0.05f, paws: true),
+                new Shot(11, 3.42f, "11_sprint_wave"),
                 new Shot(15, 0.1f, "15_roll_supine_paws", 8, 0.05f, paws: true),
             },
         };
@@ -171,14 +176,14 @@ namespace OtterLocomotion.EditorTools
                 return;
             }
 
-            var girdle = OtterRig.FindActiveBone(otter, shot.paws ? OtterRig.Chest : OtterRig.Hip);
+            var girdle = OtterRig.FindActiveBone(otter, shot.paws || shot.body ? OtterRig.Chest : OtterRig.Hip);
             if (girdle == null) return;
             if (frame == 0)
             {
                 var chains = OtterRig.FindLimbChains(otter);
                 var pair = (shot.paws ? new[] { LimbId.FL, LimbId.FR } : new[] { LimbId.HL, LimbId.HR }).Select(id => chains[(int)id]).Where(c => c != null).ToArray();
                 Vector3 ends = pair.Length > 0 ? pair.Aggregate(Vector3.zero, (s, c) => s + c.end.bone.position) / pair.Length : girdle.position;
-                stripCenterLocal = girdle.InverseTransformPoint(Vector3.Lerp(girdle.position, ends, 0.6f));
+                stripCenterLocal = girdle.InverseTransformPoint(shot.body ? bounds.center : Vector3.Lerp(girdle.position, ends, 0.6f));
                 // the forepaw on the outside of the turn paddles it round
                 var brain = otter.GetComponent<OtterLocomotionBrain>();
                 outsideSign = brain != null && brain.Demand.yawRateTarget > 0f ? -1f : 1f;
@@ -190,7 +195,7 @@ namespace OtterLocomotion.EditorTools
                 held = Perspective("world", bounds.center + 0.5f * travel, side, Mathf.Max(extent * 0.7f, half));
                 Release();
                 int rows = (shot.frames + Columns - 1) / Columns;
-                sheets = Enumerable.Range(0, shot.paws ? 6 : 5).Select(_ => new Texture2D(CellWidth * Columns, CellHeight * rows, TextureFormat.RGB24, false)).ToArray();
+                sheets = Enumerable.Range(0, shot.body ? 2 : shot.paws ? 6 : 5).Select(_ => new Texture2D(CellWidth * Columns, CellHeight * rows, TextureFormat.RGB24, false)).ToArray();
             }
             if (sheets == null) return;
             // rolling over, the forepaw taking the roll's stroke is on the side the body rolls down onto
@@ -203,7 +208,9 @@ namespace OtterLocomotion.EditorTools
                     .SelectMany(c => new[] { c.root.bone.position, c.end.bone.position }).Select(p => Vector3.Dot(p - center, forward)).DefaultIfEmpty(0f).ToArray()
                 : new[] { 0f };
             float ahead = arms.Max() + 0.03f, slice = ahead - arms.Min() + 0.03f;
-            var close = shot.paws
+            var close = shot.body
+                ? new[] { Orthographic("left", center, -right, Vector3.up, extent * 0.85f, extent, waterline: true) }
+                : shot.paws
                 ? new[]
                 {
                     Orthographic("top", center, Vector3.up, forward, extent * 0.3f, extent),
@@ -219,7 +226,7 @@ namespace OtterLocomotion.EditorTools
                 };
             // the paddling paw from outside the turn, a little ahead and below, where the chest does not hide it
             Vector3 look = shot.paws ? (right * outsideSign * 0.8f + forward * 0.35f - Vector3.up * 0.25f).normalized : aside;
-            var wide = new[] { Perspective("persp", center, look, extent * 0.45f), held };
+            var wide = shot.body ? new[] { held } : new[] { Perspective("persp", center, look, extent * 0.45f), held };
             int column = frame % Columns, row = frame / Columns, rowCount = sheets[0].height / CellHeight;
             Render(body, close, CellWidth, CellHeight, (v, tex) => Place(v, tex));
             Render(scene, wide, CellWidth, CellHeight, (v, tex) => Place(close.Length + v, tex));

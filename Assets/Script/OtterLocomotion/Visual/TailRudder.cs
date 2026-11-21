@@ -13,7 +13,8 @@ namespace OtterLocomotion
     /// foot as that foot pushes, with the curl of the body (HindBend). It is posed after the legs and keeps out of them
     /// (HindLegColliders): a leg pressed on it turns it aside about its joints, the turn easing in and back out, so a
     /// leg sweeping past nudges it rather than knocking it about. The springs hang the tail as if the legs were not
-    /// there; the turn aside is laid over them.
+    /// there; the turn aside is laid over them. In the dolphin wave the joints lift it up and down on the wave's beat,
+    /// each a little after the one before, so the wave runs on down to the tip.
     /// </summary>
     [DefaultExecutionOrder(375)]
     [DisallowMultipleComponent]
@@ -55,6 +56,15 @@ namespace OtterLocomotion
         [Tooltip("Yaw moment of a push (N·m) that sways the tail most of the way.")]
         public float fullMoment = 0.05f;
 
+        [Header("Dolphin wave")]
+        [Tooltip("Found on this object when empty; without it the tail only trails the wave.")]
+        public LimbStrokeAnimator animator;
+        [Tooltip("In the dolphin wave (LimbStrokeAnimator.Fluke) the tail carries the spine's wave on to its tip: how far each joint lifts it up and down at full drive (deg).")]
+        public float waveBend = 8f;
+        [Tooltip("Where in the wave's beat the first joint lifts the tail highest (cycles), and how much later each joint after it does: the crest runs on down the tail after the hips.")]
+        [Range(0f, 1f)] public float waveTop = 0.4f;
+        public float waveLag = 0.1f;
+
         private List<Transform> bones = new List<Transform>();
         // the body's dorsal side in the space of the bone the tail hangs from
         private Vector3 upLocal;
@@ -92,6 +102,7 @@ namespace OtterLocomotion
         {
             if (brain == null) brain = GetComponent<OtterLocomotionBrain>();
             if (legs == null) legs = GetComponent<HindLegColliders>();
+            if (animator == null) animator = GetComponent<LimbStrokeAnimator>();
         }
 
         // after SpineDecouplerWithShadows has rebuilt the spine in Awake
@@ -166,7 +177,8 @@ namespace OtterLocomotion
             float turnGoal = brain != null ? Mathf.Clamp(brain.Demand.yawRateTarget / Mathf.Max(1f, fullTurnRate), -1f, 1f) : 0f;
             turn = Mathf.Lerp(turn, turnGoal, 1f - Mathf.Exp(-dt / Mathf.Max(1e-3f, rudderTime)));
             // turning about world up by a negative angle swings what trails behind to the right
-            Shape(-(rudder * turn + kickSway * HindBend.Now(brain, fullMoment)) / n);
+            float wave = animator != null && animator.isActiveAndEnabled ? animator.Fluke * animator.FlukeDrive : 0f;
+            Shape(-(rudder * turn + kickSway * HindBend.Now(brain, fullMoment)) / n, wave);
 
             if (!settled || (goal[n] - point[n]).sqrMagnitude > 1f)
             {
@@ -319,14 +331,22 @@ namespace OtterLocomotion
             }
         }
 
-        // The bones at rest on the hips, each joint bent by the given angle about world up; the points they make.
-        private void Shape(float bendPerJoint)
+        // The bones at rest on the hips, each joint bent by the given angle about world up and, as far into the dolphin
+        // wave as given, lifted on its beat; the points they make.
+        private void Shape(float bendPerJoint, float wave = 0f)
         {
             int n = bones.Count;
             for (int j = 0; j < n; j++) bones[j].localRotation = rest[j];
             straightTip = bones[n - 1].TransformPoint(tipLocal);
-            if (bendPerJoint != 0f)
-                foreach (int j in knot) bones[j].rotation = Quaternion.AngleAxis(bendPerJoint, Vector3.up) * bones[j].rotation;
+            // turning about this by a positive angle lifts the tip
+            Vector3 side = Vector3.Cross(straightTip - bones[0].position, bones[0].parent.TransformDirection(upLocal));
+            if (bendPerJoint != 0f || wave > 1e-3f)
+                for (int i = 0; i < knot.Length; i++)
+                {
+                    float lift = wave > 1e-3f ? wave * waveBend * Mathf.Cos(2f * Mathf.PI * (animator.FlukePhase - waveTop - i * waveLag)) : 0f;
+                    Transform bone = bones[knot[i]];
+                    bone.rotation = Quaternion.AngleAxis(bendPerJoint, Vector3.up) * Quaternion.AngleAxis(lift, side) * bone.rotation;
+                }
             for (int j = 0; j < knot.Length; j++) goal[j] = bones[knot[j]].position;
             goal[knot.Length] = bones[n - 1].TransformPoint(tipLocal);
         }
