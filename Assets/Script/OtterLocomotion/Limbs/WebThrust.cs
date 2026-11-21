@@ -11,9 +11,9 @@ namespace OtterLocomotion
     /// face-on share alone, as a hydrofoil is, so the fluke's pitched beat drives as the paddling does. A web
     /// sweeping back faster than the body moves forward drives the body on; one dragged forward, a recovery not
     /// feathered edge-on or a foot left trailing, holds it back. Only the part of a web under the water's surface
-    /// pushes; out in the air it takes nothing. The push along the body's heading is kept, and with heave the push up
-    /// and down too, so the body heaves on the strokes as Buoyancy floats it; OtterControls turns the body, and the
-    /// physics body does not pitch or roll.
+    /// pushes; out in the air it takes nothing. The push along the body's heading is kept, and the push up and down,
+    /// scaled by heave (more in the dolphin wave), so the body heaves on the strokes as Buoyancy floats it;
+    /// OtterControls turns the body, and the physics body does not pitch or roll.
     /// </summary>
     [DefaultExecutionOrder(380)]
     [DisallowMultipleComponent]
@@ -34,8 +34,9 @@ namespace OtterLocomotion
                  "follow its path through the bend; a web slanted to that sweep is pushed back and the otter stalls in every " +
                  "turn. Off, the webs move through the water with the body's travel and their own strokes.")]
         public bool sweptByTurn = false;
-        [Tooltip("Push the body up and down with the webs' push too.")]
-        public bool heave = true;
+        [Tooltip("How hard the webs' push up and down heaves the body (0 = not at all, 1 = as they push), and in the dolphin wave (LimbStrokeAnimator.Fluke), where more stands in for the trunk's own undulation pushing on the water, which only the webs model.")]
+        public float heave = 1f;
+        public float waveHeave = 2.5f;
 
         private class Web
         {
@@ -65,7 +66,7 @@ namespace OtterLocomotion
             return 0f;
         }
 
-        /// <summary>A hind web's push on the body upward (N) last frame, applied or not (heave); 0 without one.</summary>
+        /// <summary>A hind web's push on the body upward (N) last frame, before heave scales it; 0 without one.</summary>
         public float Lift(LimbId limb)
         {
             foreach (var w in webs)
@@ -153,6 +154,7 @@ namespace OtterLocomotion
             Vector3 pivot = root.position, facing = Vector3.ProjectOnPlane(root.forward, Vector3.up).normalized;
             // where each web would be had the body only travelled since last frame, not swung round
             Quaternion swing = sweptByTurn || previousHeading == Vector3.zero ? Quaternion.identity : Quaternion.FromToRotation(previousHeading, facing);
+            float lifting = Mathf.Lerp(heave, waveHeave, animator != null && animator.isActiveAndEnabled ? animator.Fluke : 0f);
             Vector3 total = Vector3.zero;
             foreach (var w in webs)
             {
@@ -173,7 +175,7 @@ namespace OtterLocomotion
                 Vector3 f = -(waterPush * Mathf.Abs(face) + slicePush * along) * w.area * areaScale * spread * w.wet * face * n;
                 w.push = Vector3.Dot(f, heading);
                 w.lift = f.y;
-                total += heading * w.push + (heave ? Vector3.up * w.lift : Vector3.zero);
+                total += heading * w.push + Vector3.up * (lifting * w.lift);
             }
             previousPivot = pivot;
             previousHeading = facing;

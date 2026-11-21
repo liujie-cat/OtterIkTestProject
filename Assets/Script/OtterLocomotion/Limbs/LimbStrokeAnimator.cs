@@ -227,7 +227,7 @@ namespace OtterLocomotion
         [Tooltip("Gap between the webs' inner edges (m): each ankle sits half its web's width out from the hips' midline, so the webs lie together as one fluke.")]
         public float apart = 0.005f;
         [Header("Wave")]
-        [Tooltip("How far the legs swing up and down about the hips on top of the hips' own pitch (deg), and how far behind the spine wave's beat they run (cycles).")]
+        [Tooltip("How far the legs swing up and down about the hips on top of the hips' own pitch (deg), and how far behind the beat they run (cycles).")]
         public float sweep = 44f;
         [Range(0f, 1f)] public float lag = 0.75f;
         [Tooltip("Web pitch into the water it meets: its trailing edge rises as it sweeps down and drops as it sweeps up, by this share of the angle its path through the water makes with the heading (a short flat plate drives hardest at about half), at most attack (deg).")]
@@ -240,6 +240,8 @@ namespace OtterLocomotion
         [Tooltip("Spine pitch asked for at full drive (deg; the hips 1.5 times this, the chest 0.4), and how far the wave runs behind from chest to hips (rad per joint). The harmonizer's chain stiffness and damping take off about three quarters.")]
         public float spineAmplitude = 55f;
         public float spineWaveOffset = 0.8f;
+        [Tooltip("How far behind the beat the spine's wave runs (cycles): the body heaves up and down a little after the webs push, so a later spine puts the hips' crest after the chest's and the wave runs head to tail.")]
+        [Range(0f, 1f)] public float spineLag = 0.25f;
     }
 
     /// <summary>

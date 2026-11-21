@@ -1110,7 +1110,8 @@ namespace OtterLocomotion.Testing
                 float size = 2f * Mathf.Sqrt(c * c + sn * sn) / seq.Count;
                 return $"±{size.ToString("F1", ci)}{unit} @{Mathf.Repeat(Mathf.Atan2(sn, c) / (2f * Mathf.PI), 1f).ToString("F2", ci)}";
             }
-            var heave = BackLine.Select((n, i) => $"{n} {Fit(x => x.backHeight[i], " cm")}").Prepend($"webs' lift {seq.Average(x => x.webLift.Sum()).ToString("F2", ci)} {Fit(x => x.webLift.Sum(), " N")}");
+            var heave = BackLine.Select((n, i) => $"{n} {Fit(x => x.backHeight[i], " cm")}").Prepend($"webs' lift {seq.Average(x => x.webLift.Sum()).ToString("F2", ci)} {Fit(x => x.webLift.Sum(), " N")}")
+                .Append($"ankles {Fit(x => x.footHeave.Zip(x.hipDepth, (h, d) => h - d).Average(), " cm")}");
             var pitch = BackPieces.Select((n, i) => $"{n} {Fit(x => x.backPitch[i], " deg")}");
             sb.AppendLine($"  wave (half the swing @ the beat at its top): heave {string.Join(", ", heave)} | pitch {string.Join(", ", pitch)} | nose {Range(seq.Select(x => x.backHeight[0]))} cm above the surface");
         }

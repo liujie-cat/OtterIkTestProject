@@ -44,7 +44,7 @@ namespace OtterLocomotion
         public LimbStrokeAnimator animator;
         [Tooltip("The nose rides up and down about the water's surface: its middle height above the surface, and how far it rises above and dips below that (m).")]
         public float noseMiddle = 0f;
-        public float noseSwing = 0.03f;
+        public float noseSwing = 0.045f;
         [Tooltip("Where in the wave's beat the nose is highest (cycles): ahead of the hips, so a crest runs from the head back along the body to the tail.")]
         [Range(0f, 1f)] public float noseTop = 0.15f;
         [Tooltip("Most the neck pitches up or down for it, on top of where it looks (deg).")]

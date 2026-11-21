@@ -178,7 +178,8 @@ namespace OtterLocomotion
 
             float supine = postureMachine.SupineFraction;
             float riseRate = Mathf.Lerp(demandSettings.speedRiseRateBL, postureSettings.supineRiseRateBL, supine) * length;
-            float kickSpeed = Mathf.Lerp(demandSettings.proneKickSpeedBL, demandSettings.supineKickSpeedBL, supine) * length;
+            float prone = Intent.gait == Gait.Dolphin ? demandSettings.dolphinKickSpeedBL : demandSettings.proneKickSpeedBL;
+            float kickSpeed = Mathf.Lerp(prone, demandSettings.supineKickSpeedBL, supine) * length;
             var demand = demandLayer.Step(demandSettings, Intent, state, Parameters, riseRate, kickSpeed, 2f * rhythmSettings.hindFullForce, dt);
 
             if (!HasLimbGeometry) return;

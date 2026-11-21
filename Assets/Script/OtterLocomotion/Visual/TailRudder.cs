@@ -13,8 +13,8 @@ namespace OtterLocomotion
     /// foot as that foot pushes, with the curl of the body (HindBend). It is posed after the legs and keeps out of them
     /// (HindLegColliders): a leg pressed on it turns it aside about its joints, the turn easing in and back out, so a
     /// leg sweeping past nudges it rather than knocking it about. The springs hang the tail as if the legs were not
-    /// there; the turn aside is laid over them. In the dolphin wave the joints lift it up and down on the wave's beat,
-    /// each a little after the one before, so the wave runs on down to the tip.
+    /// there; the turn aside is laid over them. In the dolphin wave the joints lift it up and down with the joined
+    /// webs, each a little after the one before, so the tail and the feet beat as one fluke at the end of the wave.
     /// </summary>
     [DefaultExecutionOrder(375)]
     [DisallowMultipleComponent]
@@ -60,10 +60,10 @@ namespace OtterLocomotion
         [Tooltip("Found on this object when empty; without it the tail only trails the wave.")]
         public LimbStrokeAnimator animator;
         [Tooltip("In the dolphin wave (LimbStrokeAnimator.Fluke) the tail carries the spine's wave on to its tip: how far each joint lifts it up and down at full drive (deg).")]
-        public float waveBend = 8f;
-        [Tooltip("Where in the wave's beat the first joint lifts the tail highest (cycles), and how much later each joint after it does: the crest runs on down the tail after the hips.")]
-        [Range(0f, 1f)] public float waveTop = 0.4f;
-        public float waveLag = 0.1f;
+        public float waveBend = 12f;
+        [Tooltip("Where in the wave's beat the first joint lifts the tail highest (cycles), and how much later each joint after it does: with the joined webs' rise (LimbStrokeAnimator.fluke.lag) less the tail's own lag, so tail and webs beat as one fluke and the tail keeps out of the legs.")]
+        [Range(0f, 1f)] public float waveTop = 0.7f;
+        public float waveLag = 0.05f;
 
         private List<Transform> bones = new List<Transform>();
         // the body's dorsal side in the space of the bone the tail hangs from

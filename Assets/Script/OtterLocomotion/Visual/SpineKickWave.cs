@@ -13,7 +13,8 @@ namespace OtterLocomotion
     /// on its back the otter paddles with its feet and keeps its trunk straight, and as a packet bends the spine one way
     /// only, pushes in quick succession would hold it bent into a bow. While LimbStrokeAnimator holds the
     /// hind legs out as a fluke, an ExpSpineHarmonicProvider pitches the spine up and down on the hind rhythm's beat
-    /// instead, chest to hips, so the hips heave with the feet. The pulses KickEventBridge sends on the older movement
+    /// instead, chest to hips, a little behind it (fluke.spineLag), so the hips heave with the feet and the crest runs
+    /// on from the chest to the hips. The pulses KickEventBridge sends on the older movement
     /// controller's kick timing are held off meanwhile. Uses the harmonizer's harmonic provider, or adds one for this
     /// Play when it has none.
     /// </summary>
@@ -92,7 +93,7 @@ namespace OtterLocomotion
             {
                 wave.maxAmplitude = animator.fluke.spineAmplitude;
                 wave.waveOffset = animator.fluke.spineWaveOffset;
-                wave.Drive(animator.FlukePhase, fluke * animator.FlukeDrive);
+                wave.Drive(animator.FlukePhase - animator.fluke.spineLag, fluke * animator.FlukeDrive);
             }
             else wave.StopDrive();
             HoldPulses(live && (fluke >= pulsesOff || (pulseKicks && packet != null)));

@@ -20,9 +20,10 @@ namespace OtterLocomotion
         public float yawRateGain = 8f;
 
         [Header("Speed -> surge force")]
-        [Tooltip("Speed (body lengths/s) the hind kicks hold at full stroke strength on the back, and on the belly (WebThrust). The stroke strength asked for is the speed target's share of it: kicks grow with the speed wanted, not with the push missing, since a web's push grows with the square of its speed through the water and a slow body gets far more from the same kick.")]
+        [Tooltip("Speed (body lengths/s) the hind kicks hold at full stroke strength on the back, on the belly, and beating as the dolphin wave's fluke (WebThrust). The stroke strength asked for is the speed target's share of it: kicks grow with the speed wanted, not with the push missing, since a web's push grows with the square of its speed through the water and a slow body gets far more from the same kick.")]
         public float supineKickSpeedBL = 1.6f;
         public float proneKickSpeedBL = 2.1f;
+        public float dolphinKickSpeedBL = 2.7f;
         [Tooltip("Kicks for u* + gain * (u* - u): how much harder or lighter the speed error makes them.")]
         public float speedGain = 1.5f;
         [Tooltip("How fast a lasting speed error trims the kicks while holding a steady speed on a straight course (1/s). A kick's push grows faster than its strength, beat and size together, so the kicks alone settle off the target at part strength.")]
