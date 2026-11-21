@@ -32,6 +32,9 @@ namespace OtterLocomotion
         [Tooltip("Let go, it keeps the wave, and can jump, while it is faster than this share of the way from cruise to sprint speed, and for at least jumpGrace seconds; then it cruises.")]
         [Range(0f, 1f)] public float dolphinUntil = 0.4f;
         public float jumpGrace = 0.6f;
+        [Tooltip("In the wave, a turn of more than wideTurn (deg) between the heading and where the body faces is swum on the belly with all four limbs, the feet kicking and the outside forepaw paddling it round, until the body is within backInWave (deg) of the heading and goes back into the wave.")]
+        public float wideTurn = 60f;
+        public float backInWave = 20f;
 
         [Header("Kicks")]
         [Tooltip("Strength (0..1) of the kick a click gives when parked (picked up or not), and when swimming.")]
@@ -81,7 +84,8 @@ namespace OtterLocomotion
     /// the pointer does not guide it and it does not shift. The go key picks it up, then each press shifts up, from
     /// parked to slow and from slow to cruising; parked and swimming slowly it lies on its back, cruising and sprinting
     /// it swims on its belly. Pressed cruising and held, it sprints along the heading: kicking at first, then in the
-    /// dolphin wave; let go before the wave it cruises on, let go in the wave it slows of itself, keeping the wave while
+    /// dolphin wave, out of which it swims a wide turn on its belly with all four limbs, going back into the wave once
+    /// round; let go before the wave it cruises on, let go in the wave it slows of itself, keeping the wave while
     /// still fast and for at least jumpGrace, and a press in the wave jumps (held on, it sprints on). Each press of the
     /// back key shifts down, and parked lets it go; held, it brakes to parked and lets it go, so let go it is always
     /// parked on its back. Picked up, the pointer is its guide point: the head looks at it and the body turns after the
@@ -94,6 +98,8 @@ namespace OtterLocomotion
         public Gear Gear { get; private set; }
         /// <summary>Sprinting in the dolphin wave, rather than still kicking up to it.</summary>
         public bool Dolphin { get; private set; }
+        /// <summary>Sprinting in the wave, out of it for a wide turn, which it swims on the belly with all four limbs.</summary>
+        public bool WideTurn { get; private set; }
         /// <summary>The go key, held, is driving the sprint on.</summary>
         public bool Accelerating { get; private set; }
         public bool Braking { get; private set; }
@@ -109,14 +115,14 @@ namespace OtterLocomotion
         /// <summary>Speed asked for (body lengths/s).</summary>
         public float SpeedBL { get; private set; }
 
-        public bool JumpEligible => Gear == Gear.Sprint && Dolphin;
+        public bool JumpEligible => Gait == Gait.Dolphin;
         public Posture Posture => PostureOf(Gear);
         public static Posture PostureOf(Gear gear) => gear <= Gear.Slow ? Posture.Supine : Posture.Prone;
         public Gait Gait => Gear switch
         {
             Gear.Park => Gait.Rest,
             Gear.Slow => Gait.SupineAlternate,
-            Gear.Sprint when Dolphin => Gait.Dolphin,
+            Gear.Sprint when Dolphin && !WideTurn => Gait.Dolphin,
             _ => Gait.ProneTogether,
         };
 
@@ -128,7 +134,7 @@ namespace OtterLocomotion
         public void Reset(in GearBody body, Gear initial = Gear.Park)
         {
             Gear = initial;
-            Dolphin = Accelerating = Braking = false;
+            Dolphin = WideTurn = Accelerating = Braking = false;
             Selected = initial > Gear.Park;
             Heading = BodyHeading = Flat(body.forward, Vector3.forward);
             looked.Clear();
@@ -215,7 +221,9 @@ namespace OtterLocomotion
             looked.RemoveRange(0, gone);
             if (looked[0].time <= then) BodyHeading = looked[0].heading;
 
-            bool turning = Vector3.Angle(Flat(b.forward, Heading), Heading) > s.parkDriftAngle;
+            float off = Vector3.Angle(Flat(b.forward, Heading), Heading);
+            WideTurn = Gear == Gear.Sprint && Dolphin && !b.airborne && off > (WideTurn ? s.backInWave : s.wideTurn);
+            bool turning = off > s.parkDriftAngle;
             SpeedBL = Gear switch
             {
                 Gear.Park => Selected && turning && !Braking ? s.parkDriftBL : 0f,
