@@ -119,8 +119,9 @@ namespace OtterLocomotion.EditorTools
                 new Shot(9, 1.55f, "09_cruise_straight_feet", 8, 0.08f),
                 new Shot(10, 0.3f, "10_cruise_turn_a"), new Shot(10, 0.6f, "10_cruise_turn_b"),
                 new Shot(11, 0.4f, "11_sprint_kick_feet", 8, 0.06f),
-                new Shot(11, 2.4f, "11_sprint_wave_feet", 8, 0.08f),
-                new Shot(11, 3.2f, "11_sprint_wave"),
+                new Shot(11, 2.3f, "11_sprint_wave_feet", 8, 0.08f),
+                new Shot(11, 2.9f, "11_sprint_wave_paws", 8, 0.05f, paws: true),
+                new Shot(11, 3.3f, "11_sprint_wave"),
                 new Shot(15, 0.1f, "15_roll_supine_paws", 8, 0.05f, paws: true),
             },
         };

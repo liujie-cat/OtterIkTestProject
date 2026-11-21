@@ -209,10 +209,10 @@ namespace OtterLocomotion
     }
 
     /// <summary>
-    /// Sprinting prone the hind feet stop kicking: the legs stretch out behind along the hips, feet under the sides of
-    /// the tail and webs flat, and heave up and down with the spine as one fluke, the feet running behind the hips like
-    /// the end of a whip and the webs pitched into the water they meet; the tail keeps out of their way (TailRudder). The
-    /// wave keeps the hind rhythm's beat; SpineKickWave puts it on the spine.
+    /// Sprinting prone the hind feet stop kicking: the legs stretch out behind along the hips, feet together under the
+    /// tail and webs flat side by side, and heave up and down with the spine as one fluke, the feet running behind the
+    /// hips like the end of a whip and the webs pitched into the water they meet; the tail keeps out of their way
+    /// (TailRudder). The wave keeps the hind rhythm's beat; SpineKickWave puts it on the spine.
     /// </summary>
     [Serializable]
     public class FlukeStroke
@@ -221,11 +221,11 @@ namespace OtterLocomotion
         [Tooltip("Time constant of changing between kicking and the fluke (s).")]
         public float blendTime = 0.3f;
         [Header("Legs held out behind, from the hip joint")]
-        [Tooltip("Ankle distance over the leg's length, and its angle toward the belly from straight back (deg): the legs run back under the sides of the tail, whose root sits just behind and above the hip joints and is wider than they are apart, so held straight back they would run through it.")]
+        [Tooltip("Ankle distance over the leg's length, and its angle toward the belly from straight back (deg): the legs run back under the tail, whose root sits just behind and above the hip joints, so held straight back they would run through it.")]
         public float reach = 0.96f;
         public float angle = 40f;
-        [Tooltip("How far out the feet sit (leg lengths, within the reach; negative = in toward the tail). The webs sweep up past the tail's root, so they must clear its sides.")]
-        public float outward = 0.5f;
+        [Tooltip("Gap between the webs' inner edges (m): each ankle sits half its web's width out from the hips' midline, so the webs lie together as one fluke.")]
+        public float apart = 0.005f;
         [Header("Wave")]
         [Tooltip("How far the legs swing up and down about the hips on top of the hips' own pitch (deg), and how far behind the spine wave's beat they run (cycles).")]
         public float sweep = 44f;
@@ -299,12 +299,15 @@ namespace OtterLocomotion
     /// hang under the chest on the belly: turned up, that is under the chin, and the head curled over to look along the
     /// belly buries them. The chest and belly are measured from the skin when the limbs are captured. The arms are too
     /// short to take the wrists out from under the chin, so each paw lies flat, palm to the chest, its fingers reaching
-    /// back along the belly; the forearm alone would carry it tilted, its fingers into the chest.
+    /// back along the belly; the forearm alone would carry it tilted, its fingers into the chest. In the dolphin wave
+    /// (FlukeStroke) they tuck in there on the belly too, out of the water streaming past, and ride with the chest.
     /// </summary>
     [Serializable]
     public class ChestRest
     {
         public bool enabled = true;
+        [Tooltip("How far toward their place on the chest and belly the forepaws tuck in the dolphin wave.")]
+        [Range(0f, 1f)] public float sprintTuck = 1f;
         [Tooltip("How far out from the midline each wrist lies, as a share of the trunk's half width.")]
         [Range(0f, 1f)] public float apart = 0.4f;
         [Tooltip("How far the wrist reaches back over the chest from the shoulder, as a share of the arm's length: as far back from the head as the arm lies at ease.")]
@@ -395,7 +398,8 @@ namespace OtterLocomotion
     /// (HindKick), splay out to either side in a turn (HindTurn), and sprinting prone hold out behind as a fluke
     /// (FlukeStroke); forepaws paddle round the shoulder, the shoulder blade reaching and drawing it (ForePaddle), and
     /// rest when they have nothing to do: under the chest on the belly, on
-    /// the chest and belly on the back (ChestRest); in the water they trail the chest's turning (ForeFollow). Rolling
+    /// the chest and belly on the back and tucked there in the dolphin wave (ChestRest); in the water they trail the
+    /// chest's turning (ForeFollow). Rolling
     /// over, the paw on the side going down sweeps back through the water against the roll and the other settles at its
     /// new rest, both as far as the chest has actually rolled (ForeRoll). Paths hang
     /// off the chest / hip bone, so they follow the spine's bend and roll. After the IK solve the hind flippers are turned at
@@ -483,8 +487,9 @@ namespace OtterLocomotion
             /// normal's turn from there (deg).</summary>
             public Vector3 ankle;
             public float turned;
-            /// <summary>Middle of the web in the flipper's space.</summary>
+            /// <summary>Middle of the web in the flipper's space, and half its width (m) from the skin's spread across it.</summary>
             public Vector3 centerLocal;
+            public float webHalfWidth;
             public Vector3 webScale;
             public int widthAxis;
             /// <summary>How far the ankle is set for the push, and the web spread: 1 through the power stroke, falling to 0
@@ -766,7 +771,10 @@ namespace OtterLocomotion
 
         // a forepaw on the back lies on the chest; rolling over, it moves between there and its rest under the chest
         private Vector3 RestLocal(int i, in Limb l) =>
-            OtterRig.IsFore((LimbId)i) && chestRest.enabled ? Vector3.Lerp(l.restLocal, l.chestLocal, l.supine) : l.restLocal;
+            OtterRig.IsFore((LimbId)i) && chestRest.enabled ? Vector3.Lerp(l.restLocal, l.chestLocal, OnChest(l)) : l.restLocal;
+
+        // how far a forepaw has gone to its place on the chest and belly: over on the back, or tucked in the dolphin wave
+        private float OnChest(in Limb l) => chestRest.enabled ? Mathf.Max(l.supine, Fluke * chestRest.sprintTuck) : 0f;
 
         // The web's normal from the skinned mesh, signed to the face that is dorsal with the leg trailing at rest. Its
         // width runs across the toes.
@@ -774,7 +782,7 @@ namespace OtterLocomotion
         {
             var end = ik.end.bone;
             var web = OtterRig.Flipper(end);
-            if (web == end || web.childCount == 0 || !OtterRig.TryFootPlane(web, out var normal, out _, out var center, out _)) return;
+            if (web == end || web.childCount == 0 || !OtterRig.TryFootPlane(web, out var normal, out _, out var center, out var spread)) return;
             Vector3 n = web.TransformDirection(normal);
             if (Vector3.Dot(n, l.girdle.TransformDirection(l.upLocal)) < 0f) n = -n;
             Vector3 toes = Vector3.ProjectOnPlane(web.GetChild(0).position - web.position, n).normalized;
@@ -795,6 +803,8 @@ namespace OtterLocomotion
             KickAxes(l, out _, out _, out var outward, out _);
             l.side = Vector3.Dot(Vector3.Cross(n, toes), outward) >= 0f ? 1f : -1f;
             l.centerLocal = center;
+            // the spread is one sigma; evenly across a width that is half of it over the square root of three
+            l.webHalfWidth = Mathf.Sqrt(3f) * spread.y;
             l.widthAxis = axis;
             l.width = 1f;
         }
@@ -821,9 +831,9 @@ namespace OtterLocomotion
             l.fingersLocal = paw.InverseTransformDirection(fingers);
         }
 
-        // Paddling, the paws are set square to their sweep and edge-on through the recovery (Feathered). On the back they lie
-        // flat on the chest, palm to it, fingers back along the belly and in toward the midline (ChestRest); rolling over
-        // they turn between there and where the forearm carries them.
+        // Paddling, the paws are set square to their sweep and edge-on through the recovery (Feathered). On the back and
+        // tucked in the dolphin wave they lie flat on the chest, palm to it, fingers back along the belly and in toward
+        // the midline (ChestRest); rolling over they turn between there and where the forearm carries them.
         private void PosePaws()
         {
             if (!isActiveAndEnabled || brain == null || !brain.HasLimbGeometry) return;
@@ -835,7 +845,7 @@ namespace OtterLocomotion
                 if (!l.ik.alignEndRotation) l.paw.localRotation = l.pawRest;
                 float engaged = Mathf.Max(PaddleEngagement(l.size), l.rolling);
                 if (engaged > 1e-3f && l.sweep.sqrMagnitude > 1e-12f) l.paw.rotation = Quaternion.Slerp(l.paw.rotation, Feathered(l), engaged);
-                float supine = chestRest.enabled ? l.supine * (1f - l.rolling) : 0f;
+                float supine = OnChest(l) * (1f - l.rolling);
                 if (supine < 1e-3f) continue;
                 Vector3 fwd = l.girdle.TransformDirection(l.forwardLocal).normalized;
                 Vector3 dorsal = Vector3.ProjectOnPlane(l.girdle.TransformDirection(l.upLocal), fwd).normalized;
@@ -1049,8 +1059,8 @@ namespace OtterLocomotion
 
         // A forepaw in the water trails the chest's turning (ForeFollow), about the shoulder joint so it keeps its reach:
         // the water holds it where it was while the chest turns, and it eases back to rest. A stroking paw drives itself,
-        // as both do through a roll over (ForeRoll), and one out of the water rides with the chest, keeping how far it
-        // trails, so neither going in nor coming out jumps.
+        // as both do through a roll over (ForeRoll); one out of the water or tucked on the chest rides with the chest,
+        // keeping how far it trails, so neither going in nor coming out jumps.
         private void Trail(ref Limb l)
         {
             var f = foreFollow;
@@ -1059,7 +1069,7 @@ namespace OtterLocomotion
             l.hasCarried = true;
             float depth = water != null ? water.Depth(l.target.position) : (0.5f - brain.Posture.SupineFraction) * f.wetDepth;
             l.wet = Mathf.Clamp01(0.5f + depth / Mathf.Max(1e-4f, f.wetDepth));
-            float drag = l.wet * (1f - PaddleEngagement(l.size)) * (1f - rolling);
+            float drag = l.wet * (1f - PaddleEngagement(l.size)) * (1f - rolling) * (1f - Fluke * chestRest.sprintTuck);
             Quaternion ride = chest * Quaternion.Inverse(l.chestBefore) * l.carried;
             Quaternion held = Quaternion.Slerp(ride, l.carried, drag);
             l.carried = Quaternion.Slerp(held, chest, 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, f.lagTime)));
@@ -1315,13 +1325,15 @@ namespace OtterLocomotion
             return offset;
         }
 
-        // Sprinting prone: the leg held out behind along the hips, swinging up and down behind the hips' own pitch
+        // Sprinting prone: the leg held out behind along the hips, swinging up and down behind the hips' own pitch, the
+        // foot beside the other
         private Vector3 FlukeAnkle(in Limb l, Vector3 joint, Vector3 back, Vector3 outward, Vector3 belly)
         {
             var f = fluke;
             float a = (f.angle - f.sweep * FlukeDrive * Mathf.Cos(2f * Mathf.PI * (FlukePhase - f.lag))) * Mathf.Deg2Rad;
-            float along = Mathf.Sqrt(Mathf.Max(0f, f.reach * f.reach - f.outward * f.outward));
-            return joint + l.length * (along * (back * Mathf.Cos(a) + belly * Mathf.Sin(a)) + outward * f.outward);
+            float side = (l.webHalfWidth * f.width + 0.5f * f.apart - Vector3.Dot(joint - l.girdle.position, outward)) / Mathf.Max(1e-4f, l.length);
+            float along = Mathf.Sqrt(Mathf.Max(0f, f.reach * f.reach - side * side));
+            return joint + l.length * (along * (back * Mathf.Cos(a) + belly * Mathf.Sin(a)) + outward * side);
         }
 
         // The fluke pitches the web into the water it meets, from the way it actually moves through it: the hips' own
