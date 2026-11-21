@@ -41,9 +41,8 @@ namespace OtterLocomotion
         public float swayGain = 3f;
 
         [Header("Bank")]
-        [Tooltip("Bank (deg) the fastest, tightest turns lean toward: the side on the inside of the turn sinks, the shoulder on the belly, the other one on the back. In the dolphin wave it rolls far over into the turn, as a dolphin does.")]
+        [Tooltip("Bank (deg) the fastest, tightest turns lean toward: the side on the inside of the turn sinks, the shoulder on the belly, the other one on the back.")]
         public float fullBankDeg = 35f;
-        public float dolphinBankDeg = 60f;
         [Tooltip("Turning acceleration u r* (body lengths/s^2) that banks the body three quarters of the way there. It grows with the speed and with how tight the turn is; the water carries the body's weight, so unlike a plane's bank it is not measured against gravity.")]
         public float bankAccelBL = 2f;
         [Tooltip("Extra bank per deg/s of commanded yaw rate when turning in place, fading out by yawRateRefSpeedBL.")]
@@ -120,8 +119,7 @@ namespace OtterLocomotion
 
             // bank into the turn, deeper the faster and tighter it is, plus a little when pivoting in place
             float bankAccel = Mathf.Max(1e-3f, s.bankAccelBL * p.bodyLength);
-            float fullBank = intent.gait == Gait.Dolphin ? s.dolphinBankDeg : s.fullBankDeg;
-            float bank = fullBank * (float)System.Math.Tanh(lateralAccel / bankAccel)
+            float bank = s.fullBankDeg * (float)System.Math.Tanh(lateralAccel / bankAccel)
                        + s.pivotBankPerYawRate * rTarget * (1f - speed01);
 
             demand = new LocomotionDemand
@@ -135,7 +133,7 @@ namespace OtterLocomotion
                 surgeForce = surgeForce,
                 swayForce = swayForce,
                 yawMoment = yawMoment,
-                bankTargetDeg = Mathf.Clamp(bank, -fullBank, fullBank),
+                bankTargetDeg = Mathf.Clamp(bank, -s.fullBankDeg, s.fullBankDeg),
             };
             return demand;
         }
