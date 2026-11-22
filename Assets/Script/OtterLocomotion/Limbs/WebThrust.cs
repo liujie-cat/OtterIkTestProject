@@ -57,8 +57,7 @@ namespace OtterLocomotion
         private readonly Web[] webs = new Web[2];
         private Water water;
         private Rigidbody body;
-        private Vector3 impulse, force;
-        private float time;
+        private Vector3 impulse;
         private bool started;
         private Vector3 previousPivot, previousHeading;
 
@@ -113,11 +112,7 @@ namespace OtterLocomotion
             if (started) Setup();
         }
 
-        private void OnDisable()
-        {
-            impulse = force = Vector3.zero;
-            time = 0f;
-        }
+        private void OnDisable() => impulse = Vector3.zero;
 
         private void Setup()
         {
@@ -187,7 +182,6 @@ namespace OtterLocomotion
             previousPivot = pivot;
             previousHeading = facing;
             impulse += total * dt;
-            time += dt;
         }
 
         // the share of the web's skin below the surface
@@ -203,11 +197,11 @@ namespace OtterLocomotion
         private void FixedUpdate()
         {
             if (body == null) return;
-            // the frames' pushes since the last physics step, held when no frame came between
-            if (time > 0f) force = impulse / time;
+            // the frames' pushes since the last physics step, each counted once: averaged over the frames and held for
+            // the step, one frame's push between steps would count 1.2 times and two frames' 0.6 times at 60 frames a
+            // second, and a kick in step with that would push harder or softer every time
+            body.AddForce(impulse, ForceMode.Impulse);
             impulse = Vector3.zero;
-            time = 0f;
-            body.AddForce(force, ForceMode.Force);
         }
     }
 }

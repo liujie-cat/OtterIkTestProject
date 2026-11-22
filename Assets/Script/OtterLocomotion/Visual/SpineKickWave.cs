@@ -10,8 +10,10 @@ namespace OtterLocomotion
     /// sends a wave packet along the spine (the harmonizer's ExpSpineKickWavePacketProvider), sized by the push and
     /// lasting until the next one, so the body undulates in time with the feet. On the back the packets fade out: lying
     /// on its back the otter paddles with its feet and keeps its trunk straight, and as a packet bends the spine one way
-    /// only, pushes in quick succession would hold it bent into a bow. While LimbStrokeAnimator holds the
-    /// hind legs out as a fluke the body swims along the dolphin wave instead (DolphinTrack) and the packets stop.
+    /// only, pushes in quick succession would hold it bent into a bow. The fluke's beats in the dolphin wave send none,
+    /// however far the hind legs have gone over to it (LimbStrokeAnimator): the body swims along the wave instead
+    /// (DolphinTrack), and a packet as long as a beat would fold the hips up out of the water; nor does a kick while
+    /// the fluke is still well in, leaving the wave.
     /// </summary>
     [DefaultExecutionOrder(310)]
     [DisallowMultipleComponent]
@@ -31,7 +33,7 @@ namespace OtterLocomotion
         [Tooltip("Packet strength on the back, as a share of that on the belly.")]
         [Range(0f, 1f)] public float supinePulse = 0f;
         [Header("Fluke")]
-        [Tooltip("Once the fluke is this far in the dolphin wave takes over from the packets.")]
+        [Tooltip("Leaving the dolphin wave, kicks send packets again once the fluke is out this far.")]
         [Range(0f, 1f)] public float pulsesOff = 0.5f;
 
         private ExpSpineKickWavePacketProvider packet;
@@ -73,7 +75,7 @@ namespace OtterLocomotion
         private void OnPush(LimbId limb, LimbStroke st)
         {
             if (!pulseKicks || packet == null || OtterRig.IsFore(limb) || st.parking || st.drive <= 0f) return;
-            if (animator == null || !animator.isActiveAndEnabled || animator.Fluke >= pulsesOff) return;
+            if (animator == null || !animator.isActiveAndEnabled || animator.Fluke >= pulsesOff || brain.Intent.gait == Gait.Dolphin) return;
             float strength = Mathf.Lerp(lightPulse, fullPulse, st.drive) * Mathf.Lerp(1f, supinePulse, brain.Posture.SupineFraction);
             if (strength <= 1e-3f) return;
             float interval = (brain.Rhythm.HindTogether ? 1f : 0.5f) / Mathf.Max(0.1f, st.rate);

@@ -32,6 +32,10 @@ namespace OtterLocomotion
         [Tooltip("Hind feet kicking together: cruising and sprinting on the belly, in the dolphin wave, and a click's kick from rest. The web drives only while it sweeps back faster than the body moves on, so the push is quick and the relaxed draw long.")]
         [FormerlySerializedAs("hind")]
         public RhythmProfile hindTogether = new RhythmProfile(0.7f, 3f, 0.25f, 3f);
+        [Tooltip("How far the body swims for each kick on the belly (body lengths): the hind feet kick together once for each such stride at the speed it is asked for, within hindTogether's rates, so every kick carries the body on; pushing harder makes a kick bigger, not quicker.")]
+        public float kickStrideBL = 0.6f;
+        [Tooltip("How long the push of a kick on the belly lasts (s), however long its stride, within hindTogether's power fraction: a slower beat draws the foot up more slowly and glides, its web still sweeping back faster than the body moves on.")]
+        public float kickPushTime = 0.065f;
         [Tooltip("Hind feet beating as one fluke in the dolphin wave: a slow, long beat the whole body swims along, once for each stride (dolphinStrideBL) at the speed it is asked for, within these rates, however hard it pushes.")]
         public RhythmProfile dolphin = new RhythmProfile(0.4f, 1.6f, 0.25f, 3f);
         [Tooltip("How far the body swims for each beat of the dolphin wave (body lengths): the wave's length through the water, which the whole body follows (DolphinTrack).")]
@@ -97,8 +101,9 @@ namespace OtterLocomotion
 
     /// <summary>
     /// Per-limb phase oscillators (a small central pattern generator) driven by the allocation: how hard a limb is
-    /// asked to push sets its stroke strength and a hind foot's rate, the force direction sets its stroke direction,
-    /// fixed when each power phase begins. A forepaw strokes once for so many degrees the body is asked to turn. Left and right of a girdle pull toward alternating strokes; the hind feet kick together in
+    /// asked to push sets its stroke strength and the rate of hind feet taking turns, the force direction sets its
+    /// stroke direction, fixed when each power phase begins. A forepaw strokes once for so many degrees the body is asked
+    /// to turn; the hind feet on the belly kick once for each stride the body is asked to swim. Left and right of a girdle pull toward alternating strokes; the hind feet kick together in
     /// the gaits on the belly. A limb with nothing to do finishes its cycle and rests; a fresh demand in the late
     /// recovery hurries the rest of it through, and a limb starting from rest pushes immediately, a forepaw once it has
     /// reached forward for its catch. A click's kick
@@ -117,8 +122,8 @@ namespace OtterLocomotion
         private readonly bool[] startedNow = new bool[OtterRig.LimbCount];
         private readonly float[] stepPhase = new float[OtterRig.LimbCount];
         /// <summary>Both hind feet were at rest when a kick came, so they kick it together whatever the gait.</summary>
-        private bool kickFromRest, dolphin;
-        private float turnRate, strideRate;
+        private bool kickFromRest, dolphin, belly;
+        private float turnRate, speed;
 
         public void Reset()
         {
@@ -145,18 +150,19 @@ namespace OtterLocomotion
 
         /// <param name="gait">The controls' hind gait: together on the belly, taking turns on the back.</param>
         /// <param name="yawRateTarget">Turn rate the body is asked for (deg/s), which paces the forepaws.</param>
-        /// <param name="strides">Strides of the dolphin wave each second at the speed the body is asked for, or swims at
-        /// when faster, which pace the fluke: the wave runs on through the water while the body gathers way.</param>
-        public void Step(RhythmSettings s, ControlAllocator allocation, Gait gait, float yawRateTarget, float strides, float dt)
+        /// <param name="speedBL">Speed the body is asked for, or swims at when faster (body lengths/s), which paces the
+        /// kicks on the belly and the fluke by their strides: the wave runs on through the water while the body gathers way.</param>
+        public void Step(RhythmSettings s, ControlAllocator allocation, Gait gait, float yawRateTarget, float speedBL, float dt)
         {
             turnRate = Mathf.Abs(yawRateTarget);
-            strideRate = strides;
+            speed = speedBL;
             ref var hindL = ref limbs[(int)LimbId.HL];
             ref var hindR = ref limbs[(int)LimbId.HR];
             // parked, the kick's pair recovers together and comes to rest together
             if (hindL.kick <= 0f && hindR.kick <= 0f && (gait != Gait.Rest || (!hindL.active && !hindR.active))) kickFromRest = false;
             HindTogether = gait == Gait.ProneTogether || gait == Gait.Dolphin || kickFromRest;
             dolphin = gait == Gait.Dolphin;
+            belly = gait == Gait.ProneTogether;
 
             for (int i = 0; i < OtterRig.LimbCount; i++)
             {
@@ -237,15 +243,23 @@ namespace OtterLocomotion
             OtterRig.IsFore((LimbId)limb) ? s.forePaddle : dolphin ? s.dolphin : HindTogether ? s.hindTogether : s.hindAlternate;
 
         private bool Fluking(int limb) => dolphin && !OtterRig.IsFore((LimbId)limb);
+        private bool KickingOnBelly(int limb) => belly && !OtterRig.IsFore((LimbId)limb);
 
-        /// <summary>Stroke rate (cycles/s) at a drive: a hind foot's by how hard it pushes, or in the dolphin wave by how
-        /// fast the body swims; a forepaw's by how fast the body is asked to turn.</summary>
+        /// <summary>Stroke rate (cycles/s) at a drive: a hind foot's by how hard it pushes, or on the belly and in the
+        /// dolphin wave once for each stride the body swims; a forepaw's by how fast the body is asked to turn.</summary>
         private float Rate(RhythmSettings s, int limb, float drive)
         {
             var profile = Profile(s, limb);
             if (OtterRig.IsFore((LimbId)limb)) return Mathf.Clamp(turnRate / Mathf.Max(1f, s.foreTurnPerStroke), profile.minHz, profile.maxHz);
-            if (Fluking(limb)) return Mathf.Clamp(strideRate, profile.minHz, profile.maxHz);
+            if (Fluking(limb)) return Mathf.Clamp(speed / Mathf.Max(0.1f, s.dolphinStrideBL), profile.minHz, profile.maxHz);
+            if (KickingOnBelly(limb)) return Mathf.Clamp(speed / Mathf.Max(0.05f, s.kickStrideBL), profile.minHz, profile.maxHz);
             return Mathf.Lerp(profile.minHz, profile.maxHz, drive);
+        }
+
+        private float PowerFraction(RhythmSettings s, int limb)
+        {
+            float fraction = Profile(s, limb).powerFraction;
+            return KickingOnBelly(limb) ? Mathf.Min(fraction, s.kickPushTime * Rate(s, limb, limbs[limb].drive)) : fraction;
         }
 
         /// <summary>How far the partner's phase should run ahead of this limb's (cycles).</summary>
@@ -260,7 +274,7 @@ namespace OtterLocomotion
         {
             ref var l = ref limbs[i];
             ref var p = ref limbs[Partner(i)];
-            l.powerFraction = Profile(s, i).powerFraction;
+            l.powerFraction = PowerFraction(s, i);
             // a kick from rest draws the foot up through the late recovery first: pushing straight from the rest pose
             // the stroke's loop grows out ahead of the foot and sweeps the web forward, backing the body. A forepaw
             // likewise reaches forward for its catch first, or it would cut into its sweep halfway round
@@ -287,7 +301,7 @@ namespace OtterLocomotion
         private void BeginStroke(RhythmSettings s, int i)
         {
             ref var l = ref limbs[i];
-            l.powerFraction = Profile(s, i).powerFraction;
+            l.powerFraction = PowerFraction(s, i);
             l.direction = l.targetDirection;
             l.strokeDrive = l.targetDrive;
             l.kicking = l.kick > 0f;
