@@ -29,7 +29,7 @@ namespace OtterLocomotion
         public float standTime = 0.6f;
         public float lieTime = 0.5f;
         [Tooltip("How high the chest joint stands out of the water upright (m); afloat on its own it rides at about the surface.")]
-        public float standHeight = 0.06f;
+        public float standHeight = 0.045f;
         [Tooltip("How stiffly the treading holds it there: the frequency (Hz) and damping (share of critical) it settles onto it with.")]
         public float holdFrequency = 1.5f;
         public float holdDamping = 1f;

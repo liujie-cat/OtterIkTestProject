@@ -909,7 +909,7 @@ MonoBehaviour:
   pitch: 80
   standTime: 0.6
   lieTime: 0.5
-  standHeight: 0.06
+  standHeight: 0.045
   holdFrequency: 1.5
   holdDamping: 1
   uprightDrag: 18
