@@ -92,20 +92,22 @@ namespace OtterLocomotion
     /// <summary>
     /// The gears the go and back keys climb and come down (行动操作). Not picked up, the otter lies parked on its back:
     /// the pointer does not guide it and it does not shift. The go key picks it up, then each press shifts up, from
-    /// parked to slow and from slow to cruising; parked and swimming slowly it lies on its back, cruising and sprinting
-    /// it swims on its belly. Pressed cruising and held, it sprints along the heading: kicking at first, then in the
+    /// parked to slow and from slow to cruising. Picked up and parked at the surface it stands up in the water to look
+    /// about (Upright, Periscope), on its belly side; swimming slowly it lies on its back, cruising and sprinting it
+    /// swims on its belly. Pressed cruising and held, it sprints along the heading: kicking at first, then in the
     /// dolphin wave, out of which it swims a wide turn on its belly with all four limbs, going back into the wave once
     /// round; let go before the wave it cruises on, let go in the wave it slows of itself, keeping the wave while
     /// still fast and for at least jumpGrace, and a press in the wave jumps (held on, it sprints on). Each press of the
     /// back key shifts down, and parked lets it go; held, it brakes to parked and lets it go, so let go it is always
     /// parked on its back. Picked up, the pointer is its guide point: the head looks at it and the body turns after the
     /// head, headLead behind. A click on the water, picked up or not, turns it toward the click and kicks once without
-    /// shifting (sprinting it only turns); on the otter, where it points nowhere, it kicks along the heading. The dive
-    /// key sends it under (a duck dive); held, under water or on the way, it swims deeper, and let go it keeps its
-    /// depth; a tap of it under water sends it back up. Under water, and until it is back at the surface, it swims on
-    /// its belly, cruising and sprinting as on the surface, and does not jump. There it has no slow gear: sent under
-    /// swimming slowly, it rolls onto its belly and cruises on once on its way down, and the go and back keys pass over
-    /// slow, between parked and cruising. Presses and clicks while in the air are spent.
+    /// shifting (sprinting, and standing up in the water, it only turns); on the otter, where it points nowhere, it
+    /// kicks along the heading. The dive key sends it under (a duck dive); held, under water or on the way, it swims
+    /// deeper, and let go it keeps its depth; a tap of it under water sends it back up. Under water, and until it is
+    /// back at the surface, it swims on its belly, cruising and sprinting as on the surface, and does not jump. There
+    /// it has no slow gear: sent under swimming slowly, it rolls onto its belly and cruises on once on its way down,
+    /// and the go and back keys pass over slow, between parked and cruising. Presses and clicks while in the air are
+    /// spent.
     /// </summary>
     public sealed class GearMachine
     {
@@ -135,8 +137,11 @@ namespace OtterLocomotion
         /// <summary>Diving, or still under water on its way back up.</summary>
         public bool Underwater => Diving || under;
 
+        /// <summary>Picked up and parked at the surface: it stands up in the water on its belly side, turning after the pointer and drifting on only a little.</summary>
+        public bool Upright => Selected && Gear == Gear.Park && !Underwater;
+
         public bool JumpEligible => Gait == Gait.Dolphin && !Underwater;
-        public Posture Posture => Underwater ? Posture.Prone : PostureOf(Gear);
+        public Posture Posture => Underwater || Upright ? Posture.Prone : PostureOf(Gear);
         public static Posture PostureOf(Gear gear) => gear <= Gear.Slow ? Posture.Supine : Posture.Prone;
         public Gait Gait => Gear switch
         {
@@ -288,7 +293,7 @@ namespace OtterLocomotion
                 AimPoint = g.point;
                 aimUntil = time;
             }
-            if (Gear == Gear.Sprint) return;
+            if (Gear == Gear.Sprint || Upright) return;
             events.Add(new ControlEvent { kind = ControlEventKind.Kick, time = time, direction = Heading, strength = Gear == Gear.Park ? s.parkKick : s.swimKick });
         }
 

@@ -216,6 +216,27 @@ namespace OtterLocomotion.Testing
             new Segment("cruise: on the belly at the surface", 1.5f, Action.Idle),
         };
 
+        /// <summary>
+        /// Standing up in the water: picked up parked, it stands up and looks about, turning after the pointer a little
+        /// and a long way round, and a click only turns it; the go key lays it back on its back to swim slowly and the
+        /// back key stands it up again; it dives from there and back at the surface stands up again; let go, it lies back
+        /// on its back.
+        /// </summary>
+        public static List<Segment> PeriscopeScript() => new List<Segment>
+        {
+            new Segment("parked: idle", 1.0f, Action.Idle),
+            new Segment("parked: pick it up, it stands up", 3.0f, Action.Steer, 0f),
+            new Segment("upright: look right 40", 2.0f, Action.Steer, 40f),
+            new Segment("upright: turn left 150", 3.5f, Action.Steer, -110f),
+            new Segment("upright: click right 90, it only turns", 2.5f, Action.Click, -20f),
+            new Segment("upright: go, it lies back to swim slowly", 3.0f, Action.Go, -20f),
+            new Segment("slow: back, it stands up again", 3.0f, Action.Back),
+            new Segment("upright: dive", 3.0f, Action.Dive),
+            new Segment("under: dive, back up", 4.0f, Action.Dive),
+            new Segment("upright: at the surface again", 2.5f, Action.Idle),
+            new Segment("upright: back, let go, it lies on its back", 2.5f, Action.Back),
+        };
+
         public static List<Segment> Script(string name) => name switch
         {
             "turns" => TurnScript(),
@@ -223,6 +244,7 @@ namespace OtterLocomotion.Testing
             "circles" => CircleScript(),
             "dolphin" => DolphinScript(),
             "dive" => DiveScript(),
+            "periscope" => PeriscopeScript(),
             _ => BaselineScript(),
         };
 

@@ -214,6 +214,7 @@ GameObject:
   - component: {fileID: 8771104796876299128}
   - component: {fileID: 8058989683772421274}
   - component: {fileID: 8469317021135849895}
+  - component: {fileID: 3256952115992555538}
   m_Layer: 0
   m_Name: SeaOtter
   m_TagString: Untagged
@@ -392,6 +393,8 @@ MonoBehaviour:
       maxHz: 3
       powerFraction: 0.25
       coupling: 3
+    kickStrideBL: 0.6
+    kickPushTime: 0.065
     dolphin:
       minHz: 0.4
       maxHz: 1.6
@@ -437,6 +440,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   brain: {fileID: 9168428576822680048}
+  periscope: {fileID: 0}
   hindKick:
     tuckedReach: 0.42
     tuckedAngle: 125
@@ -452,6 +456,7 @@ MonoBehaviour:
     lightAmplitude: 0.5
     turnover: 0.5
     midlineReach: 0.6
+  underwaterTilt: 30
   backKick:
     tuckedReach: 0.35
     tuckedAngle: -120
@@ -586,6 +591,7 @@ MonoBehaviour:
   pulseLength: 0.8
   supinePulse: 0
   pulsesOff: 0.5
+  archLength: 0.4
 --- !u!114 &531350608452581864
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -742,6 +748,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   goKey: 119
   backKey: 115
+  diveKey: 32
   inputCamera: {fileID: 0}
   brain: {fileID: 9168428576822680048}
   strokes: {fileID: 7012372989565043957}
@@ -762,10 +769,23 @@ MonoBehaviour:
     jumpGrace: 0.6
     wideTurn: 60
     backInWave: 20
+    diveSpeedBL: 1
     parkKick: 0.6
     swimKick: 1
     aimFade: 0.6
     headLead: 0.12
+  dive:
+    depth: 0.8
+    crest: 0.06
+    crestDeg: 35
+    plungeDeg: 70
+    descendDeg: 40
+    riseDeg: 50
+    bendRadius: 0.15
+    floorClearance: 0.3
+    plungeKick: 1
+    kickPast: 0.1
+    blendTime: 0.15
   turnResponse: 0.1
   brakeBL: 4
   logEvents: 1
@@ -819,6 +839,8 @@ MonoBehaviour:
   rideHeight: 0.02
   maxBob: 40
   maxTilt: 30
+  periscope: {fileID: 0}
+  neckRaise: 0.3
 --- !u!114 &8771104796876299128
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -873,6 +895,28 @@ MonoBehaviour:
   idleAhead: 1.2
   releaseTime: 0.35
   followSpeed: 22
+--- !u!114 &3256952115992555538
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2260765732289317540}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 816f3d4c4653bb64e98c4ff9e7b51e26, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  globalWeight: 1
+  controls: {fileID: 0}
+  harmonizer: {fileID: 0}
+  pitch: 80
+  standTime: 0.6
+  lieTime: 0.5
+  standHeight: 0.06
+  holdFrequency: 1.5
+  holdDamping: 1
+  uprightDrag: 18
 --- !u!1 &2469300951309130709
 GameObject:
   m_ObjectHideFlags: 0

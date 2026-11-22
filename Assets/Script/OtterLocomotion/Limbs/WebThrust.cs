@@ -59,11 +59,13 @@ namespace OtterLocomotion
         private Water water;
         private Rigidbody body;
         private DolphinTrack track;
+        private Periscope periscope;
         private OtterControls controls;
         private Transform chest;
         private Vector3 impulse;
         private bool started;
         private Vector3 previousPivot, previousHeading;
+        private float previousRaised;
 
         /// <summary>A hind web's push on the body along its heading (N, + = forward) last frame; 0 without one.</summary>
         public float Push(LimbId limb)
@@ -123,6 +125,7 @@ namespace OtterLocomotion
             body = GetComponent<Rigidbody>();
             water = FindObjectOfType<Water>();
             track = GetComponent<DolphinTrack>();
+            periscope = GetComponent<Periscope>();
             controls = GetComponent<OtterControls>();
             chest = OtterRig.FindActiveBone(transform, OtterRig.Chest);
             var chains = OtterRig.FindLimbChains(transform);
@@ -164,6 +167,11 @@ namespace OtterLocomotion
             // no stroke of theirs through the water
             float diving = controls != null && controls.isActiveAndEnabled ? controls.DivePath.Weight : 0f;
             Vector3 glide = Vector3.up * (diving * (pivot.y - previousPivot.y));
+            // standing up in the water and lying back down (Periscope), the hips swing down under the chest and back
+            // up, carrying the legs round with them: no stroke of theirs either
+            float raised = periscope != null && periscope.isActiveAndEnabled ? periscope.Raised : 0f;
+            Quaternion stand = Quaternion.AngleAxis(previousRaised - raised, root.right);
+            Vector3 hang = chest != null ? chest.position : pivot;
             float wave = animator != null && animator.isActiveAndEnabled ? animator.Fluke : 0f;
             float lifting = heave * (1f - (track != null && track.isActiveAndEnabled ? track.Weight : wave));
             Vector3 total = Vector3.zero;
@@ -174,6 +182,7 @@ namespace OtterLocomotion
                 Vector3 p = w.bone.TransformPoint(w.centerLocal);
                 Vector3 n = w.bone.TransformDirection(w.normalLocal).normalized;
                 Vector3 from = previousPivot + swing * (w.previous - previousPivot) + glide;
+                from = hang + stand * (from - hang);
                 Vector3 v = w.hasPrevious ? Vector3.ClampMagnitude((p - from) / dt, maxWebSpeed) : Vector3.zero;
                 w.previous = p;
                 w.hasPrevious = true;
@@ -192,6 +201,7 @@ namespace OtterLocomotion
                 total += heading * (wavePush * wave * animator.FlukeDrive * (1f + waveSurge * Mathf.Cos(2f * Mathf.PI * (animator.FlukePhase - wavePushAt))));
             previousPivot = pivot;
             previousHeading = facing;
+            previousRaised = raised;
             impulse += total * dt;
         }
 

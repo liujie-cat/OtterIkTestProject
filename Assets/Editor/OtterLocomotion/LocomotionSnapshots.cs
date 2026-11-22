@@ -123,6 +123,21 @@ namespace OtterLocomotion.EditorTools
                 new Shot(12, 0.05f, "12_dive_from_back_body", 12, 0.1f, body: true),
                 new Shot(14, 0.3f, "14_surfacing_again_body", 12, 0.15f, body: true),
             },
+            "periscope" => new[]
+            {
+                new Shot(1, 0.05f, "01_stand_up_body", 12, 0.08f, body: true),
+                new Shot(1, 2.5f, "01_upright"),
+                new Shot(2, 1.5f, "02_look_right"),
+                new Shot(3, 0.4f, "03_turn_feet", 8, 0.1f),
+                new Shot(3, 1.4f, "03_turn_paws", 8, 0.1f, paws: true),
+                new Shot(3, 3.2f, "03_turned"),
+                new Shot(4, 1.5f, "04_clicked"),
+                new Shot(5, 0.05f, "05_lie_back_body", 12, 0.08f, body: true),
+                new Shot(6, 0.05f, "06_stand_again_body", 12, 0.08f, body: true),
+                new Shot(7, 0.05f, "07_dive_body", 12, 0.12f, body: true),
+                new Shot(9, 1.5f, "09_upright_again"),
+                new Shot(10, 0.05f, "10_let_go_body", 12, 0.08f, body: true),
+            },
             "turns" => new[]
             {
                 new Shot(3, 0.15f, "03_park_large_right_feet", 8, 0.08f),

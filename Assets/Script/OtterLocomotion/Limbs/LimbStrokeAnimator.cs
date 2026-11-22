@@ -297,7 +297,8 @@ namespace OtterLocomotion
     /// belly buries them. The chest and belly are measured from the skin when the limbs are captured. The arms are too
     /// short to take the wrists out from under the chin, so each paw lies flat, palm to the chest, its fingers reaching
     /// back along the belly; the forearm alone would carry it tilted, its fingers into the chest. In the dolphin wave
-    /// (FlukeStroke) they tuck in there on the belly too, out of the water streaming past, and ride with the chest.
+    /// (FlukeStroke) they tuck in there on the belly too, out of the water streaming past, and ride with the chest, and
+    /// standing up in the water (Periscope) they are held there to the chest.
     /// </summary>
     [Serializable]
     public class ChestRest
@@ -395,8 +396,8 @@ namespace OtterLocomotion
     /// (HindKick), splay out to either side in a turn (HindTurn), and sprinting prone hold out behind as a fluke
     /// (FlukeStroke); forepaws paddle round the shoulder, the shoulder blade reaching and drawing it (ForePaddle), and
     /// rest when they have nothing to do: under the chest on the belly, on
-    /// the chest and belly on the back and tucked there in the dolphin wave (ChestRest); in the water they trail the
-    /// chest's turning (ForeFollow). Rolling
+    /// the chest and belly on the back and tucked there in the dolphin wave (ChestRest), and standing up in the water
+    /// (Periscope) they are held there and do not paddle; in the water they trail the chest's turning (ForeFollow). Rolling
     /// over, the paw on the side going down sweeps back through the water against the roll and the other settles at its
     /// new rest, both as far as the chest has actually rolled (ForeRoll). Paths hang
     /// off the chest / hip bone, so they follow the spine's bend and roll. After the IK solve the hind flippers are turned at
@@ -410,6 +411,8 @@ namespace OtterLocomotion
     {
         [Tooltip("Found on this object when empty.")]
         public OtterLocomotionBrain brain;
+        [Tooltip("Found on this object when empty; without it the forepaws paddle and hang under the chest standing up as lying on the belly.")]
+        public Periscope periscope;
         [Tooltip("The kick on the belly.")]
         public HindKick hindKick = new HindKick();
         [Tooltip("Under water the body lies straight along its way, where on the surface the pushes hold the rump up and the kick with it (SpineKickWave): the kick on the belly tilts round toward the tail as far (deg), so the feet drive along the way as they do there.")]
@@ -593,6 +596,7 @@ namespace OtterLocomotion
         private void Awake()
         {
             if (brain == null) brain = GetComponent<OtterLocomotionBrain>();
+            if (periscope == null) periscope = GetComponent<Periscope>();
         }
 
         // limb chains are captured on Start: when added while the scene loads, the IK components are not enabled yet
@@ -769,8 +773,12 @@ namespace OtterLocomotion
         private Vector3 RestLocal(int i, in Limb l) =>
             OtterRig.IsFore((LimbId)i) && chestRest.enabled ? Vector3.Lerp(l.restLocal, l.chestLocal, OnChest(l)) : l.restLocal;
 
-        // how far a forepaw has gone to its place on the chest and belly: over on the back, or tucked in the dolphin wave
-        private float OnChest(in Limb l) => chestRest.enabled ? Mathf.Max(l.supine, Fluke * chestRest.sprintTuck) : 0f;
+        // how far a forepaw has gone to its place on the chest and belly: over on the back, tucked in the dolphin wave,
+        // or held there standing up in the water
+        private float OnChest(in Limb l) => chestRest.enabled ? Mathf.Max(l.supine, Mathf.Max(Fluke * chestRest.sprintTuck, Upright)) : 0f;
+
+        // how far the otter has stood up in the water (Periscope)
+        private float Upright => periscope != null && periscope.isActiveAndEnabled ? periscope.Weight : 0f;
 
         // The web's normal from the skinned mesh, signed to the face that is dorsal with the leg trailing at rest. Its
         // width runs across the toes.
@@ -1053,7 +1061,7 @@ namespace OtterLocomotion
             l.hasCarried = true;
             float depth = water != null ? water.Depth(l.target.position) : (0.5f - brain.Posture.SupineFraction) * f.wetDepth;
             l.wet = Mathf.Clamp01(0.5f + depth / Mathf.Max(1e-4f, f.wetDepth));
-            float drag = l.wet * (1f - PaddleEngagement(l.size)) * (1f - rolling) * (1f - Fluke * chestRest.sprintTuck);
+            float drag = l.wet * (1f - PaddleEngagement(l.size)) * (1f - rolling) * (1f - Mathf.Max(Fluke * chestRest.sprintTuck, Upright));
             Quaternion ride = chest * Quaternion.Inverse(l.chestBefore) * l.carried;
             Quaternion held = Quaternion.Slerp(ride, l.carried, drag);
             l.carried = Quaternion.Slerp(held, chest, 1f - Mathf.Exp(-Time.deltaTime / Mathf.Max(1e-3f, f.lagTime)));
@@ -1252,7 +1260,7 @@ namespace OtterLocomotion
             // a limb with nothing left to do shrinks back to rest while its cycle runs out, e.g. forepaws folding as the otter rolls onto its back
             if (!st.active || st.parking) return 0f;
             return OtterRig.IsFore((LimbId)i)
-                ? forePaddle.Amplitude(st.drive)
+                ? forePaddle.Amplitude(st.drive) * (1f - Upright)
                 : Mathf.Lerp(hindKick.Amplitude(st.drive), backKick.Amplitude(st.drive), brain.Posture.SupineFraction);
         }
 

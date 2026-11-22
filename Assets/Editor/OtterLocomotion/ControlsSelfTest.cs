@@ -78,7 +78,7 @@ namespace OtterLocomotion.EditorTools
             public int Surfacings => events.Count(e => e.kind == ControlEventKind.Surface);
             public bool Supine => gears.Posture == Posture.Supine;
             public override string ToString() =>
-                $"{(gears.Selected ? "selected" : "not selected")}, gear {gears.Gear}{(gears.Dolphin ? " wave" : "")}, {gears.Posture}, {gears.Gait}, {gears.SpeedBL:F2} BL/s" +
+                $"{(gears.Selected ? "selected" : "not selected")}, gear {gears.Gear}{(gears.Dolphin ? " wave" : "")}{(gears.Upright ? " upright" : "")}, {gears.Posture}, {gears.Gait}, {gears.SpeedBL:F2} BL/s" +
                 $"{(gears.Diving ? ", diving" : "")}{(gears.Descending ? " deeper" : "")}{(underwater ? ", under" : "")}; events [{string.Join(", ", events)}]";
         }
 
@@ -101,7 +101,26 @@ namespace OtterLocomotion.EditorTools
             }
 
             var s = new Sim().Go().Wait(0.5f);
-            Check("未选中按 W：只选中，不改档，仍停驻仰姿", s.gears.Selected && s.gears.Gear == Gear.Park && s.Supine && s.events.Count == 1 && s.events[0].kind == ControlEventKind.Select, s);
+            Check("未选中按 W：只选中，不改档，站起来踩水（俯身那面朝前）", s.gears.Selected && s.gears.Gear == Gear.Park && s.gears.Upright && s.gears.Posture == Posture.Prone && s.events.Count == 1 && s.events[0].kind == ControlEventKind.Select, s);
+
+            s = new Sim().Go();
+            s.events.Clear();
+            s.point = Head + Vector3.right;
+            s.Click();
+            Check("绿圈站立单击水面：只转向点击处，不蹬腿，仍站着", s.Kicks == 0 && s.gears.Upright && Vector3.Angle(s.gears.Heading, Vector3.right) < 1f, s);
+
+            s = new Sim().Go().Go();
+            bool lying = !s.gears.Upright && s.Supine;
+            s.Back();
+            Check("站立按 W 躺回仰泳；慢游按 S 回停驻，仍选中，重新站起来", lying && s.gears.Gear == Gear.Park && s.gears.Selected && s.gears.Upright, s);
+
+            s = new Sim().Go().Dive();
+            bool diving = s.gears.Diving && !s.gears.Upright && s.gears.Posture == Posture.Prone;
+            s.Under().Dive().Under(false);
+            Check("站立按空格：下潜时不再站着；上浮回到水面重新站起来", diving && !s.gears.Diving && s.gears.Upright, s);
+
+            s = new Sim().Go().Back();
+            Check("站立点 S 解除选中：躺回仰姿", !s.gears.Selected && !s.gears.Upright && s.Supine, s);
 
             s = new Sim().Run(0.6f, go: true).LetGo();
             Check("未选中按住 W：只选中，不冲刺", s.gears.Selected && s.gears.Gear == Gear.Park && !s.gears.Accelerating, s);

@@ -62,6 +62,12 @@ namespace OtterLocomotion.Testing
         public float diveUnderMax = 1.5f;
         [Tooltip("Sent up, the way rises at least this fast on average until the body floats (cm/s).")]
         public float surfaceRateMin = 30f;
+        [Tooltip("Stood up in the water (Periscope): the chest pitched up at least this far from level (deg), the chest and the head joint at least this high above the surface (cm), the snout within this of level (deg), and the body no faster than this (m/s).")]
+        public float uprightPitchMin = 70f;
+        public float uprightChestMin = 2f;
+        public float uprightHeadMin = 8f;
+        public float uprightSnoutMax = 20f;
+        public float uprightSpeedMax = 0.1f;
 
         private struct Limb
         {
@@ -140,6 +146,8 @@ namespace OtterLocomotion.Testing
             /// over toward the belly (on the back, up toward the sky and on toward its own chest), - = thrown back.
             /// </summary>
             public float headTuck;
+            /// <summary>The snout's pitch from level (deg, + = up), and how far the otter has stood up in the water (Periscope, 0..1; 0 without it).</summary>
+            public float snoutPitch, upright;
             /// <summary>Buoyancy: the share of the skin under the surface, how deep its lowest point lies (cm) and the body's
             /// position above the surface (cm); NaN without it.</summary>
             public float submerged, draft, ride;
@@ -212,6 +220,7 @@ namespace OtterLocomotion.Testing
         private SpineKickSway sway;
         private WebThrust webThrust;
         private Buoyancy buoyancy;
+        private Periscope periscope;
         private Water water;
         private string footInfo = "", floatInfo = "";
         private bool kickThisFrame, pulseThisFrame;
@@ -299,6 +308,7 @@ namespace OtterLocomotion.Testing
             sway = controls.GetComponent<SpineKickSway>();
             webThrust = controls.GetComponent<WebThrust>();
             buoyancy = controls.GetComponent<Buoyancy>();
+            periscope = controls.GetComponent<Periscope>();
             if (spineWave != null) spineWave.Pulsed += OnPulse;
             if (brain != null)
             {
@@ -498,7 +508,9 @@ namespace OtterLocomotion.Testing
                 // the chest bone: +Y along the spine toward the head, +Z ventral
                 Vector3 snout = head.TransformDirection(snoutLocal);
                 s.headTuck = Mathf.Atan2(Vector3.Dot(snout, chest.forward), Vector3.Dot(snout, chest.up)) * Mathf.Rad2Deg;
+                s.snoutPitch = Mathf.Asin(Mathf.Clamp(snout.y, -1f, 1f)) * Mathf.Rad2Deg;
             }
+            s.upright = periscope != null && periscope.isActiveAndEnabled ? periscope.Weight : 0f;
             if (backBones != null)
             {
                 var p = backBones.Select((b, i) => b.TransformPoint(backLocal[i])).ToArray();
@@ -816,6 +828,7 @@ namespace OtterLocomotion.Testing
                 ForeMetrics(sb, idx);
                 BodyMetrics(sb, idx);
                 DiveMetrics(sb, idx, t0, events);
+                UprightMetrics(sb, idx, t0);
             }
             sb.AppendLine($"\nfeel targets met: {passCount}/{checkCount}");
             return sb.ToString();
@@ -1182,6 +1195,39 @@ namespace OtterLocomotion.Testing
             }
             sb.AppendLine($"  dive: {string.Join(" | ", parts)}");
             if (checks.Count > 0) sb.AppendLine("  targets: " + string.Join(" | ", checks));
+        }
+
+        // Standing up in the water (Periscope): how far it has stood up and when it got there, and as it stands at the
+        // segment's end the chest's and hips' pitch, how high the nose, the head, the chest and the hips are above the
+        // surface and where the snout points from level; how far the body went and how fast at most. The targets are
+        // over the frames it stands all the way up.
+        private void UprightMetrics(StringBuilder sb, List<int> idx, float t0)
+        {
+            var seq = idx.Select(i => samples[i]).ToList();
+            if (backBones == null || seq.All(s => s.upright <= 0.01f)) return;
+            var ci = CultureInfo.InvariantCulture;
+            string F(float x, string format = "F1") => x.ToString(format, ci);
+            float Speed(Sample s) => new Vector2(s.speedFwd, s.speedLat).magnitude;
+            var first = seq[0];
+            var last = seq[seq.Count - 1];
+            var stood = seq.FirstOrDefault(s => s.upright >= 0.99f);
+            string when = first.upright < 0.99f && stood.backHeight != null ? $" (all the way at {F(stood.t - t0, "F2")} s)" : "";
+            string heights = string.Join(", ", new[] { 0, 1, 3, 4 }.Select(k => $"{BackLine[k]} {F(last.backHeight[k])}"));
+            float moved = seq.Skip(1).Sum(s => Speed(s) * s.dt);
+            sb.AppendLine($"  upright: {F(first.upright, "F2")} -> {F(last.upright, "F2")}{when} | chest pitch {F(last.chestPitch, "F0")}, hips {F(last.hipPitch, "F0")} deg | " +
+                          $"above the surface: {heights} cm | snout {F(last.snoutPitch, "+0;-0;0")} deg from level | moved {F(moved * 100f)} cm, at most {F(seq.Max(Speed), "F2")} m/s");
+            var up = seq.Where(s => s.upright >= 0.99f).ToList();
+            if (up.Count < 30) return;
+            float pitch = up.Min(s => s.chestPitch), chest = up.Min(s => s.backHeight[3]), head = up.Min(s => s.backHeight[1]);
+            float snout = up.Max(s => Mathf.Abs(s.snoutPitch)), speed = up.Max(Speed);
+            sb.AppendLine("  targets: " + string.Join(" | ", new[]
+            {
+                Check($"chest up >= {uprightPitchMin:F0} deg ({F(pitch, "F0")})", pitch >= uprightPitchMin),
+                Check($"chest out >= {uprightChestMin:F0} cm ({F(chest)})", chest >= uprightChestMin),
+                Check($"head out >= {uprightHeadMin:F0} cm ({F(head)})", head >= uprightHeadMin),
+                Check($"snout level within {uprightSnoutMax:F0} deg ({F(snout, "F0")})", snout <= uprightSnoutMax),
+                Check($"speed <= {uprightSpeedMax:F2} m/s ({F(speed, "F2")})", speed <= uprightSpeedMax),
+            }));
         }
 
         // What the demand layer asked for over the segment, next to what the body actually did.

@@ -10,7 +10,8 @@ namespace OtterLocomotion
     /// sends a wave packet along the spine (the harmonizer's ExpSpineKickWavePacketProvider), sized by the push and
     /// lasting until the next one, so the body undulates in time with the feet. On the back the packets fade out: lying
     /// on its back the otter paddles with its feet and keeps its trunk straight, and as a packet bends the spine one way
-    /// only, pushes in quick succession would hold it bent into a bow. The fluke's beats in the dolphin wave send none,
+    /// only, pushes in quick succession would hold it bent into a bow; nor do they bend it standing up in the water
+    /// (Periscope), the trunk held upright as the feet turn it. The fluke's beats in the dolphin wave send none,
     /// however far the hind legs have gone over to it (LimbStrokeAnimator): the body swims along the wave instead
     /// (DolphinTrack), and a packet as long as a beat would fold the hips up out of the water; nor does a kick while
     /// the body is still well on the track, leaving the wave or under water, where it lies straight along its way.
@@ -44,6 +45,7 @@ namespace OtterLocomotion
         private ExpSpineKickWavePacketProvider packet;
         private OtterLocomotionBrain brain;
         private DolphinTrack track;
+        private Periscope periscope;
         private bool started, wasUnder;
 
         /// <summary>A wave packet has been sent down the spine.</summary>
@@ -61,6 +63,7 @@ namespace OtterLocomotion
             if (harmonizer == null) return;
             packet = harmonizer.providers.OfType<ExpSpineKickWavePacketProvider>().FirstOrDefault(p => p != null);
             track = GetComponent<DolphinTrack>();
+            periscope = GetComponent<Periscope>();
             started = true;
             Listen(true);
         }
@@ -84,7 +87,8 @@ namespace OtterLocomotion
             if (!pulseKicks || packet == null || OtterRig.IsFore(limb) || st.parking || st.drive <= 0f) return;
             if (animator == null || !animator.isActiveAndEnabled || brain.Intent.gait == Gait.Dolphin) return;
             if ((track != null && track.isActiveAndEnabled ? track.Weight : animator.Fluke) >= pulsesOff) return;
-            float strength = Mathf.Lerp(lightPulse, fullPulse, st.drive) * Mathf.Lerp(1f, supinePulse, brain.Posture.SupineFraction);
+            float standing = periscope != null && periscope.isActiveAndEnabled ? (periscope.Up ? 1f : periscope.Weight) : 0f;
+            float strength = Mathf.Lerp(lightPulse, fullPulse, st.drive) * Mathf.Lerp(1f, supinePulse, brain.Posture.SupineFraction) * (1f - standing);
             if (strength <= 1e-3f) return;
             float interval = (brain.Rhythm.HindTogether ? 1f : 0.5f) / Mathf.Max(0.1f, st.rate);
             packet.TriggerKick(strength, Mathf.Clamp(interval * pulseLength, 0.15f, 1.2f));

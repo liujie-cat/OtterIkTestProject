@@ -28,6 +28,7 @@ namespace OtterLocomotion.EditorTools
         {
             (typeof(OtterControls), "操作"),
             (typeof(ControlsOverlay), "状态光圈和箭头"),
+            (typeof(Periscope), "站立踩水"),
             (typeof(OtterLocomotionBrain), "运动大脑"),
             (typeof(LimbStrokeAnimator), "四肢划水"),
             (typeof(PostureFlipSync), "翻身同步"),

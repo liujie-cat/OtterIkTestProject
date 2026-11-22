@@ -9,10 +9,12 @@ namespace OtterLocomotion
     /// neck bends in an arc. On its front it looks where it goes, as far as the neck reaches. On its back it lifts its
     /// head and curls the neck over toward its chest, looking down at its belly, and turns only a little toward the
     /// heading, keeping it in the corner of its eye. How far the chest has rolled over decides between the two, so the
-    /// curl comes and goes with the roll. In the dolphin wave the head rides the track the body swims along
-    /// (DolphinTrack) instead of holding level: the neck pitches to carry the head joint onto it where it is along the
-    /// body, and the head pitches to put the nose onto it further on, so the snout points along the track and bores in
-    /// nose first as it dips. The neck is set on the chest every frame from the skin's rest shape, so it keeps its
+    /// curl comes and goes with the roll. Stood up in the water (Periscope) it looks as from the chest lying level, so
+    /// the head looks out level over the water, most of the bend forward off the upright chest at the head's own joint
+    /// with the neck standing up under it, and it is not taken for on its back. In the dolphin wave the head rides the
+    /// track the body swims along (DolphinTrack) instead of holding level: the neck pitches to carry the head joint
+    /// onto it where it is along the body, and the head pitches to put the nose onto it further on, so the snout
+    /// points along the track and bores in nose first as it dips. The neck is set on the chest every frame from the skin's rest shape, so it keeps its
     /// length whatever moved or regrouped the bones before.
     /// </summary>
     [DefaultExecutionOrder(320)]
@@ -49,6 +51,12 @@ namespace OtterLocomotion
         public float maxBob = 40f;
         public float maxTilt = 30f;
 
+        [Header("Standing up in the water")]
+        [Tooltip("Found on this object when empty. Without it the head looks from the chest as it stands.")]
+        public Periscope periscope;
+        [Tooltip("Share of the bend forward off the upright chest that the neck takes; the head takes the rest at its joint, so the neck stands up under it.")]
+        [Range(0f, 1f)] public float neckRaise = 0.3f;
+
         /// <summary>Where the neck is told to look (world): ahead along the heading, or at the pointer while guided.</summary>
         public Vector3 LookPoint { get; private set; }
         /// <summary>How far over on its back the chest is (0 on the front .. 1 on the back), which sets the curl.</summary>
@@ -59,8 +67,10 @@ namespace OtterLocomotion
         // each joint at rest, in the chest's space
         private Quaternion[] restRotation;
         private Vector3[] restPosition;
-        // where the neck points, in the chest's space, from its rest line (+Y, along the spine)
+        // where the neck points, in the space of the chest as it would lie level, from its rest line (+Y, along the spine)
         private Vector3 look = Vector3.up;
+        // stood up, the turn from the chest's space to that of the chest lying level
+        private Quaternion raise = Quaternion.identity;
         private Water water;
         // the nose from the head joint at rest, in the chest's space; how far the neck pitches up to carry the head onto
         // the track, and the head from where it looks to put the nose on it (deg)
@@ -71,6 +81,7 @@ namespace OtterLocomotion
         {
             if (controls == null) controls = GetComponent<OtterControls>();
             if (track == null) track = GetComponent<DolphinTrack>();
+            if (periscope == null) periscope = GetComponent<Periscope>();
         }
 
         // the bones are found by name: SpineDecouplerWithShadows and the old neck controller regroup them as they wake
@@ -127,17 +138,20 @@ namespace OtterLocomotion
             if (controls != null) LookPoint = Vector3.Lerp(LookPoint, controls.Gears.AimPoint, controls.Gears.AimBlend);
             Vector3 toward = Vector3.ProjectOnPlane(LookPoint - neck, Vector3.up);
             if (toward.sqrMagnitude < 1e-4f) toward = heading;
-            // the chest bone: +Y along the spine toward the head, +Z ventral, +X to the right on the front
-            Vector3 t = Quaternion.Inverse(chest.rotation) * toward.normalized;
+            // the chest bone: +Y along the spine toward the head, +Z ventral, +X to the right on the front; stood up, as
+            // it would lie level
+            Quaternion level = periscope != null && periscope.isActiveAndEnabled ? Quaternion.AngleAxis(periscope.Raised, transform.right) * chest.rotation : chest.rotation;
+            Vector3 t = Quaternion.Inverse(level) * toward.normalized;
             float side = Mathf.Atan2(t.x, t.y) * Mathf.Rad2Deg;
             float dip = Mathf.Atan2(t.z, new Vector2(t.x, t.y).magnitude) * Mathf.Rad2Deg;
 
-            OnBack = Mathf.SmoothStep(0f, 1f, 0.5f + 0.5f * Vector3.Dot(chest.forward, Vector3.up));
+            OnBack = Mathf.SmoothStep(0f, 1f, 0.5f + 0.5f * Vector3.Dot(level * Vector3.forward, Vector3.up));
             Vector3 front = Direction(Mathf.Clamp(side, -maxSide, maxSide), Mathf.Clamp(dip, -maxUp, maxDown), sideFirst: true);
             Vector3 back = Direction(Mathf.Clamp(glance * side, -maxSide, maxSide), bellyCurl, sideFirst: false);
             look = Vector3.Slerp(look, Vector3.Slerp(front, back, OnBack), 1f - Mathf.Exp(-followSpeed * dt));
 
-            Quaternion full = Quaternion.FromToRotation(Vector3.up, look), head = full;
+            raise = Quaternion.Inverse(chest.rotation) * level;
+            Quaternion full = raise * Quaternion.FromToRotation(Vector3.up, look), head = full;
             float wave = track != null && track.isActiveAndEnabled ? track.Weight : 0f;
             if (wave > 1e-3f && water != null && noseRest != Vector3.zero)
             {
@@ -161,7 +175,7 @@ namespace OtterLocomotion
             for (int i = 0; i < joints.Length; i++)
             {
                 if (i > 0) at += before * (restPosition[i] - restPosition[i - 1]);
-                Quaternion turn = i == joints.Length - 1 ? head : Quaternion.Slerp(Quaternion.identity, full, (i + 1f) / joints.Length);
+                Quaternion turn = i == joints.Length - 1 ? head : Neck(full, (i + 1f) / joints.Length);
                 joints[i].SetPositionAndRotation(chest.TransformPoint(at), chest.rotation * turn * restRotation[i]);
                 before = turn;
             }
@@ -170,13 +184,18 @@ namespace OtterLocomotion
         // The neck's turn pitched up toward the back by deg, about the chest's side axis (+X; +Z is ventral)
         private static Quaternion Pitched(Quaternion full, float deg) => Quaternion.AngleAxis(-deg, Vector3.right) * full;
 
+        // A neck joint's turn, its share of the neck's turn full; of the bend off the upright chest, only neckRaise of
+        // its share
+        private Quaternion Neck(Quaternion full, float share) =>
+            Quaternion.Slerp(Quaternion.identity, raise, neckRaise * share) * Quaternion.Slerp(Quaternion.identity, Quaternion.Inverse(raise) * full, share);
+
         // Where the head joint would be, in the chest's space, with the neck turned by full, each joint its share as
         // LateUpdate sets them
         private Vector3 HeadAt(Quaternion full)
         {
             Vector3 at = restPosition[0];
             for (int i = 1; i < joints.Length; i++)
-                at += Quaternion.Slerp(Quaternion.identity, full, (float)i / joints.Length) * (restPosition[i] - restPosition[i - 1]);
+                at += Neck(full, (float)i / joints.Length) * (restPosition[i] - restPosition[i - 1]);
             return at;
         }
 

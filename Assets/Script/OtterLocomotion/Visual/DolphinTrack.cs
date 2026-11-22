@@ -15,8 +15,9 @@ namespace OtterLocomotion
     /// the body, and turned, seen from above, onto the way the body's centre came, so in a turn the track bends with
     /// it and what is behind the centre follows round its curve. An additive provider on the spine harmonizer, whose
     /// chain smoothing gives way while the wave is on, as do, well into it, the other providers' turns of the spine
-    /// (the aim's and SpineKickSway's); the head
-    /// (NeckLook) and the tail (TailRudder) ride the track too. The hips go over a crest at a set point of the fluke's
+    /// (the aim's and SpineKickSway's); both give way standing up in the water too (Periscope), the spine standing
+    /// straight up as it is told and the legs carried round with it as WebThrust takes them; the head (NeckLook) and
+    /// the tail (TailRudder) ride the track too. The hips go over a crest at a set point of the fluke's
     /// beat. Diving, the track runs along the controls' way through the depth (DivePath), the dolphin wave, if it is
     /// on, rising and falling about it: in the duck dive the hips and hind feet go up over its crest as the chest
     /// plunges. Adds itself to the harmonizer's providers for this Play.
@@ -47,6 +48,7 @@ namespace OtterLocomotion
         private Buoyancy buoyancy;
         private Rigidbody body;
         private Water water;
+        private Periscope periscope;
         // the spine's shadows, hips (0) to chest; each one's segment from the joint ahead of it at rest, in the shadows'
         // root space, as the harmonizer lays them; and how far behind the chest the hips are (m)
         private Transform[] shadows;
@@ -124,6 +126,7 @@ namespace OtterLocomotion
                 harmonizer = FindObjectsByType<ExpShadowSpineHarmonizer>(FindObjectsSortMode.None).FirstOrDefault(h => h.isActiveAndEnabled);
             body = GetComponent<Rigidbody>();
             buoyancy = GetComponent<Buoyancy>();
+            periscope = GetComponent<Periscope>();
         }
 
         // after SpineDecouplerWithShadows has made the shadows in Awake
@@ -185,10 +188,10 @@ namespace OtterLocomotion
         private void Update()
         {
             if (shadows == null) return;
-            float w = Weight;
-            harmonizer.flexibility = Mathf.Lerp(restFlexibility, waveFlexibility, w);
-            harmonizer.dampingHalfLife = Mathf.Lerp(restDamping, waveDamping, w);
-            float giveWay = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.5f, 1f, w));
+            float w = Weight, standing = periscope != null && periscope.isActiveAndEnabled ? periscope.Weight : 0f;
+            harmonizer.flexibility = Mathf.Lerp(restFlexibility, waveFlexibility, Mathf.Max(w, standing));
+            harmonizer.dampingHalfLife = Mathf.Lerp(restDamping, waveDamping, Mathf.Max(w, standing));
+            float giveWay = Mathf.Max(Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.5f, 1f, w)), standing);
             for (int s = 0; s < steering.Length; s++)
                 if (steering[s] != null) steering[s].globalWeight = steeringWeight[s] * (1f - giveWay);
             int n = shadows.Length;
