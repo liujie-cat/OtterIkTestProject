@@ -412,6 +412,8 @@ namespace OtterLocomotion
         public OtterLocomotionBrain brain;
         [Tooltip("The kick on the belly.")]
         public HindKick hindKick = new HindKick();
+        [Tooltip("Under water the body lies straight along its way, where on the surface the pushes hold the rump up and the kick with it (SpineKickWave): the kick on the belly tilts round toward the tail as far (deg), so the feet drive along the way as they do there.")]
+        public float underwaterTilt = 30f;
         [Tooltip("The kick on the back, under the water: tucked under and ahead of the hip and kicked straight back, every kick a full one.")]
         public HindKick backKick = new HindKick
         {
@@ -512,6 +514,7 @@ namespace OtterLocomotion
         private Transform chestBone;
         private AfterLimbIK afterIK;
         private Water water;
+        private DivePath dive;
         private bool started;
         /// <summary>The turn the hind kicks follow, -1..1 of a full turn, + = right.</summary>
         private float turn;
@@ -597,6 +600,7 @@ namespace OtterLocomotion
         {
             Capture();
             water = FindFirstObjectByType<Water>();
+            dive = brain != null && brain.controls != null ? brain.controls.DivePath : null;
             started = true;
             FreeKnees(true);
             afterIK = gameObject.AddComponent<AfterLimbIK>();
@@ -925,6 +929,7 @@ namespace OtterLocomotion
                 else if (l.pole != null)
                 {
                     KickAxes(l, out var joint, out var back, out var outward, out var belly);
+                    Underwater(ref back, ref belly);
                     float supine = brain.Posture.SupineFraction;
                     l.pole.position = joint + l.length * (-back * Mathf.Lerp(hindKick.kneeForward, backKick.kneeForward, supine)
                         + belly * Mathf.Lerp(hindKick.kneeBelly, backKick.kneeBelly, supine) + outward * Mathf.Lerp(hindKick.kneeOut, backKick.kneeOut, supine));
@@ -1291,8 +1296,10 @@ namespace OtterLocomotion
                 // the turn opens the leg out at the hip as it stretches (HindTurn), from none tucked to all of it stretched
                 float opened = Mathf.SmoothStep(0f, 1f, Vector3.Dot(p - tuck, push) / Mathf.Max(1e-6f, push.sqrMagnitude));
                 float yaw = l.yaw * opened * Mathf.Deg2Rad, cos = Mathf.Cos(yaw), sin = Mathf.Sin(yaw);
-                Vector3 swungBack = back * cos + outward * sin, swungOut = outward * cos - back * sin;
-                Vector3 ankle = joint + l.length * (swungBack * p.x + swungOut * p.y + belly * p.z);
+                Vector3 kickBack = back, kickBelly = belly;
+                Underwater(ref kickBack, ref kickBelly);
+                Vector3 swungBack = kickBack * cos + outward * sin, swungOut = outward * cos - kickBack * sin;
+                Vector3 ankle = joint + l.length * (swungBack * p.x + swungOut * p.y + kickBelly * p.z);
                 offset = (ankle - rest) * KickEngagement(l.size);
             }
             // the kick's loop runs up ahead of the hip, far from the fluke's line behind it, so it gives way early
@@ -1379,15 +1386,37 @@ namespace OtterLocomotion
 
         // Back along the body's heading through the water and the hips' belly side square to it: the hips' own pitch
         // left out, since the push that drives the body on is along the heading; their roll kept, for the roll-over.
+        // Under water the heading goes up or down the dive's way at the hips, as the body swims along it.
         // The heading is taken in the hips' up-and-down plane: rolling over, the hips come round after the chest, and
         // their pitch in the world then lies across them, which would turn the webs aside into the tail.
         private void LevelAxes(in Limb l, out Vector3 back, out Vector3 belly)
         {
             KickAxes(l, out _, out var hipBack, out var outward, out var hipBelly);
-            Vector3 heading = Vector3.ProjectOnPlane(brain.State.forward, outward);
+            Vector3 heading = Vector3.ProjectOnPlane(SwimWay(l), outward);
             back = heading.sqrMagnitude > 0.25f * brain.State.forward.sqrMagnitude && heading.sqrMagnitude > 1e-6f ? -heading.normalized : hipBack;
             Vector3 level = Vector3.ProjectOnPlane(hipBelly, back);
             belly = level.sqrMagnitude > 1e-6f ? level.normalized : hipBelly;
+        }
+
+        // a belly kick's back and belly axes tilted round toward the tail by underwaterTilt, as far as the body is on
+        // the dive's way
+        private void Underwater(ref Vector3 back, ref Vector3 belly)
+        {
+            float t = dive != null ? dive.Weight * (1f - brain.Posture.SupineFraction) * underwaterTilt * Mathf.Deg2Rad : 0f;
+            if (t <= 0f) return;
+            float c = Mathf.Cos(t), s = Mathf.Sin(t);
+            Vector3 b = back;
+            back = b * c - belly * s;
+            belly = belly * c + b * s;
+        }
+
+        private Vector3 SwimWay(in Limb l)
+        {
+            Vector3 forward = brain.State.forward;
+            ref var fore = ref limbs[(int)LimbId.FL];
+            if (dive == null || dive.Weight <= 0f || !fore.valid) return forward;
+            Vector3 level = Vector3.ProjectOnPlane(forward, Vector3.up).normalized;
+            return dive.Tangent(level, Vector3.Dot(l.girdle.position - fore.girdle.position, level)) * forward.magnitude;
         }
 
 #if UNITY_EDITOR

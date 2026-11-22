@@ -56,6 +56,12 @@ namespace OtterLocomotion.Testing
         [Tooltip("Coasting from >= 1 m/s after release should take this long to drop below stopSpeed.")]
         public float stopTimeMin = 0.8f;
         public float stopTimeMax = 1.5f;
+        [Tooltip("The duck dive from the surface: the hips and the hind feet come at least this far out of the water (cm), and the whole back is under within this long (s) of going onto the way.")]
+        public float diveRumpMin = 8f;
+        public float diveFeetMin = 5f;
+        public float diveUnderMax = 1.5f;
+        [Tooltip("Sent up, the way rises at least this fast on average until the body floats (cm/s).")]
+        public float surfaceRateMin = 30f;
 
         private struct Limb
         {
@@ -137,6 +143,8 @@ namespace OtterLocomotion.Testing
             /// <summary>Buoyancy: the share of the skin under the surface, how deep its lowest point lies (cm) and the body's
             /// position above the surface (cm); NaN without it.</summary>
             public float submerged, draft, ride;
+            /// <summary>The controls' way through the depth (DivePath): how deep it runs at the chest (cm) and how far the body has gone over to it (0..1).</summary>
+            public float way, onWay;
             /// <summary>Per hind foot: WebThrust's push on the body along its heading (N, + = forward) and upward (N), 0 without it.</summary>
             public float[] webPush, webLift;
             /// <summary>Per hind foot: the share of the web under the water's surface (WebThrust), NaN without it.</summary>
@@ -503,6 +511,8 @@ namespace OtterLocomotion.Testing
             s.submerged = afloat ? buoyancy.Submerged : float.NaN;
             s.draft = afloat ? buoyancy.Draft * 100f : float.NaN;
             s.ride = afloat ? (controls.transform.position.y - water.SurfaceY) * 100f : float.NaN;
+            s.way = controls.DivePath.Depth * 100f;
+            s.onWay = controls.DivePath.Weight;
             bool onBack = brain != null && brain.Posture.SupineFraction > 0.5f;
             s.chestBank = chest != null ? Bank(chest, onBack) : 0f;
             s.hipBank = hip != null ? Bank(hip, onBack) : 0f;
@@ -622,7 +632,7 @@ namespace OtterLocomotion.Testing
             // bones' lean about their length from lying level, deg, + = right side down
             sb.Append(",headTuck,chestBank,hipBank");
             // the share of the skin under the surface; how deep its lowest point lies, cm; the body's position above the surface, cm
-            sb.Append(",afloat,draft,ride");
+            sb.Append(",afloat,draft,ride,way,onWay");
             // each web's push on the body along its heading and upward, N
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wpush");
             foreach (var f in feet) sb.Append(',').Append(f.name).Append("_wlift");
@@ -691,6 +701,7 @@ namespace OtterLocomotion.Testing
                 sb.Append(',').Append(float.IsNaN(s.submerged) ? "" : s.submerged.ToString("F3", ci));
                 sb.Append(',').Append(float.IsNaN(s.draft) ? "" : s.draft.ToString("F2", ci));
                 sb.Append(',').Append(float.IsNaN(s.ride) ? "" : s.ride.ToString("F2", ci));
+                sb.Append(string.Format(ci, ",{0:F2},{1:F2}", s.way, s.onWay));
                 foreach (var w in s.webPush) sb.Append(',').Append(w.ToString("F3", ci));
                 foreach (var w in s.webLift) sb.Append(',').Append(w.ToString("F3", ci));
                 foreach (var w in s.webWet) sb.Append(',').Append(float.IsNaN(w) ? "" : w.ToString("F2", ci));
@@ -804,6 +815,7 @@ namespace OtterLocomotion.Testing
                 FlukeMetrics(sb, idx);
                 ForeMetrics(sb, idx);
                 BodyMetrics(sb, idx);
+                DiveMetrics(sb, idx, t0, events);
             }
             sb.AppendLine($"\nfeel targets met: {passCount}/{checkCount}");
             return sb.ToString();
@@ -1114,6 +1126,62 @@ namespace OtterLocomotion.Testing
                 .Append($"ankles {Fit(x => x.footHeave.Zip(x.hipDepth, (h, d) => h - d).Average(), " cm")}");
             var pitch = BackPieces.Select((n, i) => $"{n} {Fit(x => x.backPitch[i], " deg")}");
             sb.AppendLine($"  wave (half the swing @ the beat at its top): heave {string.Join(", ", heave)} | pitch {string.Join(", ", pitch)} | nose {Range(seq.Select(x => x.backHeight[0]))} cm above the surface");
+        }
+
+        // Along the way through the depth: how deep the way and the chest go, how high the hips, tail and hind feet come
+        // out of the water and how steeply the trunk and rump pitch; from the dive key's press, when the body goes onto
+        // the way (on the back, once it has rolled onto its belly), the whole back is under after the rump's top and
+        // the way at its depth;
+        // how fast the way goes down; from the send up, how fast it rises and when the body floats again.
+        private void DiveMetrics(StringBuilder sb, List<int> idx, float t0, List<InputEvent> events)
+        {
+            var seq = idx.Select(i => samples[i]).ToList();
+            if (backBones == null || seq.All(s => s.onWay <= 0f)) return;
+            var ci = CultureInfo.InvariantCulture;
+            string F(float x, string format = "F1") => x.ToString(format, ci);
+            float Ankles(Sample s) => s.footHeave.Zip(s.hipDepth, (h, d) => h - d).DefaultIfEmpty(float.NegativeInfinity).Max();
+            var parts = new List<string>
+            {
+                $"way {F(seq.Min(s => s.way))}..{F(seq.Max(s => s.way))} cm deep, chest {F(-seq.Max(s => s.backHeight[3]))}..{F(-seq.Min(s => s.backHeight[3]))} cm deep",
+                $"out of the water at most: hips {F(seq.Max(s => s.backHeight[4]))}, tail root {F(seq.Max(s => s.backHeight[5]))}, tip {F(seq.Max(s => s.backHeight[6]))}, ankles {F(seq.Max(Ankles))} cm",
+                $"steepest: trunk {F(seq.Min(s => s.backPitch[3]), "F0")}, rump {F(seq.Min(s => s.backPitch[4]), "F0")} deg",
+            };
+            float duration = seq[seq.Count - 1].t - seq[0].t;
+            if (duration > 0.1f) parts.Add($"way {F((seq[seq.Count - 1].way - seq[0].way) / duration)} cm/s down");
+            var checks = new List<string>();
+            var down = events.FirstOrDefault(e => e.text == "=> Dive");
+            var onto = down.text != null ? seq.Where(s => s.t >= down.t).SkipWhile(s => s.onWay <= 0f).ToList() : new List<Sample>();
+            if (onto.Count > 0)
+            {
+                float top = onto.Max(s => s.backHeight[4]);
+                var under = onto.SkipWhile(s => s.backHeight[4] < top).FirstOrDefault(s => s.backHeight.Max() < 0f);
+                float deepest = onto.Max(s => s.way);
+                var deep = onto.FirstOrDefault(s => s.way >= 0.9f * deepest);
+                parts.Add($"from the press: onto the way {F(onto[0].t - down.t, "F2")} s, all under {(under.backHeight != null ? F(under.t - down.t, "F2") + " s" : "never")}, way 90% down {F(deep.t - down.t, "F2")} s");
+                if (onto[0].way < 1f)
+                {
+                    float feet = onto.Max(Ankles);
+                    checks.Add(Check($"rump out >= {diveRumpMin:F0} cm ({F(top)})", top >= diveRumpMin));
+                    checks.Add(Check($"feet out >= {diveFeetMin:F0} cm ({F(feet)})", feet >= diveFeetMin));
+                    checks.Add(Check($"all under <= {diveUnderMax:F1} s", under.backHeight != null && under.t - onto[0].t <= diveUnderMax));
+                }
+            }
+            var up = events.FirstOrDefault(e => e.text == "=> Surface");
+            if (up.text != null)
+            {
+                var rising = seq.Where(s => s.t >= up.t).TakeWhile(s => s.onWay > 0f).ToList();
+                var afloat = seq.FirstOrDefault(s => s.t >= up.t && s.onWay <= 0f);
+                parts.Add($"from the send up: afloat {(afloat.backHeight != null ? F(afloat.t - up.t, "F2") + " s" : "not yet")}");
+                float time = rising.Count > 1 ? rising[rising.Count - 1].t - rising[0].t : 0f;
+                if (time > 0.1f)
+                {
+                    float rate = (rising[0].way - rising[rising.Count - 1].way) / time;
+                    parts.Add($"rising {F(rate)} cm/s");
+                    checks.Add(Check($"rising >= {surfaceRateMin:F0} cm/s", rate >= surfaceRateMin));
+                }
+            }
+            sb.AppendLine($"  dive: {string.Join(" | ", parts)}");
+            if (checks.Count > 0) sb.AppendLine("  targets: " + string.Join(" | ", checks));
         }
 
         // What the demand layer asked for over the segment, next to what the body actually did.

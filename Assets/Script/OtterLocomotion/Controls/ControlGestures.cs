@@ -7,15 +7,15 @@ namespace OtterLocomotion
     [Serializable]
     public class GestureSettings
     {
-        [Tooltip("The go or back key held this long (s) is a hold: pressed cruising, go held sprints; back held brakes to a stop and lets the otter go.")]
+        [Tooltip("A key held this long (s) is a hold: go held cruising sprints; back held brakes to a stop and lets the otter go; dive held under water swims deeper.")]
         public float holdTime = 0.3f;
         [Tooltip("A key up for less than this (s) and down again is still the one press: a held key can drop out for a frame or two (key bounce, input methods), which would otherwise shift twice.")]
         public float releaseTime = 0.08f;
     }
 
-    public enum GestureKind { Click, GoPress, GoHoldBegin, GoRelease, BackPress, BackHoldBegin, BackRelease }
+    public enum GestureKind { Click, GoPress, GoHoldBegin, GoRelease, BackPress, BackHoldBegin, BackRelease, DivePress, DiveHoldBegin, DiveRelease }
 
-    /// <summary>Something the player did with the mouse or the two keys, and where the pointer was on the water.</summary>
+    /// <summary>Something the player did with the mouse or the keys, and where the pointer was on the water.</summary>
     public struct Gesture
     {
         public GestureKind kind;
@@ -28,73 +28,59 @@ namespace OtterLocomotion
     }
 
     /// <summary>
-    /// Turns the mouse button and the go and back keys into gestures. A mouse press is a click at once. Each key gives
-    /// a press as it goes down, a hold once it has been down holdTime, and a release once it has stayed up releaseTime.
+    /// Turns the mouse button and the go, back and dive keys into gestures. A mouse press is a click at once. Each key
+    /// gives a press as it goes down, a hold once it has been down holdTime, and a release once it has stayed up
+    /// releaseTime.
     /// </summary>
     public sealed class ControlGestures
     {
-        public bool GoHolding { get; private set; }
-        public bool BackHolding { get; private set; }
+        private struct Key
+        {
+            public bool down, holding;
+            public float pressed, seen;
+        }
 
-        private bool click, go, back;
-        private float goTime, backTime, goSeen, backSeen;
+        private bool click;
+        private Key go, back, dive;
 
         public void Reset()
         {
-            GoHolding = BackHolding = false;
-            click = go = back = false;
+            click = false;
+            go = back = dive = default;
         }
 
         /// <param name="point">The pointer on the water.</param>
         /// <param name="overOtter">Whether the pointer is on the otter.</param>
-        public void Step(GestureSettings s, float time, bool clickHeld, bool goHeld, bool backHeld, Vector3 point, bool overOtter, List<Gesture> output)
+        public void Step(GestureSettings s, float time, bool clickHeld, bool goHeld, bool backHeld, bool diveHeld, Vector3 point, bool overOtter, List<Gesture> output)
         {
             void Emit(GestureKind kind) => output.Add(new Gesture { kind = kind, time = time, point = point, onOtter = overOtter });
-            bool Down(bool held, bool was, ref float seen)
+            void Press(ref Key k, bool held, GestureKind press, GestureKind hold, GestureKind release)
             {
-                if (held) seen = time;
-                return held || was && time - seen < s.releaseTime;
+                if (held) k.seen = time;
+                held = held || k.down && time - k.seen < s.releaseTime;
+                if (held && !k.down)
+                {
+                    k.pressed = time;
+                    Emit(press);
+                }
+                if (held && !k.holding && time - k.pressed >= s.holdTime)
+                {
+                    k.holding = true;
+                    Emit(hold);
+                }
+                if (!held && k.down)
+                {
+                    k.holding = false;
+                    Emit(release);
+                }
+                k.down = held;
             }
 
             if (clickHeld && !click) Emit(GestureKind.Click);
             click = clickHeld;
-
-            goHeld = Down(goHeld, go, ref goSeen);
-            backHeld = Down(backHeld, back, ref backSeen);
-
-            if (goHeld && !go)
-            {
-                goTime = time;
-                Emit(GestureKind.GoPress);
-            }
-            if (goHeld && !GoHolding && time - goTime >= s.holdTime)
-            {
-                GoHolding = true;
-                Emit(GestureKind.GoHoldBegin);
-            }
-            if (!goHeld && go)
-            {
-                GoHolding = false;
-                Emit(GestureKind.GoRelease);
-            }
-            go = goHeld;
-
-            if (backHeld && !back)
-            {
-                backTime = time;
-                Emit(GestureKind.BackPress);
-            }
-            if (backHeld && !BackHolding && time - backTime >= s.holdTime)
-            {
-                BackHolding = true;
-                Emit(GestureKind.BackHoldBegin);
-            }
-            if (!backHeld && back)
-            {
-                BackHolding = false;
-                Emit(GestureKind.BackRelease);
-            }
-            back = backHeld;
+            Press(ref go, goHeld, GestureKind.GoPress, GestureKind.GoHoldBegin, GestureKind.GoRelease);
+            Press(ref back, backHeld, GestureKind.BackPress, GestureKind.BackHoldBegin, GestureKind.BackRelease);
+            Press(ref dive, diveHeld, GestureKind.DivePress, GestureKind.DiveHoldBegin, GestureKind.DiveRelease);
         }
     }
 }

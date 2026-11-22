@@ -11,19 +11,21 @@ namespace OtterLocomotion
     /// cruising it sprints, and in the dolphin wave it jumps; the back key shifts down and, parked, lets it go, and held
     /// it brakes to a stop and lets it go. The mouse is the stick: picked up, the pointer outside the ring round the
     /// otter is its guide point, which the head looks at and the body turns after; a click kicks toward it, picked up
-    /// or not. Turns the body toward the heading at the brain's yaw rate target and brakes it while the back key is
-    /// held.
+    /// or not. The dive key sends it under along its way through the depth (DivePath), deeper while held, and a tap
+    /// under water brings it back up; both feet kick as the duck dive's hips go over. Turns the body toward the heading
+    /// at the brain's yaw rate target and brakes it while the back key is held.
     /// </summary>
     [DefaultExecutionOrder(200)]
     [DisallowMultipleComponent]
     public class OtterControls : MonoBehaviour
     {
-        /// <summary>Stands in for the mouse and keys (scripted playback, tests): the mouse button, the go and back keys, and the pointer's screen position in pixels.</summary>
+        /// <summary>Stands in for the mouse and keys (scripted playback, tests): the mouse button, the go, back and dive keys, and the pointer's screen position in pixels.</summary>
         public interface IInput
         {
             bool Click { get; }
             bool Go { get; }
             bool Back { get; }
+            bool Dive { get; }
             Vector2 ScreenPosition { get; }
         }
 
@@ -31,6 +33,8 @@ namespace OtterLocomotion
         public KeyCode goKey = KeyCode.W;
         [Tooltip("Shifts down, parked lets the otter go; held, brakes to a stop and lets it go.")]
         public KeyCode backKey = KeyCode.S;
+        [Tooltip("Sends the otter under (a duck dive); held, it swims deeper and let go keeps its depth; tapped under water, it comes back up.")]
+        public KeyCode diveKey = KeyCode.Space;
         [Tooltip("The camera the pointer is read through. Empty: the one drawn last onto the screen, which is what the player sees (not necessarily the main camera).")]
         public Camera inputCamera;
         public OtterLocomotionBrain brain;
@@ -40,6 +44,7 @@ namespace OtterLocomotion
         public Gear initialGear = Gear.Park;
         public GestureSettings gestures = new GestureSettings();
         public GearSettings gears = new GearSettings();
+        public DiveSettings dive = new DiveSettings();
 
         [Header("Body")]
         [Tooltip("Time for the body's turning to follow the brain's yaw rate target (s).")]
@@ -52,6 +57,8 @@ namespace OtterLocomotion
 
         public IInput InputOverride { get; set; }
         public GearMachine Gears => machine;
+        /// <summary>The way the body swims through the depth, stepped each frame after the gears.</summary>
+        public DivePath DivePath => divePath;
         /// <summary>Kicks, jumps, gear shifts, picking up and letting go, as they happen.</summary>
         public event Action<ControlEvent> Control;
         public event Action<Gesture> Gestured;
@@ -61,6 +68,7 @@ namespace OtterLocomotion
         public bool ClickHeld { get; private set; }
         public bool GoHeld { get; private set; }
         public bool BackHeld { get; private set; }
+        public bool DiveHeld { get; private set; }
         /// <summary>The camera the pointer is read through: inputCamera, or the one drawn last onto the screen.</summary>
         public Camera PointerCamera
         {
@@ -94,12 +102,15 @@ namespace OtterLocomotion
 
         private readonly ControlGestures input = new ControlGestures();
         private readonly GearMachine machine = new GearMachine();
+        private readonly DivePath divePath = new DivePath();
         private readonly List<Gesture> gestureList = new List<Gesture>();
         private readonly List<ControlEvent> events = new List<ControlEvent>();
         private Rigidbody body;
+        private Water water;
         private Camera screenCamera;
         private Transform head, chest, hip;
         private float backHeight;
+        private Vector3 lastPosition;
 
         private void Awake()
         {
@@ -118,6 +129,7 @@ namespace OtterLocomotion
         {
             if (brain == null) brain = GetComponent<OtterLocomotionBrain>();
             if (strokes == null) strokes = GetComponent<StrokePropulsion>();
+            water = FindFirstObjectByType<Water>();
             head = OtterRig.FindActiveBone(transform, OtterRig.Head);
             chest = OtterRig.FindActiveBone(transform, OtterRig.Chest);
             hip = OtterRig.FindActiveBone(transform, OtterRig.Hip);
@@ -129,8 +141,10 @@ namespace OtterLocomotion
         {
             if (body == null) return;
             input.Reset();
+            divePath.Reset();
             machine.Reset(Body(), initialGear);
             PointerPoint = body.position + transform.forward;
+            lastPosition = body.position;
         }
 
         private void Update()
@@ -142,6 +156,7 @@ namespace OtterLocomotion
                 ClickHeld = InputOverride.Click;
                 GoHeld = InputOverride.Go;
                 BackHeld = InputOverride.Back;
+                DiveHeld = InputOverride.Dive;
                 screen = InputOverride.ScreenPosition;
             }
             else
@@ -149,6 +164,7 @@ namespace OtterLocomotion
                 ClickHeld = Input.GetMouseButton(0);
                 GoHeld = Input.GetKey(goKey);
                 BackHeld = Input.GetKey(backKey);
+                DiveHeld = Input.GetKey(diveKey);
                 screen = Input.mousePosition;
             }
             if (TryPointerPoint(screen, out var point)) PointerPoint = point;
@@ -156,8 +172,9 @@ namespace OtterLocomotion
 
             gestureList.Clear();
             events.Clear();
-            input.Step(gestures, Time.time, ClickHeld, GoHeld, BackHeld, PointerPoint, PointerOverOtter, gestureList);
+            input.Step(gestures, Time.time, ClickHeld, GoHeld, BackHeld, DiveHeld, PointerPoint, PointerOverOtter, gestureList);
             machine.Step(gears, gestureList, Time.time, PointerPoint, PointerOverOtter, Body(), events);
+            StepDive();
             foreach (var g in gestureList) Gestured?.Invoke(g);
             foreach (var e in events)
             {
@@ -190,7 +207,24 @@ namespace OtterLocomotion
         {
             Vector3 v = body.velocity;
             v.y = 0f;
-            return new GearBody { position = body.position, head = HeadPoint, forward = transform.forward, speedBL = v.magnitude / BodyLength };
+            return new GearBody
+            {
+                position = body.position, head = HeadPoint, forward = transform.forward, speedBL = v.magnitude / BodyLength,
+                underwater = divePath.Under, divingOrSurfacing = divePath.DivingOrSurfacing,
+            };
+        }
+
+        // the way through the depth on by how far the body swam ahead this frame: not by a drift back, which would run
+        // the way on ahead of the body, nor by a jump of the body (placed anew)
+        private void StepDive()
+        {
+            Vector3 step = Flat(body.position - lastPosition);
+            lastPosition = body.position;
+            float moved = step.magnitude > 0.5f ? 0f : Mathf.Max(0f, Vector3.Dot(step, Flat(transform.forward).normalized));
+            float floor = water != null ? water.SurfaceY - water.FloorY : float.PositiveInfinity;
+            float supine = brain != null ? brain.Posture.SupineFraction : 0f;
+            if (divePath.Step(dive, machine.Diving, machine.Descending, moved, supine, floor, Time.deltaTime))
+                events.Add(new ControlEvent { kind = ControlEventKind.Kick, time = Time.time, direction = Flat(transform.forward).normalized, strength = dive.plungeKick });
         }
 
         private bool TryPointerPoint(Vector2 screen, out Vector3 point)

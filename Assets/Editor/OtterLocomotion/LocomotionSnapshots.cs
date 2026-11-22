@@ -113,6 +113,16 @@ namespace OtterLocomotion.EditorTools
                 new Shot(6, 1.8f, "06_large_turn_paws", 8, 0.12f, paws: true),
                 new Shot(7, 1.6f, "07_wave_again_body", 8, 0.09f, body: true),
             },
+            "dive" => new[]
+            {
+                new Shot(3, 0.05f, "03_duck_dive_body", 12, 0.08f, body: true),
+                new Shot(4, 1.5f, "04_under_cruise"),
+                new Shot(5, 1.5f, "05_deeper"),
+                new Shot(7, 3.0f, "07_under_wave_body", 8, 0.09f, body: true),
+                new Shot(9, 0.2f, "09_surfacing_body", 12, 0.15f, body: true),
+                new Shot(12, 0.05f, "12_dive_from_back_body", 12, 0.1f, body: true),
+                new Shot(14, 0.3f, "14_surfacing_again_body", 12, 0.15f, body: true),
+            },
             "turns" => new[]
             {
                 new Shot(3, 0.15f, "03_park_large_right_feet", 8, 0.08f),

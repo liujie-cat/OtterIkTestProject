@@ -5,8 +5,8 @@ namespace OtterLocomotion
 {
     /// <summary>
     /// Moves the point the spine aims at (the aim provider's target): picked up, onto the guide point the head looks
-    /// at; let go, back over releaseTime to a point ahead along the heading. It is kept at one level and follows
-    /// smoothly. Runs before the spine's pass reads it.
+    /// at; let go, back over releaseTime to a point ahead along the heading. It is kept level with the body's way
+    /// through the depth and follows smoothly. Runs before the spine's pass reads it.
     /// </summary>
     [DefaultExecutionOrder(-10)]
     [DisallowMultipleComponent]
@@ -16,7 +16,7 @@ namespace OtterLocomotion
         public OtterControls controls;
         [Tooltip("Found below this object when empty; the point moved is its target.")]
         public ExpShadowAimProvider aim;
-        [Tooltip("Height the point is kept at (m).")]
+        [Tooltip("Height the point is kept at (m) at the surface; under water it goes down with the body's way through the depth (DivePath).")]
         public float planeY = 0f;
         [Tooltip("Let go, how far ahead along the heading the point rests (m).")]
         public float idleAhead = 1.2f;
@@ -59,7 +59,7 @@ namespace OtterLocomotion
                 float t = releaseTime > 0f ? Mathf.Clamp01((Time.time - releasedAt) / releaseTime) : 1f;
                 goal = Vector3.Lerp(lastHeld, goal, t);
             }
-            goal.y = planeY;
+            goal.y = planeY + controls.DivePath.Height(0f);
             if (!placed)
             {
                 point = aim.target.position;

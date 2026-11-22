@@ -25,20 +25,24 @@ namespace OtterLocomotion.EditorTools
             readonly ControlGestures input = new ControlGestures();
             readonly List<Gesture> gestures = new List<Gesture>();
             public float time, speedBL;
-            public bool airborne;
+            public bool airborne, underwater, divingOrSurfacing;
             public Vector3 point = new Vector3(0f, 0f, 1f);
 
             public Sim(Gear start = Gear.Park) => gears.Reset(Body, start);
 
-            GearBody Body => new GearBody { position = Vector3.zero, head = Head, forward = Vector3.forward, speedBL = speedBL, airborne = airborne };
+            GearBody Body => new GearBody
+            {
+                position = Vector3.zero, head = Head, forward = Vector3.forward, speedBL = speedBL, airborne = airborne,
+                underwater = underwater, divingOrSurfacing = divingOrSurfacing,
+            };
 
-            public Sim Run(float seconds, bool click = false, bool go = false, bool back = false, bool onOtter = false)
+            public Sim Run(float seconds, bool click = false, bool go = false, bool back = false, bool onOtter = false, bool dive = false)
             {
                 for (float t = 0f; t < seconds - 1e-5f; t += Frame)
                 {
                     gestures.Clear();
                     Vector3 at = onOtter ? Vector3.zero : point;
-                    input.Step(gs, time, click, go, back, at, onOtter, gestures);
+                    input.Step(gs, time, click, go, back, dive, at, onOtter, gestures);
                     gears.Step(settings, gestures, time, at, onOtter, Body, events);
                     time += Frame;
                 }
@@ -51,6 +55,16 @@ namespace OtterLocomotion.EditorTools
             public Sim Go() => Run(0.1f, go: true).LetGo();
             public Sim HoldGo(float seconds) => Run(seconds, go: true).LetGo();
             public Sim Back() => Run(0.1f, back: true).LetGo();
+            public Sim Dive() => Run(0.1f, dive: true).LetGo();
+            public Sim HoldDive(float seconds) => Run(seconds, dive: true);
+
+            // the body's way through the depth, as DivePath would report it
+            public Sim Under(bool under = true, bool moving = false)
+            {
+                underwater = under;
+                divingOrSurfacing = moving;
+                return Run(Frame);
+            }
 
             public Sim Guide(float seconds, Vector3 to)
             {
@@ -60,10 +74,12 @@ namespace OtterLocomotion.EditorTools
 
             public int Kicks => events.Count(e => e.kind == ControlEventKind.Kick);
             public int Jumps => events.Count(e => e.kind == ControlEventKind.Jump);
+            public int Dives => events.Count(e => e.kind == ControlEventKind.Dive);
+            public int Surfacings => events.Count(e => e.kind == ControlEventKind.Surface);
             public bool Supine => gears.Posture == Posture.Supine;
             public override string ToString() =>
-                $"{(gears.Selected ? "selected" : "not selected")}, gear {gears.Gear}{(gears.Dolphin ? " wave" : "")}, {gears.Posture}, {gears.Gait}, {gears.SpeedBL:F2} BL/s; " +
-                $"events [{string.Join(", ", events)}]";
+                $"{(gears.Selected ? "selected" : "not selected")}, gear {gears.Gear}{(gears.Dolphin ? " wave" : "")}, {gears.Posture}, {gears.Gait}, {gears.SpeedBL:F2} BL/s" +
+                $"{(gears.Diving ? ", diving" : "")}{(gears.Descending ? " deeper" : "")}{(underwater ? ", under" : "")}; events [{string.Join(", ", events)}]";
         }
 
         // sprinting in the wave, the go key still held
@@ -193,6 +209,48 @@ namespace OtterLocomotion.EditorTools
             s.airborne = true;
             s.Go().Click().Wait(0.5f);
             Check("空中的按键和点击作废", s.Jumps == 0 && s.Kicks == 0, s);
+
+            s = new Sim(Gear.Cruise) { speedBL = 1.2f }.Dive().Wait(0.5f);
+            Check("巡航按空格：扎猛子下潜一次，松开不上浮", s.gears.Diving && s.Dives == 1 && s.Surfacings == 0 && s.gears.Posture == Posture.Prone && s.gears.Gear == Gear.Cruise, s);
+
+            s = new Sim(Gear.Slow).Dive();
+            bool rolling = s.gears.Diving && s.gears.Posture == Posture.Prone && s.gears.Gait == Gait.ProneTogether && s.gears.Gear == Gear.Slow;
+            s.Under();
+            Check("仰泳按空格：先翻成俯身，翻好入水即自己换巡航（黄圈），不用再按前进", rolling && s.gears.Gear == Gear.Cruise && s.gears.Gait == Gait.ProneTogether, s);
+
+            s = new Sim(Gear.Cruise).Dive().Under().Back();
+            parked = s.gears.Gear == Gear.Park;
+            s.Go();
+            Check("水下没有慢游：后退从巡航直接停驻，前进从停驻直接巡航", parked && s.gears.Gear == Gear.Cruise, s);
+
+            s = new Sim().Dive().Under(moving: true);
+            Check("停驻按空格：下潜中至少以 diveSpeedBL 游下去", s.gears.Diving && s.gears.SpeedBL == s.settings.diveSpeedBL, s);
+
+            s = new Sim(Gear.Cruise).Run(0.6f, dive: true);
+            bool deeper = s.gears.Diving && s.gears.Descending;
+            s.LetGo();
+            Check("按住空格下潜：按满 holdTime 起继续往下，松开保持深度、不上浮", deeper && s.gears.Diving && !s.gears.Descending && s.Surfacings == 0, s);
+
+            s = new Sim(Gear.Cruise).Dive().Under().HoldDive(0.6f);
+            deeper = s.gears.Descending;
+            s.LetGo();
+            Check("水下按住空格：继续下潜，松开保持当前深度", deeper && !s.gears.Descending && s.gears.Diving && s.Surfacings == 0, s);
+
+            s = new Sim(Gear.Slow).Dive().Under().Dive();
+            bool rising = s.Surfacings == 1 && !s.gears.Diving && s.gears.Posture == Posture.Prone;
+            s.Under(false);
+            Check("水下点空格：上浮；出水后仍是巡航俯身", rising && !s.Supine && s.gears.Gear == Gear.Cruise, s);
+
+            s = new Sim(Gear.Cruise).Dive().Under().Dive().Under(moving: true).Dive();
+            Check("上浮途中再点空格：重新下潜", s.gears.Diving && s.Dives == 2 && s.Surfacings == 1, s);
+
+            s = InWave().LetGo().Dive().Under().Go().Wait(0.5f);
+            Check("水下海豚段点 W：不起跳", s.Jumps == 0 && s.gears.Dolphin && s.gears.Gait == Gait.Dolphin, s);
+
+            s = InWave().LetGo();
+            s.airborne = true;
+            s.Dive().Wait(0.3f);
+            Check("空中按空格作废", s.Dives == 0 && !s.gears.Diving, s);
 
             lines.Insert(0, $"# controls self-test {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}: {lines.Count - failed}/{lines.Count} pass");
             Directory.CreateDirectory("Logs");

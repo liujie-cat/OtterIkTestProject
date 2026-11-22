@@ -36,6 +36,10 @@ namespace OtterLocomotion
         public float wideTurn = 60f;
         public float backInWave = 20f;
 
+        [Header("Dive")]
+        [Tooltip("Speed (body lengths/s) it swims at least while it goes under and while it comes back up, so it swims the way down or up however slow its gear.")]
+        public float diveSpeedBL = 1f;
+
         [Header("Kicks")]
         [Tooltip("Strength (0..1) of the kick a click gives when parked (picked up or not), and when swimming.")]
         [Range(0f, 1f)] public float parkKick = 0.6f;
@@ -48,7 +52,7 @@ namespace OtterLocomotion
         public float headLead = 0.12f;
     }
 
-    public enum ControlEventKind { Kick, Jump, Shift, Select, Deselect }
+    public enum ControlEventKind { Kick, Jump, Shift, Select, Deselect, Dive, Surface }
 
     public struct ControlEvent
     {
@@ -66,6 +70,8 @@ namespace OtterLocomotion
             ControlEventKind.Jump => "Jump",
             ControlEventKind.Select => "Select",
             ControlEventKind.Deselect => "Deselect",
+            ControlEventKind.Dive => "Dive",
+            ControlEventKind.Surface => "Surface",
             _ => $"{from}->{to} ({reason})",
         };
     }
@@ -77,6 +83,10 @@ namespace OtterLocomotion
         public Vector3 position, head, forward;
         public float speedBL;
         public bool airborne;
+        /// <summary>On its way through the depth (DivePath): under the water, or going under or coming up.</summary>
+        public bool underwater;
+        /// <summary>Going under or coming back up, which it swims however slow its gear.</summary>
+        public bool divingOrSurfacing;
     }
 
     /// <summary>
@@ -90,8 +100,12 @@ namespace OtterLocomotion
     /// back key shifts down, and parked lets it go; held, it brakes to parked and lets it go, so let go it is always
     /// parked on its back. Picked up, the pointer is its guide point: the head looks at it and the body turns after the
     /// head, headLead behind. A click on the water, picked up or not, turns it toward the click and kicks once without
-    /// shifting (sprinting it only turns); on the otter, where it points nowhere, it kicks along the heading. Presses and
-    /// clicks while in the air are spent.
+    /// shifting (sprinting it only turns); on the otter, where it points nowhere, it kicks along the heading. The dive
+    /// key sends it under (a duck dive); held, under water or on the way, it swims deeper, and let go it keeps its
+    /// depth; a tap of it under water sends it back up. Under water, and until it is back at the surface, it swims on
+    /// its belly, cruising and sprinting as on the surface, and does not jump. There it has no slow gear: sent under
+    /// swimming slowly, it rolls onto its belly and cruises on once on its way down, and the go and back keys pass over
+    /// slow, between parked and cruising. Presses and clicks while in the air are spent.
     /// </summary>
     public sealed class GearMachine
     {
@@ -114,20 +128,28 @@ namespace OtterLocomotion
         public float AimBlend { get; private set; }
         /// <summary>Speed asked for (body lengths/s).</summary>
         public float SpeedBL { get; private set; }
+        /// <summary>Sent under by the dive key, until a tap of it under water sends it back up.</summary>
+        public bool Diving { get; private set; }
+        /// <summary>The dive key, held, takes it deeper.</summary>
+        public bool Descending { get; private set; }
+        /// <summary>Diving, or still under water on its way back up.</summary>
+        public bool Underwater => Diving || under;
 
-        public bool JumpEligible => Gait == Gait.Dolphin;
-        public Posture Posture => PostureOf(Gear);
+        public bool JumpEligible => Gait == Gait.Dolphin && !Underwater;
+        public Posture Posture => Underwater ? Posture.Prone : PostureOf(Gear);
         public static Posture PostureOf(Gear gear) => gear <= Gear.Slow ? Posture.Supine : Posture.Prone;
         public Gait Gait => Gear switch
         {
             Gear.Park => Gait.Rest,
-            Gear.Slow => Gait.SupineAlternate,
+            Gear.Slow => Underwater ? Gait.ProneTogether : Gait.SupineAlternate,
             Gear.Sprint when Dolphin && !WideTurn => Gait.Dolphin,
             _ => Gait.ProneTogether,
         };
 
         private Gear goGear;
         private float sprintSince, releasedAt, aimUntil;
+        // under water by the body's way through the depth; and the dive key's press under water, a tap until it is held
+        private bool under, diveTap;
         private readonly List<(float time, Vector3 heading)> looked = new List<(float, Vector3)>();
 
         /// <param name="initial">Above parked, it starts picked up.</param>
@@ -135,6 +157,7 @@ namespace OtterLocomotion
         {
             Gear = initial;
             Dolphin = WideTurn = Accelerating = Braking = false;
+            Diving = Descending = under = diveTap = false;
             Selected = initial > Gear.Park;
             Heading = BodyHeading = Flat(body.forward, Vector3.forward);
             looked.Clear();
@@ -147,6 +170,7 @@ namespace OtterLocomotion
         /// <param name="pointer">The pointer on the water now: selected, the guide point, once it is off the otter.</param>
         public void Step(GearSettings s, List<Gesture> gestures, float time, Vector3 pointer, bool pointerOnOtter, in GearBody b, List<ControlEvent> events)
         {
+            under = b.underwater;
             foreach (var g in gestures)
             {
                 switch (g.kind)
@@ -164,7 +188,7 @@ namespace OtterLocomotion
                             events.Add(new ControlEvent { kind = ControlEventKind.Select, time = time });
                         }
                         else if (JumpEligible) events.Add(new ControlEvent { kind = ControlEventKind.Jump, time = time, direction = Heading });
-                        else if (Gear < Gear.Cruise) Shift(Gear + 1, "go", time, events);
+                        else if (Gear < Gear.Cruise) Shift(Underwater ? Gear.Cruise : Gear + 1, "go", time, events);
                         break;
                     case GestureKind.GoHoldBegin:
                         if (b.airborne || goGear < Gear.Cruise) break;
@@ -183,7 +207,7 @@ namespace OtterLocomotion
                         break;
                     case GestureKind.BackPress:
                         Accelerating = false;
-                        if (Gear > Gear.Park) Shift(Gear - 1, "back", time, events);
+                        if (Gear > Gear.Park) Shift(Underwater && Gear == Gear.Cruise ? Gear.Park : Gear - 1, "back", time, events);
                         else Deselect(time, events);
                         break;
                     case GestureKind.BackHoldBegin:
@@ -194,8 +218,23 @@ namespace OtterLocomotion
                     case GestureKind.BackRelease:
                         Braking = false;
                         break;
+                    case GestureKind.DivePress:
+                        if (b.airborne) break;
+                        diveTap = Diving;
+                        if (!Diving) Dive(true, time, events);
+                        break;
+                    case GestureKind.DiveHoldBegin:
+                        diveTap = false;
+                        Descending = Diving;
+                        break;
+                    case GestureKind.DiveRelease:
+                        Descending = false;
+                        if (diveTap) Dive(false, time, events);
+                        diveTap = false;
+                        break;
                 }
             }
+            if (under && Gear == Gear.Slow) Shift(Gear.Cruise, "under water", time, events);
 
             if (Gear == Gear.Sprint && !b.airborne)
             {
@@ -231,6 +270,14 @@ namespace OtterLocomotion
                 Gear.Cruise => s.cruiseSpeedBL,
                 _ => Accelerating ? s.sprintSpeedBL : s.cruiseSpeedBL,
             };
+            if (b.divingOrSurfacing || Descending) SpeedBL = Mathf.Max(SpeedBL, s.diveSpeedBL);
+        }
+
+        private void Dive(bool on, float time, List<ControlEvent> events)
+        {
+            Diving = on;
+            Descending = false;
+            events.Add(new ControlEvent { kind = on ? ControlEventKind.Dive : ControlEventKind.Surface, time = time });
         }
 
         private void Click(GearSettings s, in Gesture g, float time, in GearBody b, List<ControlEvent> events)

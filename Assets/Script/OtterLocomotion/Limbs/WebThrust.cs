@@ -13,7 +13,8 @@ namespace OtterLocomotion
     /// feathered edge-on or a foot left trailing, holds it back. Only the part of a web under the water's surface
     /// pushes; out in the air it takes nothing. The push along the body's heading is kept, and the push up and down,
     /// scaled by heave, so the body heaves on the strokes as Buoyancy floats it; in the dolphin wave the push along is
-    /// more and the one up and down goes, the body held to the wave it swims along (DolphinTrack). OtterControls turns
+    /// more, and there and under water the one up and down goes, the body held to the track it swims along
+    /// (DolphinTrack). OtterControls turns
     /// the body, and the physics body does not pitch or roll.
     /// </summary>
     [DefaultExecutionOrder(380)]
@@ -35,7 +36,7 @@ namespace OtterLocomotion
                  "follow its path through the bend; a web slanted to that sweep is pushed back and the otter stalls in every " +
                  "turn. Off, the webs move through the water with the body's travel and their own strokes.")]
         public bool sweptByTurn = false;
-        [Tooltip("How hard the webs' push up and down heaves the body (0 = not at all, 1 = as they push); none in the dolphin wave (LimbStrokeAnimator.Fluke), where the body rides the wave it swims along.")]
+        [Tooltip("How hard the webs' push up and down heaves the body (0 = not at all, 1 = as they push); none in the dolphin wave or under water, where the body rides the track it swims along (DolphinTrack).")]
         public float heave = 1f;
         [Tooltip("How hard the dolphin wave drives the body on top of the webs at full drive (N): the whole body's undulation pushing on the water, which the webs alone do not model and without which the wave's slow beat would not hold the sprint. It surges with each beat, by this share of its mean either way, most as the fluke sweeps down (cycles into the beat), so the body gathers way with every stroke.")]
         public float wavePush = 1f;
@@ -45,7 +46,7 @@ namespace OtterLocomotion
         private class Web
         {
             public LimbId limb;
-            public Transform bone;
+            public Transform bone, hip;
             public Vector3 normalLocal, centerLocal, previous;
             /// <summary>The web's skin, in the bone's space.</summary>
             public Vector3[] points;
@@ -57,6 +58,9 @@ namespace OtterLocomotion
         private readonly Web[] webs = new Web[2];
         private Water water;
         private Rigidbody body;
+        private DolphinTrack track;
+        private OtterControls controls;
+        private Transform chest;
         private Vector3 impulse;
         private bool started;
         private Vector3 previousPivot, previousHeading;
@@ -118,6 +122,9 @@ namespace OtterLocomotion
         {
             body = GetComponent<Rigidbody>();
             water = FindObjectOfType<Water>();
+            track = GetComponent<DolphinTrack>();
+            controls = GetComponent<OtterControls>();
+            chest = OtterRig.FindActiveBone(transform, OtterRig.Chest);
             var chains = OtterRig.FindLimbChains(transform);
             int k = 0;
             foreach (var limb in new[] { LimbId.HL, LimbId.HR })
@@ -133,7 +140,7 @@ namespace OtterLocomotion
                         // a flat spread of points: its width is about sqrt(12) standard deviations each way
                         webs[k] = new Web
                         {
-                            limb = limb, bone = bone, normalLocal = normal, centerLocal = center, area = 12f * extents.y * extents.z,
+                            limb = limb, bone = bone, hip = ik.root.bone, normalLocal = normal, centerLocal = center, area = 12f * extents.y * extents.z,
                             points = skin != null ? skin.Select(bone.InverseTransformPoint).ToArray() : new[] { center },
                         };
                     }
@@ -153,8 +160,12 @@ namespace OtterLocomotion
             Vector3 pivot = root.position, facing = Vector3.ProjectOnPlane(root.forward, Vector3.up).normalized;
             // where each web would be had the body only travelled since last frame, not swung round
             Quaternion swing = sweptByTurn || previousHeading == Vector3.zero ? Quaternion.identity : Quaternion.FromToRotation(previousHeading, facing);
+            // diving, the body glides up and down its way through the depth, the webs trailing along it behind: that is
+            // no stroke of theirs through the water
+            float diving = controls != null && controls.isActiveAndEnabled ? controls.DivePath.Weight : 0f;
+            Vector3 glide = Vector3.up * (diving * (pivot.y - previousPivot.y));
             float wave = animator != null && animator.isActiveAndEnabled ? animator.Fluke : 0f;
-            float lifting = heave * (1f - wave);
+            float lifting = heave * (1f - (track != null && track.isActiveAndEnabled ? track.Weight : wave));
             Vector3 total = Vector3.zero;
             foreach (var w in webs)
             {
@@ -162,7 +173,7 @@ namespace OtterLocomotion
                 w.wet = Wet(w);
                 Vector3 p = w.bone.TransformPoint(w.centerLocal);
                 Vector3 n = w.bone.TransformDirection(w.normalLocal).normalized;
-                Vector3 from = previousPivot + swing * (w.previous - previousPivot);
+                Vector3 from = previousPivot + swing * (w.previous - previousPivot) + glide;
                 Vector3 v = w.hasPrevious ? Vector3.ClampMagnitude((p - from) / dt, maxWebSpeed) : Vector3.zero;
                 w.previous = p;
                 w.hasPrevious = true;
@@ -173,7 +184,7 @@ namespace OtterLocomotion
                 // the water pushes back against the face's motion: |v|^2 (slicePush sin cos + waterPush sin^2) of its slant,
                 // on the share of the web under the surface
                 Vector3 f = -(waterPush * Mathf.Abs(face) + slicePush * along) * w.area * areaScale * spread * w.wet * face * n;
-                w.push = Vector3.Dot(f, heading);
+                w.push = Vector3.Dot(f, Way(w, heading));
                 w.lift = f.y;
                 total += heading * w.push + Vector3.up * (lifting * w.lift);
             }
@@ -182,6 +193,14 @@ namespace OtterLocomotion
             previousPivot = pivot;
             previousHeading = facing;
             impulse += total * dt;
+        }
+
+        // which way a web drives the body on: along the heading; diving, along the body's way down or up at its hip,
+        // which the legs pitch with, the body keeping its pace seen from above as the way takes it through the depth
+        private Vector3 Way(Web w, Vector3 heading)
+        {
+            if (controls == null || !controls.isActiveAndEnabled || chest == null || w.hip == null) return heading;
+            return controls.DivePath.Tangent(heading, Vector3.Dot(w.hip.position - chest.position, heading));
         }
 
         // the share of the web's skin below the surface

@@ -43,11 +43,15 @@ namespace OtterLocomotion.EditorTools
         [MenuItem("Tools/Otter Locomotion/Run Dolphin Playback")]
         static void RunDolphin() => Run("dolphin", "dolphin");
 
+        [MenuItem("Tools/Otter Locomotion/Run Dive Playback")]
+        static void RunDive() => Run("dive", "dive");
+
         [MenuItem("Tools/Otter Locomotion/Run Baseline Playback", true)]
         [MenuItem("Tools/Otter Locomotion/Run Turn Playback", true)]
         [MenuItem("Tools/Otter Locomotion/Run Speed Playback", true)]
         [MenuItem("Tools/Otter Locomotion/Run Circle Playback", true)]
         [MenuItem("Tools/Otter Locomotion/Run Dolphin Playback", true)]
+        [MenuItem("Tools/Otter Locomotion/Run Dive Playback", true)]
         static bool CanRun() => !EditorApplication.isPlayingOrWillChangePlaymode;
 
         public static void Run(string label, string script)

@@ -11,6 +11,8 @@ namespace OtterLocomotion
     {
         /// <summary>Height of the water's surface (m, world): the box's top face.</summary>
         public float SurfaceY => transform.TransformPoint(0f, 0.5f, 0f).y;
+        /// <summary>Height of the sea floor (m, world): the box's bottom face.</summary>
+        public float FloorY => transform.TransformPoint(0f, -0.5f, 0f).y;
 
         /// <summary>How far below the surface a point lies (m; negative above it); out past the box's sides it is never in the water.</summary>
         public float Depth(Vector3 point)

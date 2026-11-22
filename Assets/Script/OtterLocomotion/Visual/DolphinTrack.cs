@@ -17,7 +17,9 @@ namespace OtterLocomotion
     /// chain smoothing gives way while the wave is on, as do, well into it, the other providers' turns of the spine
     /// (the aim's and SpineKickSway's); the head
     /// (NeckLook) and the tail (TailRudder) ride the track too. The hips go over a crest at a set point of the fluke's
-    /// beat. Adds itself to the harmonizer's providers for this Play.
+    /// beat. Diving, the track runs along the controls' way through the depth (DivePath), the dolphin wave, if it is
+    /// on, rising and falling about it: in the duck dive the hips and hind feet go up over its crest as the chest
+    /// plunges. Adds itself to the harmonizer's providers for this Play.
     /// </summary>
     [DefaultExecutionOrder(910)]
     [DisallowMultipleComponent]
@@ -41,6 +43,7 @@ namespace OtterLocomotion
         [Range(0.01f, 1f)] public float waveDamping = 0.01f;
 
         private OtterLocomotionBrain brain;
+        private DivePath dive;
         private Buoyancy buoyancy;
         private Rigidbody body;
         private Water water;
@@ -68,14 +71,14 @@ namespace OtterLocomotion
 
         public override bool Additive => true;
 
-        /// <summary>How far the body has gone over to swimming along the track (0..1).</summary>
-        public float Weight => shadows != null && animator != null && animator.isActiveAndEnabled ? animator.Fluke : 0f;
+        /// <summary>How far the body has gone over to swimming along the track (0..1): the dolphin wave's or the dive's.</summary>
+        public float Weight => shadows != null && animator != null && animator.isActiveAndEnabled ? Mathf.Max(animator.Fluke, Diving) : 0f;
 
         /// <summary>The track's length from crest to crest (m).</summary>
         public float Stride => brain.rhythmSettings.dolphinStrideBL * Mathf.Max(0.1f, brain.Parameters.bodyLength);
 
         /// <summary>How high above the water's surface the track runs (m) where a point is along the body, now.</summary>
-        public float Height(Vector3 point) => middle + Wave(Vector3.Dot(point - shadows[shadows.Length - 1].position, Heading), Phase(Time.time));
+        public float Height(Vector3 point) => middle + Track(Vector3.Dot(point - shadows[shadows.Length - 1].position, Heading), Phase(Time.time));
 
         /// <summary>How far the track rises above the hips' line where a point is behind them (m), now, as far as the
         /// body has gone over to it: the hips lie along the track, so what trails straight back from them lies on it
@@ -86,15 +89,31 @@ namespace OtterLocomotion
             if (w <= 0f) return 0f;
             Vector3 chest = shadows[shadows.Length - 1].position, heading = Heading;
             float phase = Phase(Time.time), hips = Vector3.Dot(shadows[0].position - chest, heading), at = Vector3.Dot(point - chest, heading);
-            return w * (Wave(at, phase) - Wave(hips, phase) - Slope(hips, phase) * (at - hips));
+            return w * (Track(at, phase) - Track(hips, phase) - TrackSlope(hips, phase) * (at - hips));
         }
 
         private Vector3 Heading => Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized;
 
+        private float Diving => dive != null ? dive.Weight : 0f;
+
+        // the wave's share of the track: all of it on the surface, as far as the fluke is in under water
+        private float WaveShare
+        {
+            get
+            {
+                float w = Mathf.Max(animator.Fluke, Diving);
+                return w > 1e-4f ? animator.Fluke / w : 1f;
+            }
+        }
+
         // the track's phase at the chest (cycles): the hips, behind it, on a crest at hipsCrest
         private float Phase(float time) => animator.FlukePhaseAt(time) - hipsCrest - hipsAlong / Stride;
 
-        // how far above its middle the track runs at a place along the body (m ahead of the chest), at a phase
+        // how far above its middle the track runs at a place along the body (m ahead of the chest), at a phase: the
+        // dive's way and the wave about it
+        private float Track(float along, float phase) => (dive != null ? dive.Height(along) : 0f) + WaveShare * Wave(along, phase);
+        private float TrackSlope(float along, float phase) => (dive != null ? dive.Slope(along) : 0f) + WaveShare * Slope(along, phase);
+
         private float Wave(float along, float phase) => rise * Mathf.Cos(2f * Mathf.PI * (phase + along / Stride));
         private float Slope(float along, float phase) => -rise * 2f * Mathf.PI / Stride * Mathf.Sin(2f * Mathf.PI * (phase + along / Stride));
 
@@ -111,6 +130,7 @@ namespace OtterLocomotion
         private void Start()
         {
             brain = animator != null ? animator.brain : null;
+            dive = brain != null && brain.controls != null ? brain.controls.DivePath : null;
             water = FindFirstObjectByType<Water>();
             var decoupler = harmonizer != null ? harmonizer.decoupler : null;
             if (brain == null || water == null || decoupler == null || decoupler.shadowNodes.Count < 2)
@@ -185,11 +205,12 @@ namespace OtterLocomotion
             up = root.InverseTransformDirection(Vector3.up);
             Vector3 ahead = root.InverseTransformDirection(Heading);
             side = Vector3.Cross(up, ahead).normalized;
-            float phase = Phase(Time.time), chest = Wave(0f, phase);
+            float phase = Phase(Time.time), chest = Track(0f, phase);
             // how far ahead of the chest the centre is along the body (m; behind it, so negative)
             float centreAlong = Vector3.Dot(lastCentre - Flat(shadows[n - 1].position), Heading);
             // from the chest back, each joint where the track runs at its place along the body, as far off it as at
-            // rest, its segment from the joint ahead keeping its length: the joint's shadow ahead turns the segment there
+            // rest, its segment from the joint ahead keeping its length: the joint's shadow ahead turns the segment there.
+            // Found by halving: the track can drop away as steeply as a plunge, past where it could be stepped onto
             Vector3 restAt = Vector3.zero;
             float along = 0f, height = 0f;
             for (int i = n - 2; i >= 0; i--)
@@ -199,13 +220,14 @@ namespace OtterLocomotion
                 float across = Vector3.Dot(segment, side);
                 float length = Mathf.Sqrt(Mathf.Max(0f, segment.sqrMagnitude - across * across));
                 float restHeight = Vector3.Dot(restAt, up);
-                float to = along + Vector3.Dot(segment, ahead), y = height;
-                for (int k = 0; k < 2; k++)
+                float near = along, far = along - length, to = along, y = height;
+                for (int k = 0; k < 14; k++)
                 {
-                    y = restHeight + Wave(to, phase) - chest;
-                    to = along - Mathf.Sqrt(Mathf.Max(0f, length * length - (y - height) * (y - height)));
+                    to = 0.5f * (near + far);
+                    y = restHeight + Track(to, phase) - chest;
+                    if ((along - to) * (along - to) + (y - height) * (y - height) < length * length) near = to;
+                    else far = to;
                 }
-                y = restHeight + Wave(to, phase) - chest;
                 Vector3 laid = ahead * (to - along) + up * (y - height) + side * across;
                 pitch[i + 1] = w * Vector3.SignedAngle(segment, laid, side);
                 // and seen from above, from where the centre was at the joint ahead's place behind it to where it was at this one's
@@ -215,7 +237,7 @@ namespace OtterLocomotion
                 height = y;
             }
             // the hips' own bone, which carries the tail and legs, along the track there
-            pitch[0] = w * Vector3.SignedAngle(-ahead, -ahead - up * Slope(along, phase), side);
+            pitch[0] = w * Vector3.SignedAngle(-ahead, -ahead - up * TrackSlope(along, phase), side);
             Vector3 hipsWay = Behind(centre, centreAlong - along + 2f * TrailSpacing) - Behind(centre, centreAlong - along - 2f * TrailSpacing);
             turn[0] = hipsWay.sqrMagnitude > 1e-10f ? w * Vector3.SignedAngle(-Heading, hipsWay, Vector3.up) : 0f;
         }
@@ -261,11 +283,12 @@ namespace OtterLocomotion
         {
             float w = Weight;
             if (w <= 1e-3f || buoyancy == null || !buoyancy.isActiveAndEnabled) return;
-            float t = Time.time, phase = Phase(t);
+            float t = Time.time, phase = Phase(t), share = WaveShare;
             float beat = Mathf.Repeat(animator.FlukePhaseAt(t + 0.01f) - animator.FlukePhaseAt(t), 1f) / 0.01f;
             float p = 2f * Mathf.PI * phase, omega = 2f * Mathf.PI * beat;
-            float goal = water.SurfaceY + middle + rise * Mathf.Cos(p) - (shadows[shadows.Length - 1].position.y - transform.position.y);
-            float goalSpeed = -rise * omega * Mathf.Sin(p), goalAccel = -rise * omega * omega * Mathf.Cos(p);
+            float way = dive != null ? dive.Height(0f) : 0f, climb = dive != null ? dive.ClimbRate : 0f;
+            float goal = water.SurfaceY + middle + way + share * rise * Mathf.Cos(p) - (shadows[shadows.Length - 1].position.y - transform.position.y);
+            float goalSpeed = climb - share * rise * omega * Mathf.Sin(p), goalAccel = -share * rise * omega * omega * Mathf.Cos(p);
             float k = 2f * Mathf.PI * holdFrequency;
             float accel = goalAccel + k * k * (goal - body.position.y) + 2f * holdDamping * k * (goalSpeed - body.velocity.y);
             float hold = body.mass * (accel - Physics.gravity.y) - buoyancy.Push;

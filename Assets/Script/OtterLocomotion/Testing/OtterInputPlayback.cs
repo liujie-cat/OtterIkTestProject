@@ -7,7 +7,7 @@ namespace OtterLocomotion.Testing
     /// <summary>
     /// Scripted mouse and key input for repeatable locomotion tests. Each segment does one thing, as the player would:
     /// a click on the water, a press or hold of the go key, steering the otter picked up (the go key, then the pointer
-    /// as its guide), a press or hold of the back key; pointing toward a yaw relative to the otter's facing when
+    /// as its guide), a press or hold of the back key or the dive key; pointing toward a yaw relative to the otter's facing when
     /// playback started (+ = clockwise seen from above, i.e. right), held there or swept round the otter from it.
     /// Between pointing segments the pointer stays where it last pointed from the otter, as a still mouse does under
     /// the following camera. Feeds OtterControls through its input override, so its gestures and gears apply exactly
@@ -18,7 +18,7 @@ namespace OtterLocomotion.Testing
     public class OtterInputPlayback : MonoBehaviour, OtterControls.IInput
     {
         /// <summary>Go and Steer pick the otter up first with a press of the go key if it is not picked up yet.</summary>
-        public enum Action { Idle, Click, Go, GoHold, Steer, Back, BackHold }
+        public enum Action { Idle, Click, Go, GoHold, Steer, Back, BackHold, Dive, DiveHold }
 
         [Serializable]
         public struct Segment
@@ -63,6 +63,7 @@ namespace OtterLocomotion.Testing
         public bool Click { get; private set; }
         public bool Go { get; private set; }
         public bool Back { get; private set; }
+        public bool Dive { get; private set; }
         public Vector2 ScreenPosition { get; private set; }
         public bool Finished { get; private set; }
         public int SegmentIndex { get; private set; } = -1;
@@ -190,12 +191,38 @@ namespace OtterLocomotion.Testing
             new Segment("sprint: let go, glide", 2.5f, Action.Idle),
         };
 
+        /// <summary>
+        /// Diving: a duck dive from cruising, on under water on the belly, the dive key held deeper and let go at that
+        /// depth, a turn and the sprint into the wave down there, a tap back up to cruising at the surface; then down
+        /// from slow on the back, rolling over into the dive and cruising on once under, and back up, cruising still.
+        /// </summary>
+        public static List<Segment> DiveScript() => new List<Segment>
+        {
+            new Segment("parked: idle", 1.0f, Action.Idle),
+            new Segment("parked: pick it up, go, slow", 1.5f, Action.Go, 0f),
+            new Segment("slow: go, cruise", 2.5f, Action.Go, 0f),
+            new Segment("cruise: dive, a duck dive", 3.0f, Action.Dive),
+            new Segment("under: cruise on the belly", 2.5f, Action.Idle),
+            new Segment("under: hold dive, deeper", 3.0f, Action.DiveHold),
+            new Segment("under: let go at that depth, steer right 90", 3.0f, Action.Steer, 90f),
+            new Segment("under: hold go, sprint into the wave", 4.0f, Action.GoHold, 90f),
+            new Segment("under: let go, glide", 2.0f, Action.Idle),
+            new Segment("under: dive, back up", 4.0f, Action.Dive),
+            new Segment("cruise: on the belly at the surface", 2.0f, Action.Idle),
+            new Segment("cruise: back, slow on the back", 2.0f, Action.Back),
+            new Segment("slow: dive from the back, rolled over it cruises", 3.0f, Action.Dive),
+            new Segment("under: cruise on the belly", 2.0f, Action.Idle),
+            new Segment("under: dive, back up", 4.0f, Action.Dive),
+            new Segment("cruise: on the belly at the surface", 1.5f, Action.Idle),
+        };
+
         public static List<Segment> Script(string name) => name switch
         {
             "turns" => TurnScript(),
             "speeds" => SpeedScript(),
             "circles" => CircleScript(),
             "dolphin" => DolphinScript(),
+            "dive" => DiveScript(),
             _ => BaselineScript(),
         };
 
@@ -230,7 +257,7 @@ namespace OtterLocomotion.Testing
             }
             if (index >= segments.Count)
             {
-                Click = Go = Back = false;
+                Click = Go = Back = Dive = false;
                 Finished = true;
                 return;
             }
@@ -241,7 +268,7 @@ namespace OtterLocomotion.Testing
                 var action = segments[index].action;
                 pickUp = (action == Action.Steer || action == Action.Go) && !controls.Gears.Selected;
                 // a hold going on from the segment before is not let go between them: a fresh go press in the wave jumps
-                holdOn = index > 0 && segments[index - 1].action == action && (action == Action.GoHold || action == Action.BackHold);
+                holdOn = index > 0 && segments[index - 1].action == action && (action == Action.GoHold || action == Action.BackHold || action == Action.DiveHold);
             }
 
             var s = segments[index];
@@ -259,6 +286,12 @@ namespace OtterLocomotion.Testing
             {
                 Action.Back => InTap(lead),
                 Action.BackHold => holdOn || u >= lead,
+                _ => false,
+            };
+            Dive = s.action switch
+            {
+                Action.Dive => InTap(lead),
+                Action.DiveHold => holdOn || u >= lead,
                 _ => false,
             };
 
