@@ -40,13 +40,8 @@ namespace OtterLocomotion
         [Tooltip("Speed (body lengths/s) it swims at least while it goes under and while it comes back up, so it swims the way down or up however slow its gear.")]
         public float diveSpeedBL = 1f;
 
-        [Header("Kicks")]
-        [Tooltip("Strength (0..1) of the kick a click gives when parked (picked up or not), and when swimming.")]
-        [Range(0f, 1f)] public float parkKick = 0.6f;
-        [Range(0f, 1f)] public float swimKick = 1f;
-
         [Header("Aim")]
-        [Tooltip("How long (s) the head and spine keep aiming where the guide point or a click was, fading out once it is let go.")]
+        [Tooltip("How long (s) the head and spine keep aiming where the guide point was, fading out once it is let go.")]
         public float aimFade = 0.6f;
         [Tooltip("The head turns first: the body swims toward where the head looked this long (s) before.")]
         public float headLead = 0.12f;
@@ -58,8 +53,6 @@ namespace OtterLocomotion
     {
         public ControlEventKind kind;
         public float time;
-        /// <summary>Kick: which way it kicks off toward (world, on the water).</summary>
-        public Vector3 direction;
         public float strength;
         public Gear from, to;
         public string reason;
@@ -100,14 +93,12 @@ namespace OtterLocomotion
     /// still fast and for at least jumpGrace, and a press in the wave jumps (held on, it sprints on). Each press of the
     /// back key shifts down, and parked lets it go; held, it brakes to parked and lets it go, so let go it is always
     /// parked on its back. Picked up, the pointer is its guide point: the head looks at it and the body turns after the
-    /// head, headLead behind. A click on the water, picked up or not, turns it toward the click and kicks once without
-    /// shifting (sprinting, and standing up in the water, it only turns); on the otter, where it points nowhere, it
-    /// kicks along the heading. The dive key sends it under (a duck dive); held, under water or on the way, it swims
-    /// deeper, and let go it keeps its depth; a tap of it under water sends it back up. Under water, and until it is
-    /// back at the surface, it swims on its belly, cruising and sprinting as on the surface, and does not jump. There
-    /// it has no slow gear: sent under swimming slowly, it rolls onto its belly and cruises on once on its way down,
-    /// and the go and back keys pass over slow, between parked and cruising. Presses and clicks while in the air are
-    /// spent.
+    /// head, headLead behind; a click of the mouse does nothing to it, in any gear or let go. The dive key sends it
+    /// under (a duck dive); held, under water or on the way, it swims deeper, and let go it keeps its depth; a tap of
+    /// it under water sends it back up. Under water, and until it is back at the surface, it swims on its belly,
+    /// cruising and sprinting as on the surface, and does not jump. There it has no slow gear: sent under swimming
+    /// slowly, it rolls onto its belly and cruises on once on its way down, and the go and back keys pass over slow,
+    /// between parked and cruising. Presses while in the air are spent.
     /// </summary>
     public sealed class GearMachine
     {
@@ -121,11 +112,11 @@ namespace OtterLocomotion
         public bool Braking { get; private set; }
         /// <summary>Picked up by the go key, guided by the pointer until the back key lets it go.</summary>
         public bool Selected { get; private set; }
-        /// <summary>Where the head looks to go (world, unit, on the water): from the head toward the guide point or the click.</summary>
+        /// <summary>Where the head looks to go (world, unit, on the water): from the head toward the guide point.</summary>
         public Vector3 Heading { get; private set; } = Vector3.forward;
         /// <summary>Where the body is headed: the head's heading of headLead ago.</summary>
         public Vector3 BodyHeading { get; private set; } = Vector3.forward;
-        /// <summary>Where the head and spine aim, and how much (1 while selected, fading after it is let go or after a click).</summary>
+        /// <summary>Where the head and spine aim, and how much (1 while selected, fading after it is let go).</summary>
         public Vector3 AimPoint { get; private set; }
         public float AimBlend { get; private set; }
         /// <summary>Speed asked for (body lengths/s).</summary>
@@ -180,9 +171,6 @@ namespace OtterLocomotion
             {
                 switch (g.kind)
                 {
-                    case GestureKind.Click:
-                        if (!b.airborne) Click(s, g, time, b, events);
-                        break;
                     case GestureKind.GoPress:
                         // only a press that came cruising or sprinting goes on to sprint when held
                         goGear = Selected ? Gear : Gear.Park;
@@ -192,7 +180,7 @@ namespace OtterLocomotion
                             Selected = true;
                             events.Add(new ControlEvent { kind = ControlEventKind.Select, time = time });
                         }
-                        else if (JumpEligible) events.Add(new ControlEvent { kind = ControlEventKind.Jump, time = time, direction = Heading });
+                        else if (JumpEligible) events.Add(new ControlEvent { kind = ControlEventKind.Jump, time = time });
                         else if (Gear < Gear.Cruise) Shift(Underwater ? Gear.Cruise : Gear + 1, "go", time, events);
                         break;
                     case GestureKind.GoHoldBegin:
@@ -283,18 +271,6 @@ namespace OtterLocomotion
             Diving = on;
             Descending = false;
             events.Add(new ControlEvent { kind = on ? ControlEventKind.Dive : ControlEventKind.Surface, time = time });
-        }
-
-        private void Click(GearSettings s, in Gesture g, float time, in GearBody b, List<ControlEvent> events)
-        {
-            if (!g.onOtter)
-            {
-                Heading = Flat(g.point - b.head, Heading);
-                AimPoint = g.point;
-                aimUntil = time;
-            }
-            if (Gear == Gear.Sprint || Upright) return;
-            events.Add(new ControlEvent { kind = ControlEventKind.Kick, time = time, direction = Heading, strength = Gear == Gear.Park ? s.parkKick : s.swimKick });
         }
 
         private void Deselect(float time, List<ControlEvent> events)

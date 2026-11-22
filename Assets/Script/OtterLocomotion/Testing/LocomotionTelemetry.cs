@@ -8,10 +8,10 @@ using UnityEngine;
 namespace OtterLocomotion.Testing
 {
     /// <summary>
-    /// Records an OtterInputPlayback run every frame (after IK): buttons, gear and gait, body heading/speed, head and
+    /// Records an OtterInputPlayback run every frame (after IK): keys, gear and gait, body heading/speed, head and
     /// chest response, and each limb's IK target offset from its rest. WriteFiles() saves a CSV and a per-segment
     /// summary to Logs/: the gestures and the controls' events, when the head, limbs, spine and body first react, how
-    /// fast and how cleanly turns complete, speed rise, a click's push and glide, stopping.
+    /// fast and how cleanly turns complete, speed rise, a single kick's push and glide (the duck dive's), stopping.
     /// </summary>
     [DefaultExecutionOrder(1000)]
     [DisallowMultipleComponent]
@@ -24,7 +24,7 @@ namespace OtterLocomotion.Testing
         public string label = "baseline";
 
         [Header("Reaction thresholds")]
-        [Tooltip("Reactions count from when the controls' heading first moves this far (deg): a click asks on its release, a pick-up once the pointer leaves the otter.")]
+        [Tooltip("Reactions count from when the controls' heading first moves this far (deg): a pick-up asks once the pointer leaves the otter.")]
         public float askThresholdDeg = 1f;
         public float bodyYawThresholdDeg = 2f;
         public float headYawThresholdDeg = 3f;
@@ -101,7 +101,7 @@ namespace OtterLocomotion.Testing
             /// <summary>Where the neck is told to look: its look point seen from the chest (deg from the body's heading) and how far it is (m).</summary>
             public float guideYaw, guideDist;
             public int seg;
-            /// <summary>Mouse buttons; a hind power stroke began this frame; a click's kick is being kicked.</summary>
+            /// <summary>Go and back keys; a hind power stroke began this frame; a single kick asked for is being kicked.</summary>
             public bool go, back, kick, kicking;
             public Gear gear;
             public Gait gait;
@@ -609,9 +609,9 @@ namespace OtterLocomotion.Testing
         private string Csv()
         {
             var ci = CultureInfo.InvariantCulture;
-            // left/right = mouse buttons; intentYaw = the heading the controls ask for; aim = how much the head and spine aim (0..1);
-            // kick = a hind power stroke began; kicking = a click's kick is being kicked; guideYaw/guideDist = the neck's
-            // look point from the chest (deg from the body's heading, m)
+            // go/back = the keys; intentYaw = the heading the controls ask for; aim = how much the head and spine aim (0..1);
+            // kick = a hind power stroke began; kicking = a single kick asked for is being kicked; guideYaw/guideDist = the
+            // neck's look point from the chest (deg from the body's heading, m)
             var sb = new StringBuilder("t,seg,go,back,gear,gait,intentYaw,aim,bodyYaw,yawRate,speedFwd,speedLat,targetSpeed,kick,kicking,headYaw,chestBend,chestRoll,guideYaw,guideDist");
             foreach (var l in limbs) sb.Append(',').Append(l.name).Append("_cm");
             // horizontal offset away from the body midline, + = outward; side = which side of the midline the limb is on
@@ -814,7 +814,7 @@ namespace OtterLocomotion.Testing
                 if (events.Count > 0)
                     sb.AppendLine("  input: " + string.Join(", ", events.Select(e => $"{e.text} {(e.t - t0).ToString("F2", CultureInfo.InvariantCulture)}")));
 
-                bool turns = spec.action == OtterInputPlayback.Action.Steer || spec.action == OtterInputPlayback.Action.Click;
+                bool turns = spec.action == OtterInputPlayback.Action.Steer;
                 float delta = turns ? Mathf.DeltaAngle(first.bodyYaw, playback.TargetYaw(seg)) : 0f;
                 if (Mathf.Abs(delta) >= turnMinDeg) TurnMetrics(sb, idx, t0, first, delta);
                 else if (last.targetSpeed > 0f) SpeedMetrics(sb, idx, t0);
@@ -1429,11 +1429,11 @@ namespace OtterLocomotion.Testing
                 Check($"ripple <= ±{speedRippleMax:P0} (±{ripple:P0})", ripple <= speedRippleMax)));
         }
 
-        // A click's kick: when the feet push off after the click and for how long, how fast it takes the body and how far it glides on it.
-        private void KickMetrics(StringBuilder sb, List<int> idx, float t0, float clickTime)
+        // A single kick asked for: when the feet push off after it was asked and for how long, how fast it takes the body and how far it glides on it.
+        private void KickMetrics(StringBuilder sb, List<int> idx, float t0, float askTime)
         {
             var ci = CultureInfo.InvariantCulture;
-            var seq = idx.Select(i => samples[i]).Where(s => s.t >= clickTime).ToList();
+            var seq = idx.Select(i => samples[i]).Where(s => s.t >= askTime).ToList();
             var kicking = seq.Where(s => s.kicking).ToList();
             if (kicking.Count == 0)
             {
@@ -1450,7 +1450,7 @@ namespace OtterLocomotion.Testing
                 if (Mathf.Abs(s.speedFwd) < stopSpeed) { stopped = s.t; break; }
                 glide += Mathf.Abs(s.speedFwd) * s.dt;
             }
-            sb.AppendLine($"  kick: pushed off {(from - clickTime).ToString("F2", ci)} s after the click, for {(to - from).ToString("F2", ci)} s; " +
+            sb.AppendLine($"  kick: pushed off {(from - askTime).ToString("F2", ci)} s after it was asked, for {(to - from).ToString("F2", ci)} s; " +
                           $"peak {peak.speedFwd:F2} m/s at {(peak.t - t0).ToString("F2", ci)}; glided {glide:F2} m" +
                           (stopped.HasValue ? $", stopped at {(stopped.Value - t0).ToString("F2", ci)}" : ", still moving"));
         }

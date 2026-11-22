@@ -29,7 +29,7 @@ namespace OtterLocomotion
     [Serializable]
     public class RhythmSettings
     {
-        [Tooltip("Hind feet kicking together: cruising and sprinting on the belly, in the dolphin wave, and a click's kick from rest. The web drives only while it sweeps back faster than the body moves on, so the push is quick and the relaxed draw long.")]
+        [Tooltip("Hind feet kicking together: cruising and sprinting on the belly, in the dolphin wave, and a single kick from rest. The web drives only while it sweeps back faster than the body moves on, so the push is quick and the relaxed draw long.")]
         [FormerlySerializedAs("hind")]
         public RhythmProfile hindTogether = new RhythmProfile(0.7f, 3f, 0.25f, 3f);
         [Tooltip("How far the body swims for each kick on the belly (body lengths): the hind feet kick together once for each such stride at the speed it is asked for, within hindTogether's rates, so every kick carries the body on; pushing harder makes a kick bigger, not quicker.")]
@@ -92,9 +92,9 @@ namespace OtterLocomotion
         /// <summary>Drive when this stroke began, for detecting a fresh demand.</summary>
         public float strokeDrive;
         public int strokes;
-        /// <summary>Strength of a click's kick waiting for this limb's next power stroke, or driving this one; 0 without one.</summary>
+        /// <summary>Strength of a single kick asked for (Kick), waiting for this limb's next power stroke or driving this one; 0 without one.</summary>
         public float kick;
-        /// <summary>This power stroke is a click's kick.</summary>
+        /// <summary>This power stroke is a single kick asked for.</summary>
         public bool kicking;
         public bool InPower => active && phase < powerFraction;
     }
@@ -106,9 +106,8 @@ namespace OtterLocomotion
     /// to turn; the hind feet on the belly kick once for each stride the body is asked to swim. Left and right of a girdle pull toward alternating strokes; the hind feet kick together in
     /// the gaits on the belly. A limb with nothing to do finishes its cycle and rests; a fresh demand in the late
     /// recovery hurries the rest of it through, and a limb starting from rest pushes immediately, a forepaw once it has
-    /// reached forward for its catch. A click's kick
-    /// (Kick) makes the next power stroke of both hind feet at least that strong and straight back; from rest they
-    /// draw up and kick it together, once.
+    /// reached forward for its catch. A single kick asked for (Kick, the duck dive's) makes the next power stroke of
+    /// both hind feet at least that strong and straight back; from rest they draw up and kick it together, once.
     /// </summary>
     public sealed class LimbRhythm
     {
@@ -136,7 +135,7 @@ namespace OtterLocomotion
         private static bool IsLeft(int limb) => (limb & 1) == 0;
         private static float Wrap(float x) => x - Mathf.Round(x);
 
-        /// <summary>A click's kick for the hind feet, strength 0..1; taken up on the next Step.</summary>
+        /// <summary>A single kick of the hind feet, strength 0..1; taken up on the next Step.</summary>
         public void Kick(float strength)
         {
             int hl = (int)LimbId.HL, hr = (int)LimbId.HR;

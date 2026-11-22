@@ -302,8 +302,6 @@ MonoBehaviour:
   controls: {fileID: 7889866950994361095}
   waterDrag: {fileID: 8157724306076662692}
   fallbackBodyLength: 0.4
-  kickAlignDeg: 30
-  kickWait: 0.6
   postureSettings:
     supineRiseRateBL: 0.6
     flipDuration: 0.6
@@ -770,8 +768,6 @@ MonoBehaviour:
     wideTurn: 60
     backInWave: 20
     diveSpeedBL: 1
-    parkKick: 0.6
-    swimKick: 1
     aimFade: 0.6
     headLead: 0.12
   dive:

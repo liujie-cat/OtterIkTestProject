@@ -7,7 +7,7 @@ using UnityEngine;
 namespace OtterLocomotion.EditorTools
 {
     /// <summary>
-    /// Plays scripted key and mouse input through ControlGestures and GearMachine against a body held still facing +z,
+    /// Plays scripted keys and pointer through ControlGestures and GearMachine against a body held still facing +z,
     /// its head at Head, and checks each rule of the controls (行动操作). Writes Logs/Controls_SelfTest.txt; needs no
     /// scene and no Play.
     /// </summary>
@@ -36,13 +36,13 @@ namespace OtterLocomotion.EditorTools
                 underwater = underwater, divingOrSurfacing = divingOrSurfacing,
             };
 
-            public Sim Run(float seconds, bool click = false, bool go = false, bool back = false, bool onOtter = false, bool dive = false)
+            public Sim Run(float seconds, bool go = false, bool back = false, bool onOtter = false, bool dive = false)
             {
                 for (float t = 0f; t < seconds - 1e-5f; t += Frame)
                 {
                     gestures.Clear();
                     Vector3 at = onOtter ? Vector3.zero : point;
-                    input.Step(gs, time, click, go, back, dive, at, onOtter, gestures);
+                    input.Step(gs, time, go, back, dive, gestures);
                     gears.Step(settings, gestures, time, at, onOtter, Body, events);
                     time += Frame;
                 }
@@ -51,7 +51,6 @@ namespace OtterLocomotion.EditorTools
 
             public Sim Wait(float seconds) => Run(seconds);
             public Sim LetGo() => Run(gs.releaseTime + Frame);
-            public Sim Click() => Run(0.1f, click: true).Run(Frame);
             public Sim Go() => Run(0.1f, go: true).LetGo();
             public Sim HoldGo(float seconds) => Run(seconds, go: true).LetGo();
             public Sim Back() => Run(0.1f, back: true).LetGo();
@@ -103,11 +102,8 @@ namespace OtterLocomotion.EditorTools
             var s = new Sim().Go().Wait(0.5f);
             Check("未选中按 W：只选中，不改档，站起来踩水（俯身那面朝前）", s.gears.Selected && s.gears.Gear == Gear.Park && s.gears.Upright && s.gears.Posture == Posture.Prone && s.events.Count == 1 && s.events[0].kind == ControlEventKind.Select, s);
 
-            s = new Sim().Go();
-            s.events.Clear();
-            s.point = Head + Vector3.right;
-            s.Click();
-            Check("绿圈站立单击水面：只转向点击处，不蹬腿，仍站着", s.Kicks == 0 && s.gears.Upright && Vector3.Angle(s.gears.Heading, Vector3.right) < 1f, s);
+            s = new Sim().Go().Guide(0.5f, Head + Vector3.right);
+            Check("绿圈站立：光标引导转向，不蹬腿，仍站着", s.Kicks == 0 && s.gears.Upright && Vector3.Angle(s.gears.Heading, Vector3.right) < 1f, s);
 
             s = new Sim().Go().Go();
             bool lying = !s.gears.Upright && s.Supine;
@@ -127,9 +123,6 @@ namespace OtterLocomotion.EditorTools
 
             s = new Sim().Guide(0.3f, Head + Vector3.left).Back().Wait(0.5f);
             Check("未选中：鼠标不引导，S 也不改变移动方式", !s.gears.Selected && s.gears.Gear == Gear.Park && s.Supine && Vector3.Angle(s.gears.Heading, Vector3.forward) < 1f && s.events.Count == 0, s);
-
-            s = new Sim { point = Head + Vector3.right }.Click().Wait(0.5f);
-            Check("未选中单击水面：转向点击处，蹬一次轻的，仍停驻仰姿", !s.gears.Selected && s.Kicks == 1 && s.events[0].strength == s.settings.parkKick && Vector3.Angle(s.events[0].direction, Vector3.right) < 1f && s.gears.Gear == Gear.Park && s.Supine, s);
 
             s = new Sim().Go().Go();
             bool slow = s.gears.Gear == Gear.Slow && s.Supine && s.gears.Gait == Gait.SupineAlternate;
@@ -215,19 +208,13 @@ namespace OtterLocomotion.EditorTools
             s = new Sim().Go().Guide(0.2f, Head + Vector3.left);
             Check("选中停驻时引导大角度转弯：带一点漂移", s.gears.SpeedBL == s.settings.parkDriftBL, s);
 
-            s = new Sim(Gear.Slow) { point = Head + Vector3.right }.Click();
-            Check("选中后单击水面：转向并蹬一次，不改档", s.Kicks == 1 && s.events[0].strength == s.settings.swimKick && s.gears.Gear == Gear.Slow && Vector3.Angle(s.events[0].direction, Vector3.right) < 1f, s);
-
-            s = new Sim().Run(0.1f, click: true, onOtter: true).Run(Frame);
-            Check("单击海獭（光圈内）：沿当前朝向蹬一次，不转向", s.Kicks == 1 && Vector3.Angle(s.events[0].direction, Vector3.forward) < 1f && Vector3.Angle(s.gears.Heading, Vector3.forward) < 1f, s);
-
-            s = InWave().LetGo().Click();
-            Check("冲刺中单击：只转向，不蹬腿", s.Kicks == 0, s);
+            s = new Sim(Gear.Slow).Run(0.3f, onOtter: true);
+            Check("选中后光标在海獭上（光圈内）：不引导，朝向不变", Vector3.Angle(s.gears.Heading, Vector3.forward) < 1f && s.events.Count == 0, s);
 
             s = InWave().LetGo();
             s.airborne = true;
-            s.Go().Click().Wait(0.5f);
-            Check("空中的按键和点击作废", s.Jumps == 0 && s.Kicks == 0, s);
+            s.Go().Wait(0.5f);
+            Check("空中的按键作废", s.Jumps == 0, s);
 
             s = new Sim(Gear.Cruise) { speedBL = 1.2f }.Dive().Wait(0.5f);
             Check("巡航按空格：扎猛子下潜一次，松开不上浮", s.gears.Diving && s.Dives == 1 && s.Surfacings == 0 && s.gears.Posture == Posture.Prone && s.gears.Gear == Gear.Cruise, s);

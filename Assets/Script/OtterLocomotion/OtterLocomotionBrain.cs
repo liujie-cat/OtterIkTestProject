@@ -23,11 +23,6 @@ namespace OtterLocomotion
         [Tooltip("Body length (m) assumed when the head or tail bone is not found.")]
         public float fallbackBodyLength = 0.4f;
 
-        [Header("Kicks")]
-        [Tooltip("A click's kick waits until the body faces within this angle (deg) of where it was clicked, or kickWait seconds at most.")]
-        public float kickAlignDeg = 30f;
-        public float kickWait = 0.6f;
-
         [Header("Posture")]
         public PostureSettings postureSettings = new PostureSettings();
 
@@ -76,9 +71,6 @@ namespace OtterLocomotion
         private readonly LimbRhythm rhythm = new LimbRhythm();
         private readonly LimbGeometry[] geometry = new LimbGeometry[OtterRig.LimbCount];
         private Vector3 centerOfMass;
-        private ControlEvent pendingKick;
-        private bool kickPending;
-        private float kickQueuedAt;
         private string shiftReason = "initial";
 
         private void Awake()
@@ -104,7 +96,6 @@ namespace OtterLocomotion
             demandLayer.Reset(estimator.State);
             allocator.Reset();
             rhythm.Reset();
-            kickPending = false;
         }
 
         private void OnDisable()
@@ -115,10 +106,7 @@ namespace OtterLocomotion
         private void OnControl(ControlEvent e)
         {
             if (e.kind == ControlEventKind.Shift) shiftReason = e.reason;
-            if (e.kind != ControlEventKind.Kick) return;
-            pendingKick = e;
-            kickPending = true;
-            kickQueuedAt = Time.time;
+            if (e.kind == ControlEventKind.Kick) rhythm.Kick(e.strength);
         }
 
         // Body frame: x forward, y right, z up, metres from the rigidbody origin.
@@ -187,12 +175,6 @@ namespace OtterLocomotion
             actuators.Build(actuatorSettings, geometry, centerOfMass, postureMachine.RollDeg, postureMachine.SupineFraction, Parameters.mass, speedTargetBL,
                 demand.yawRateTarget, Intent.gait == Gait.ProneTogether);
             allocator.Solve(allocatorSettings, actuators, demand, Parameters);
-            // a click's kick pushes off once the body faces where it was clicked
-            if (kickPending && (Vector3.Angle(state.forward, pendingKick.direction) <= kickAlignDeg || Time.time - kickQueuedAt >= kickWait))
-            {
-                rhythm.Kick(pendingKick.strength);
-                kickPending = false;
-            }
             rhythm.Step(rhythmSettings, allocator, Intent.gait, demand.yawRateTarget, Mathf.Max(demand.speedTarget, state.surge) / length, dt);
         }
 

@@ -5,24 +5,23 @@ using UnityEngine;
 namespace OtterLocomotion
 {
     /// <summary>
-    /// The player's controls (行动操作): the gestures (ControlGestures) of the go and back keys and the mouse shift the
-    /// gears (GearMachine), which set the gait, heading and speed the brain swims to; a click's kick, a jump, each shift
-    /// and picking the otter up or letting it go go out as Control events. The go key picks it up and shifts up, held
-    /// cruising it sprints, and in the dolphin wave it jumps; the back key shifts down and, parked, lets it go, and held
-    /// it brakes to a stop and lets it go. The mouse is the stick: picked up, the pointer outside the ring round the
-    /// otter is its guide point, which the head looks at and the body turns after; a click kicks toward it, picked up
-    /// or not. The dive key sends it under along its way through the depth (DivePath), deeper while held, and a tap
-    /// under water brings it back up; both feet kick as the duck dive's hips go over. Turns the body toward the heading
-    /// at the brain's yaw rate target and brakes it while the back key is held.
+    /// The player's controls (行动操作): the gestures (ControlGestures) of the go, back and dive keys shift the gears
+    /// (GearMachine), which set the gait, heading and speed the brain swims to; a jump, each shift, picking the otter
+    /// up or letting it go, the dives and the duck dive's kick go out as Control events. The go key picks it up and
+    /// shifts up, held cruising it sprints, and in the dolphin wave it jumps; the back key shifts down and, parked,
+    /// lets it go, and held it brakes to a stop and lets it go. The mouse is the stick, and only that: picked up, the
+    /// pointer outside the ring round the otter is its guide point, which the head looks at and the body turns after;
+    /// its buttons are left to other things. The dive key sends it under along its way through the depth (DivePath),
+    /// deeper while held, and a tap under water brings it back up; both feet kick as the duck dive's hips go over.
+    /// Turns the body toward the heading at the brain's yaw rate target and brakes it while the back key is held.
     /// </summary>
     [DefaultExecutionOrder(200)]
     [DisallowMultipleComponent]
     public class OtterControls : MonoBehaviour
     {
-        /// <summary>Stands in for the mouse and keys (scripted playback, tests): the mouse button, the go, back and dive keys, and the pointer's screen position in pixels.</summary>
+        /// <summary>Stands in for the mouse and keys (scripted playback, tests): the go, back and dive keys, and the pointer's screen position in pixels.</summary>
         public interface IInput
         {
-            bool Click { get; }
             bool Go { get; }
             bool Back { get; }
             bool Dive { get; }
@@ -39,7 +38,7 @@ namespace OtterLocomotion
         public Camera inputCamera;
         public OtterLocomotionBrain brain;
         public StrokePropulsion strokes;
-        [Tooltip("The ring round the otter, from the middle of its back (body lengths): picked up, the pointer guides it from outside it; a click inside it kicks along the heading.")]
+        [Tooltip("The ring round the otter, from the middle of its back (body lengths): picked up, the pointer guides it from outside it, and inside it points nowhere.")]
         public float ringRadiusBL = 0.6f;
         public Gear initialGear = Gear.Park;
         public GestureSettings gestures = new GestureSettings();
@@ -65,7 +64,6 @@ namespace OtterLocomotion
         /// <summary>The pointer at PointerY, and whether it is on the otter (inside the ring), this frame.</summary>
         public Vector3 PointerPoint { get; private set; }
         public bool PointerOverOtter { get; private set; }
-        public bool ClickHeld { get; private set; }
         public bool GoHeld { get; private set; }
         public bool BackHeld { get; private set; }
         public bool DiveHeld { get; private set; }
@@ -153,7 +151,6 @@ namespace OtterLocomotion
             Vector2 screen;
             if (InputOverride != null)
             {
-                ClickHeld = InputOverride.Click;
                 GoHeld = InputOverride.Go;
                 BackHeld = InputOverride.Back;
                 DiveHeld = InputOverride.Dive;
@@ -161,7 +158,6 @@ namespace OtterLocomotion
             }
             else
             {
-                ClickHeld = Input.GetMouseButton(0);
                 GoHeld = Input.GetKey(goKey);
                 BackHeld = Input.GetKey(backKey);
                 DiveHeld = Input.GetKey(diveKey);
@@ -172,7 +168,7 @@ namespace OtterLocomotion
 
             gestureList.Clear();
             events.Clear();
-            input.Step(gestures, Time.time, ClickHeld, GoHeld, BackHeld, DiveHeld, PointerPoint, PointerOverOtter, gestureList);
+            input.Step(gestures, Time.time, GoHeld, BackHeld, DiveHeld, gestureList);
             machine.Step(gears, gestureList, Time.time, PointerPoint, PointerOverOtter, Body(), events);
             StepDive();
             foreach (var g in gestureList) Gestured?.Invoke(g);
@@ -224,7 +220,7 @@ namespace OtterLocomotion
             float floor = water != null ? water.SurfaceY - water.FloorY : float.PositiveInfinity;
             float supine = brain != null ? brain.Posture.SupineFraction : 0f;
             if (divePath.Step(dive, machine.Diving, machine.Descending, moved, supine, floor, Time.deltaTime))
-                events.Add(new ControlEvent { kind = ControlEventKind.Kick, time = Time.time, direction = Flat(transform.forward).normalized, strength = dive.plungeKick });
+                events.Add(new ControlEvent { kind = ControlEventKind.Kick, time = Time.time, strength = dive.plungeKick });
         }
 
         private bool TryPointerPoint(Vector2 screen, out Vector3 point)

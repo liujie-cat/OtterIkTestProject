@@ -88,11 +88,10 @@ namespace OtterLocomotion.EditorTools
         {
             "speeds" => new[]
             {
-                new Shot(1, 0.1f, "1_park_kick_feet", 8, 0.06f),
-                new Shot(3, 4.0f, "3_slow_feet", 8, 0.06f),
-                new Shot(5, 4.0f, "5_cruise_feet", 8, 0.05f),
-                new Shot(6, 0.5f, "6_sprint_kick_feet", 8, 0.04f),
-                new Shot(6, 5.0f, "6_sprint_wave_feet", 8, 0.04f),
+                new Shot(2, 4.0f, "2_slow_feet", 8, 0.06f),
+                new Shot(4, 4.0f, "4_cruise_feet", 8, 0.05f),
+                new Shot(5, 0.5f, "5_sprint_kick_feet", 8, 0.04f),
+                new Shot(5, 5.0f, "5_sprint_wave_feet", 8, 0.04f),
             },
             "circles" => new[]
             {
@@ -131,12 +130,11 @@ namespace OtterLocomotion.EditorTools
                 new Shot(3, 0.4f, "03_turn_feet", 8, 0.1f),
                 new Shot(3, 1.4f, "03_turn_paws", 8, 0.1f, paws: true),
                 new Shot(3, 3.2f, "03_turned"),
-                new Shot(4, 1.5f, "04_clicked"),
-                new Shot(5, 0.05f, "05_lie_back_body", 12, 0.08f, body: true),
-                new Shot(6, 0.05f, "06_stand_again_body", 12, 0.08f, body: true),
-                new Shot(7, 0.05f, "07_dive_body", 12, 0.12f, body: true),
-                new Shot(9, 1.5f, "09_upright_again"),
-                new Shot(10, 0.05f, "10_let_go_body", 12, 0.08f, body: true),
+                new Shot(4, 0.05f, "04_lie_back_body", 12, 0.08f, body: true),
+                new Shot(5, 0.05f, "05_stand_again_body", 12, 0.08f, body: true),
+                new Shot(6, 0.05f, "06_dive_body", 12, 0.12f, body: true),
+                new Shot(8, 1.5f, "08_upright_again"),
+                new Shot(9, 0.05f, "09_let_go_body", 12, 0.08f, body: true),
             },
             "turns" => new[]
             {
@@ -147,21 +145,19 @@ namespace OtterLocomotion.EditorTools
             },
             _ => new[]
             {
-                new Shot(1, 0.1f, "01_park_kick_feet", 8, 0.06f),
-                new Shot(2, 0.3f, "02_park_click_turn_a"), new Shot(2, 0.6f, "02_park_click_turn_b"), new Shot(2, 0.9f, "02_park_click_turn_c"),
-                new Shot(5, 1.5f, "05_slow_straight"), new Shot(5, 1.85f, "05_slow_push"),
-                new Shot(5, 1.55f, "05_slow_straight_feet", 8, 0.1f),
-                new Shot(6, 0.3f, "06_slow_turn_a"), new Shot(6, 0.6f, "06_slow_turn_b"),
-                new Shot(8, 0.11f, "08_roll_prone_paws", 8, 0.05f, paws: true), new Shot(8, 0.9f, "08_roll_prone_c"),
-                new Shot(9, 1.5f, "09_cruise_straight"),
-                new Shot(9, 1.55f, "09_cruise_straight_feet", 8, 0.08f),
-                new Shot(10, 0.3f, "10_cruise_turn_a"), new Shot(10, 0.6f, "10_cruise_turn_b"),
-                new Shot(11, 0.4f, "11_sprint_kick_feet", 8, 0.06f),
-                new Shot(11, 2.3f, "11_sprint_wave_feet", 8, 0.06f),
-                new Shot(11, 2.75f, "11_sprint_wave_body", 8, 0.035f, body: true),
-                new Shot(11, 3.02f, "11_sprint_wave_paws", 8, 0.05f, paws: true),
-                new Shot(11, 3.42f, "11_sprint_wave"),
-                new Shot(15, 0.1f, "15_roll_supine_paws", 8, 0.05f, paws: true),
+                new Shot(3, 1.5f, "03_slow_straight"), new Shot(3, 1.85f, "03_slow_push"),
+                new Shot(3, 1.55f, "03_slow_straight_feet", 8, 0.1f),
+                new Shot(4, 0.3f, "04_slow_turn_a"), new Shot(4, 0.6f, "04_slow_turn_b"),
+                new Shot(5, 0.11f, "05_roll_prone_paws", 8, 0.05f, paws: true), new Shot(5, 0.9f, "05_roll_prone_c"),
+                new Shot(6, 1.5f, "06_cruise_straight"),
+                new Shot(6, 1.55f, "06_cruise_straight_feet", 8, 0.08f),
+                new Shot(7, 0.3f, "07_cruise_turn_a"), new Shot(7, 0.6f, "07_cruise_turn_b"),
+                new Shot(8, 0.4f, "08_sprint_kick_feet", 8, 0.06f),
+                new Shot(8, 2.3f, "08_sprint_wave_feet", 8, 0.06f),
+                new Shot(8, 2.75f, "08_sprint_wave_body", 8, 0.035f, body: true),
+                new Shot(8, 3.02f, "08_sprint_wave_paws", 8, 0.05f, paws: true),
+                new Shot(8, 3.42f, "08_sprint_wave"),
+                new Shot(12, 0.1f, "12_roll_supine_paws", 8, 0.05f, paws: true),
             },
         };
 
