@@ -40,6 +40,10 @@ namespace OtterLocomotion
         [Tooltip("Speed (body lengths/s) it swims at least while it goes under and while it comes back up, so it swims the way down or up however slow its gear.")]
         public float diveSpeedBL = 1f;
 
+        [Header("Standing")]
+        [Tooltip("Picked up, shifted down to parked or back at the surface parked, it waits this long (s) before standing up in the water, lying as it lay with only its head turning after the pointer: a press of the go key meanwhile sends it off on its back without standing up first, and of the back key lets it go.")]
+        public float standDelay = 0.3f;
+
         [Header("Aim")]
         [Tooltip("How long (s) the head and spine keep aiming where the guide point was, fading out once it is let go.")]
         public float aimFade = 0.6f;
@@ -86,8 +90,9 @@ namespace OtterLocomotion
     /// The gears the go and back keys climb and come down (行动操作). Not picked up, the otter lies parked on its back:
     /// the pointer does not guide it and it does not shift. The go key picks it up, then each press shifts up, from
     /// parked to slow and from slow to cruising. Picked up and parked at the surface it stands up in the water to look
-    /// about (Upright, Periscope), on its belly side; swimming slowly it lies on its back, cruising and sprinting it
-    /// swims on its belly. Pressed cruising and held, it sprints along the heading: kicking at first, then in the
+    /// about (Upright, Periscope), on its belly side, once it has stayed so standDelay, its head alone turning after
+    /// the pointer meanwhile: picked up and sent off at once, it swims off on its back without standing up first.
+    /// Swimming slowly it lies on its back, cruising and sprinting it swims on its belly. Pressed cruising and held, it sprints along the heading: kicking at first, then in the
     /// dolphin wave, out of which it swims a wide turn on its belly with all four limbs, going back into the wave once
     /// round; let go before the wave it cruises on, let go in the wave it slows of itself, keeping the wave while
     /// still fast and for at least jumpGrace, and a press in the wave jumps (held on, it sprints on). Each press of the
@@ -114,7 +119,7 @@ namespace OtterLocomotion
         public bool Selected { get; private set; }
         /// <summary>Where the head looks to go (world, unit, on the water): from the head toward the guide point.</summary>
         public Vector3 Heading { get; private set; } = Vector3.forward;
-        /// <summary>Where the body is headed: the head's heading of headLead ago.</summary>
+        /// <summary>Where the body is headed: the head's heading of headLead ago; waiting to stand up, where it faces.</summary>
         public Vector3 BodyHeading { get; private set; } = Vector3.forward;
         /// <summary>Where the head and spine aim, and how much (1 while selected, fading after it is let go).</summary>
         public Vector3 AimPoint { get; private set; }
@@ -128,11 +133,12 @@ namespace OtterLocomotion
         /// <summary>Diving, or still under water on its way back up.</summary>
         public bool Underwater => Diving || under;
 
-        /// <summary>Picked up and parked at the surface: it stands up in the water on its belly side, turning after the pointer and drifting on only a little.</summary>
-        public bool Upright => Selected && Gear == Gear.Park && !Underwater;
+        /// <summary>Picked up and parked at the surface for standDelay: it stands up in the water on its belly side, turning after the pointer and drifting on only a little.</summary>
+        public bool Upright => standing && StandsParked;
 
         public bool JumpEligible => Gait == Gait.Dolphin && !Underwater;
-        public Posture Posture => Underwater || Upright ? Posture.Prone : PostureOf(Gear);
+        /// <summary>Waiting to stand up, it lies as it lay before.</summary>
+        public Posture Posture => Underwater || Upright ? Posture.Prone : StandsParked ? lay : PostureOf(Gear);
         public static Posture PostureOf(Gear gear) => gear <= Gear.Slow ? Posture.Supine : Posture.Prone;
         public Gait Gait => Gear switch
         {
@@ -146,15 +152,24 @@ namespace OtterLocomotion
         private float sprintSince, releasedAt, aimUntil;
         // under water by the body's way through the depth; and the dive key's press under water, a tap until it is held
         private bool under, diveTap;
+        // picked up and parked at the surface since then, standing up once standDelay has gone by; lying meanwhile as it
+        // lay the step before
+        private float parkedSince;
+        private bool standing;
+        private Posture lastPosture, lay;
         private readonly List<(float time, Vector3 heading)> looked = new List<(float, Vector3)>();
+
+        private bool StandsParked => Selected && Gear == Gear.Park && !Underwater;
 
         /// <param name="initial">Above parked, it starts picked up.</param>
         public void Reset(in GearBody body, Gear initial = Gear.Park)
         {
             Gear = initial;
             Dolphin = WideTurn = Accelerating = Braking = false;
-            Diving = Descending = under = diveTap = false;
+            Diving = Descending = under = diveTap = standing = false;
             Selected = initial > Gear.Park;
+            parkedSince = float.PositiveInfinity;
+            lastPosture = lay = PostureOf(initial);
             Heading = BodyHeading = Flat(body.forward, Vector3.forward);
             looked.Clear();
             AimPoint = body.head + Heading;
@@ -229,6 +244,15 @@ namespace OtterLocomotion
             }
             if (under && Gear == Gear.Slow) Shift(Gear.Cruise, "under water", time, events);
 
+            if (!StandsParked) parkedSince = float.PositiveInfinity;
+            else if (float.IsPositiveInfinity(parkedSince))
+            {
+                parkedSince = time;
+                lay = lastPosture;
+            }
+            standing = time - parkedSince >= s.standDelay;
+            lastPosture = Posture;
+
             if (Gear == Gear.Sprint && !b.airborne)
             {
                 float toSprint = Mathf.InverseLerp(s.cruiseSpeedBL, s.sprintSpeedBL, b.speedBL);
@@ -252,13 +276,15 @@ namespace OtterLocomotion
             while (gone + 1 < looked.Count && looked[gone + 1].time <= then) gone++;
             looked.RemoveRange(0, gone);
             if (looked[0].time <= then) BodyHeading = looked[0].heading;
+            bool waiting = StandsParked && !standing;
+            if (waiting) BodyHeading = Flat(b.forward, BodyHeading);
 
             float off = Vector3.Angle(Flat(b.forward, Heading), Heading);
             WideTurn = Gear == Gear.Sprint && Dolphin && !b.airborne && off > (WideTurn ? s.backInWave : s.wideTurn);
             bool turning = off > s.parkDriftAngle;
             SpeedBL = Gear switch
             {
-                Gear.Park => Selected && turning && !Braking ? s.parkDriftBL : 0f,
+                Gear.Park => Selected && turning && !Braking && !waiting ? s.parkDriftBL : 0f,
                 Gear.Slow => s.slowSpeedBL,
                 Gear.Cruise => s.cruiseSpeedBL,
                 _ => Accelerating ? s.sprintSpeedBL : s.cruiseSpeedBL,

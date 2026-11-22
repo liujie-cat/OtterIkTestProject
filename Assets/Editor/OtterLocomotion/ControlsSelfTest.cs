@@ -27,8 +27,16 @@ namespace OtterLocomotion.EditorTools
             public float time, speedBL;
             public bool airborne, underwater, divingOrSurfacing;
             public Vector3 point = new Vector3(0f, 0f, 1f);
+            /// <summary>Times it rolled between back and belly, and whether it stood up, since it started.</summary>
+            public int Rolls;
+            public bool StoodUp;
+            Posture lay;
 
-            public Sim(Gear start = Gear.Park) => gears.Reset(Body, start);
+            public Sim(Gear start = Gear.Park)
+            {
+                gears.Reset(Body, start);
+                lay = gears.Posture;
+            }
 
             GearBody Body => new GearBody
             {
@@ -44,6 +52,9 @@ namespace OtterLocomotion.EditorTools
                     Vector3 at = onOtter ? Vector3.zero : point;
                     input.Step(gs, time, go, back, dive, gestures);
                     gears.Step(settings, gestures, time, at, onOtter, Body, events);
+                    if (gears.Posture != lay) Rolls++;
+                    lay = gears.Posture;
+                    StoodUp |= gears.Upright;
                     time += Frame;
                 }
                 return this;
@@ -99,23 +110,44 @@ namespace OtterLocomotion.EditorTools
                 if (!ok) failed++;
             }
 
-            var s = new Sim().Go().Wait(0.5f);
-            Check("未选中按 W：只选中，不改档，站起来踩水（俯身那面朝前）", s.gears.Selected && s.gears.Gear == Gear.Park && s.gears.Upright && s.gears.Posture == Posture.Prone && s.events.Count == 1 && s.events[0].kind == ControlEventKind.Select, s);
+            var s = new Sim().Go();
+            bool waiting = s.gears.Selected && !s.gears.Upright && s.Supine;
+            s.Wait(0.5f);
+            Check("只按一下 W：先只选中、仍仰着，standDelay 后站起来踩水（俯身那面朝前），只翻一次", waiting && s.gears.Gear == Gear.Park && s.gears.Upright && s.gears.Posture == Posture.Prone && s.Rolls == 1 && s.events.Count == 1 && s.events[0].kind == ControlEventKind.Select, s);
+
+            s = new Sim().Go().Guide(0.05f, Head + Vector3.left);
+            bool headOnly = !s.gears.Upright && Vector3.Angle(s.gears.Heading, Vector3.left) < 1f && Vector3.Angle(s.gears.BodyHeading, Vector3.forward) < 1f && s.gears.SpeedBL == 0f;
+            s.Wait(0.3f);
+            Check("等着站起来时只有头跟光标转，站起来后身体才跟上", headOnly && s.gears.Upright && Vector3.Angle(s.gears.BodyHeading, Vector3.left) < 1f, s);
+
+            s = new Sim().Go().Go().Wait(0.5f);
+            Check("快速按两下 W：选中加慢游，全程仰着，不站", s.gears.Gear == Gear.Slow && s.Supine && !s.StoodUp && s.Rolls == 0, s);
+
+            s = new Sim().Go().Go().Go().Wait(0.5f);
+            Check("快速按三下 W：选中、慢游、巡航，中间一直仰着，最后只翻一次成俯身", s.gears.Gear == Gear.Cruise && s.gears.Posture == Posture.Prone && !s.StoodUp && s.Rolls == 1, s);
 
             s = new Sim().Go().Guide(0.5f, Head + Vector3.right);
             Check("绿圈站立：光标引导转向，不蹬腿，仍站着", s.Kicks == 0 && s.gears.Upright && Vector3.Angle(s.gears.Heading, Vector3.right) < 1f, s);
 
-            s = new Sim().Go().Go();
+            s = new Sim().Go().Wait(0.5f).Go();
             bool lying = !s.gears.Upright && s.Supine;
             s.Back();
-            Check("站立按 W 躺回仰泳；慢游按 S 回停驻，仍选中，重新站起来", lying && s.gears.Gear == Gear.Park && s.gears.Selected && s.gears.Upright, s);
+            waiting = !s.gears.Upright && s.Supine;
+            s.Wait(0.5f);
+            Check("站立按 W 躺回仰泳；慢游按 S 回停驻，仍选中，仰着等一下再重新站起来", lying && waiting && s.gears.Gear == Gear.Park && s.gears.Selected && s.gears.Upright, s);
 
-            s = new Sim().Go().Dive();
+            s = new Sim(Gear.Slow).Back().Back().Wait(0.5f);
+            Check("慢游快速点两下 S：直接解除选中，仰着不站", !s.gears.Selected && s.Supine && !s.StoodUp && s.Rolls == 0, s);
+
+            s = new Sim().Go().Wait(0.5f).Dive();
             bool diving = s.gears.Diving && !s.gears.Upright && s.gears.Posture == Posture.Prone;
             s.Under().Dive().Under(false);
-            Check("站立按空格：下潜时不再站着；上浮回到水面重新站起来", diving && !s.gears.Diving && s.gears.Upright, s);
+            int rolls = s.Rolls;
+            waiting = !s.gears.Upright && s.gears.Posture == Posture.Prone;
+            s.Wait(0.5f);
+            Check("站立按空格：下潜时不再站着；上浮回到水面俯身等一下，重新站起来，不先翻回仰姿", diving && waiting && !s.gears.Diving && s.gears.Upright && s.Rolls == rolls, s);
 
-            s = new Sim().Go().Back();
+            s = new Sim().Go().Wait(0.5f).Back();
             Check("站立点 S 解除选中：躺回仰姿", !s.gears.Selected && !s.gears.Upright && s.Supine, s);
 
             s = new Sim().Run(0.6f, go: true).LetGo();
