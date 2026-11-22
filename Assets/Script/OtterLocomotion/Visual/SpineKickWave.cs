@@ -14,6 +14,8 @@ namespace OtterLocomotion
     /// however far the hind legs have gone over to it (LimbStrokeAnimator): the body swims along the wave instead
     /// (DolphinTrack), and a packet as long as a beat would fold the hips up out of the water; nor does a kick while
     /// the body is still well on the track, leaving the wave or under water, where it lies straight along its way.
+    /// Going under from the surface, one packet arches the back as the way lunges up over its crest (DivePath), the
+    /// hips and hind feet coming up out of the water, whether or not a push comes in time to send one.
     /// </summary>
     [DefaultExecutionOrder(310)]
     [DisallowMultipleComponent]
@@ -35,11 +37,14 @@ namespace OtterLocomotion
         [Header("Fluke")]
         [Tooltip("Leaving the dolphin wave or coming up, kicks send packets again once the body is this far off the track (DolphinTrack.Weight).")]
         [Range(0f, 1f)] public float pulsesOff = 0.5f;
+        [Header("Duck dive")]
+        [Tooltip("How long the packet that arches the back over the dive's crest lasts (s); it goes at full strength.")]
+        public float archLength = 0.4f;
 
         private ExpSpineKickWavePacketProvider packet;
         private OtterLocomotionBrain brain;
         private DolphinTrack track;
-        private bool started;
+        private bool started, wasUnder;
 
         /// <summary>A wave packet has been sent down the spine.</summary>
         public event Action Pulsed;
@@ -84,6 +89,22 @@ namespace OtterLocomotion
             float interval = (brain.Rhythm.HindTogether ? 1f : 0.5f) / Mathf.Max(0.1f, st.rate);
             packet.TriggerKick(strength, Mathf.Clamp(interval * pulseLength, 0.15f, 1.2f));
             Pulsed?.Invoke();
+        }
+
+        private void Update()
+        {
+            var dive = brain != null && brain.controls != null ? brain.controls.DivePath : null;
+            bool under = dive != null && dive.Under;
+            if (under && !wasUnder && pulseKicks && packet != null)
+            {
+                float strength = fullPulse * Mathf.Lerp(1f, supinePulse, brain.Posture.SupineFraction);
+                if (strength > 1e-3f)
+                {
+                    packet.TriggerKick(strength, archLength);
+                    Pulsed?.Invoke();
+                }
+            }
+            wasUnder = under;
         }
 
         private void OnDisable() => Listen(false);
