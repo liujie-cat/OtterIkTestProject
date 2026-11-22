@@ -246,7 +246,10 @@ namespace OtterLocomotion
     /// recovery goes up its back side, the ankle relaxed, so the web trails down edge-on and slices up through the
     /// water (FlipperPose, hinged about the push). The ankle turns the web over at the top and the bottom, where the
     /// foot barely moves up or down. The more lift the stand asks of the treading (Periscope.Lift), the deeper and
-    /// quicker the strokes. The ellipse is set in the world, upright whatever the spine's lean.
+    /// quicker the strokes. The ellipse is set in the world, upright whatever the spine's lean. Turning there, each
+    /// foot's push tilts from down toward a sweep of its own: the outside foot's back and out along its side, in
+    /// bigger strokes, the inside one's forward and in, in smaller ones, so the two push the hips round as a couple
+    /// while still holding the body up.
     /// </summary>
     [Serializable]
     public class HindTread
@@ -275,6 +278,15 @@ namespace OtterLocomotion
         [Tooltip("Strokes per second with no lift asked and at full lift.")]
         public float lightRate = 1.4f;
         public float fullRate = 2.2f;
+        [Header("Turning, at a full turn (HindTurn.fullTurnRate)")]
+        [Tooltip("How far each foot's push tilts from down toward its sweep (deg).")]
+        public float sweep = 35f;
+        [Tooltip("Which way the outside foot sweeps: back, turned out toward its side (deg); and the inside one: forward, turned in (deg).")]
+        public float outerSwing = 30f;
+        public float innerSwing = 30f;
+        [Tooltip("How much bigger the outside foot's strokes get and how much smaller the inside one's, as shares of the stroke.")]
+        public float outerGrow = 0.3f;
+        public float innerShrink = 0.3f;
 
         /// <summary>How square the web is at a phase (0 = top, the push to 0.5, the recovery after): 1 through the push, 0 edge-on through the recovery.</summary>
         public float Square(float phase)
@@ -589,6 +601,8 @@ namespace OtterLocomotion
 
         /// <summary>How far the hind legs have gone over from kicking to the fluke (0..1).</summary>
         public float Fluke { get; private set; }
+        /// <summary>The treading's beat (cycles from the left foot's top, HindTread).</summary>
+        public float TreadBeat => treadPhase;
         /// <summary>The fluke's beat (cycles; the hind rhythm's phase) and strength (the hind drive, 0..1).</summary>
         public float FlukePhase { get; private set; }
         public float FlukeDrive { get; private set; }
@@ -1002,8 +1016,8 @@ namespace OtterLocomotion
                         + belly * Mathf.Lerp(hindKick.kneeBelly, backKick.kneeBelly, supine) + outward * Mathf.Lerp(hindKick.kneeOut, backKick.kneeOut, supine));
                     if (Tread > 0f)
                     {
-                        TreadAxes(out var facing, out _);
-                        knee = Vector3.Lerp(knee, joint + l.length * (facing * tread.kneeAhead + TreadOut(i, facing) * tread.kneeOut), Tread);
+                        TreadAxes(i, out var facing, out var side, out _);
+                        knee = Vector3.Lerp(knee, joint + l.length * (facing * tread.kneeAhead + side * tread.kneeOut), Tread);
                     }
                     l.pole.position = knee;
                 }
@@ -1180,7 +1194,7 @@ namespace OtterLocomotion
                 Vector3 flow = l.hasLastAnkle ? (ankleAt - l.lastAnkle) / Mathf.Max(1e-4f, Time.deltaTime) : Vector3.zero;
                 l.lastAnkle = ankleAt;
                 l.hasLastAnkle = true;
-                Hinge(ref l, flow, turnOut, swing, out var sole, out var toes);
+                Hinge(i, ref l, flow, turnOut, swing, out var sole, out var toes);
                 Vector3 goal = l.stand * Limit(Angles(rest, Quaternion.LookRotation(toes, sole), l.side), l.ankle);
                 Quaternion held = l.girdle.rotation * l.poseLocal;
                 if (Fluke > 1e-3f) goal = Vector3.Lerp(goal, FlukeAngles(ref l, rest, held * Vector3.up), Fluke);
@@ -1215,7 +1229,7 @@ namespace OtterLocomotion
         // flexed. All of it in the kick's frame: swung out with the loop for a turn, square is square to the leg's sweep;
         // treading water, back is the push down.
         // Out: the sole's normal (the face dorsal at rest) and where the toes point.
-        private void Hinge(ref Limb l, Vector3 flow, float turnOut, float swing, out Vector3 sole, out Vector3 toes)
+        private void Hinge(int i, ref Limb l, Vector3 flow, float turnOut, float swing, out Vector3 sole, out Vector3 toes)
         {
             var f = flipper;
             KickAxes(l, out _, out _, out var outward, out var belly);
@@ -1225,7 +1239,7 @@ namespace OtterLocomotion
             outward = swung * outward;
             if (Tread > 0f)
             {
-                TreadAxes(out _, out var push);
+                TreadAxes(i, out _, out _, out var push);
                 back = Vector3.Slerp(back, push, Tread);
             }
             float outAngle = turnOut * Mathf.Clamp01(l.hinge / 90f);
@@ -1415,26 +1429,36 @@ namespace OtterLocomotion
         private Vector3 TreadAnkle(int i, in Limb l)
         {
             var t = tread;
-            TreadAxes(out var ahead, out var push);
+            TreadAxes(i, out var ahead, out var outward, out var push);
             Vector3 across = Vector3.ProjectOnPlane(ahead, push).normalized;
-            Vector3 middle = l.girdle.TransformPoint(l.jointLocal) + l.length * (Vector3.down * t.down + ahead * t.ahead + TreadOut(i, ahead) * t.outward);
-            float size = Mathf.Lerp(t.lightAmplitude, 1f, treadLift) * l.length, a = 2f * Mathf.PI * TreadPhase(i);
+            Vector3 middle = l.girdle.TransformPoint(l.jointLocal) + l.length * (Vector3.down * t.down + ahead * t.ahead + outward * t.outward);
+            float amount = Mathf.Abs(turn), grown = OuterInTurn(i) ? 1f + t.outerGrow * amount : 1f - t.innerShrink * amount;
+            float size = Mathf.Lerp(t.lightAmplitude, 1f, treadLift) * grown * l.length, a = 2f * Mathf.PI * TreadPhase(i);
             return middle + size * (-push * (t.depth * Mathf.Cos(a)) + across * (t.width * Mathf.Sin(a)));
         }
 
         // the treading's beat at a hind foot: the right foot half a cycle on from the left
         private float TreadPhase(int i) => Mathf.Repeat(treadPhase + (OtterRig.Side((LimbId)i) > 0 ? 0.5f : 0f), 1f);
 
-        /// <summary>The treading's frame (world): ahead, level toward where the belly faces, and the push, down and leaning back from there.</summary>
-        private void TreadAxes(out Vector3 ahead, out Vector3 push)
-        {
-            ahead = Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized;
-            float lean = tread.lean * Mathf.Deg2Rad;
-            push = Vector3.down * Mathf.Cos(lean) - ahead * Mathf.Sin(lean);
-        }
+        // whether a hind foot is on the outside of the turn the kicks follow
+        private bool OuterInTurn(int i) => OtterRig.Side((LimbId)i) != Math.Sign(turn);
 
-        // level, out toward a hind leg's side
-        private static Vector3 TreadOut(int i, Vector3 ahead) => Vector3.Cross(Vector3.up, ahead) * OtterRig.Side((LimbId)i);
+        /// <summary>The treading's frame at a hind foot (world): ahead, level toward where the belly faces; out, level
+        /// toward the leg's side; and the push, down and leaning back from ahead, tilted in a turn toward the foot's sweep.</summary>
+        private void TreadAxes(int i, out Vector3 ahead, out Vector3 outward, out Vector3 push)
+        {
+            var t = tread;
+            ahead = Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized;
+            outward = Vector3.Cross(Vector3.up, ahead) * OtterRig.Side((LimbId)i);
+            float lean = t.lean * Mathf.Deg2Rad;
+            push = Vector3.down * Mathf.Cos(lean) - ahead * Mathf.Sin(lean);
+            float amount = Mathf.Abs(turn);
+            if (amount < 1e-3f) return;
+            bool outer = OuterInTurn(i);
+            float swing = (outer ? t.outerSwing : t.innerSwing) * Mathf.Deg2Rad, tilt = t.sweep * amount * Mathf.Deg2Rad;
+            Vector3 sweep = outer ? -ahead * Mathf.Cos(swing) + outward * Mathf.Sin(swing) : ahead * Mathf.Cos(swing) - outward * Mathf.Sin(swing);
+            push = (push * Mathf.Cos(tilt) + sweep * Mathf.Sin(tilt)).normalized;
+        }
 
         // The fluke pitches the web into the water it meets, from the way it actually moves through it: the hips' own
         // heave and pitch carry the foot as much as the leg's sweep does, and the web whips behind the ankle, so a beat

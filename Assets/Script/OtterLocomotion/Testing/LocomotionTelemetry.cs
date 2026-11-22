@@ -1232,8 +1232,9 @@ namespace OtterLocomotion.Testing
         }
 
         // Treading water upright, per hind web weighted by how fast it goes up or down: how flat it lies pressing down
-        // (should be near 1) and rising (edge-on, near 0), from the tilt of its face; and how the two webs' rises and
-        // falls go together (-1 = strictly in turn).
+        // (should be near 1) and rising (edge-on, near 0), from the tilt of its face; which way the ankle goes through
+        // the pushes, in the hip's axes (stood up, toward the tail is down and away from the belly is back); and how the
+        // two webs' rises and falls go together (-1 = strictly in turn).
         private string TreadMetrics(List<Sample> up)
         {
             var ci = CultureInfo.InvariantCulture;
@@ -1241,6 +1242,11 @@ namespace OtterLocomotion.Testing
             for (int k = 0; k < feet.Count; k++)
             {
                 float downWeight = 0f, downFlat = 0f, riseWeight = 0f, riseFlat = 0f;
+                Vector3 pushed = Vector3.zero;
+                for (int i = 1; i < up.Count; i++)
+                    if (up[i].flipperPose[k].y > 0.5f && up[i - 1].flipperPose[k].y > 0.5f) pushed += up[i].footPath[k] - up[i - 1].footPath[k];
+                pushed = pushed.normalized;
+                string way = $"push down/back/out {(-pushed.x).ToString("F2", ci)}/{(-pushed.z).ToString("F2", ci)}/{pushed.y.ToString("F2", ci)}";
                 foreach (var s in up)
                 {
                     float vy = s.footWorldUp[k], flat = Mathf.Abs(s.footNormalUp[k]);
@@ -1256,7 +1262,7 @@ namespace OtterLocomotion.Testing
                     }
                 }
                 string Mean(float sum, float weight) => weight > 1e-3f ? (sum / weight).ToString("F2", ci) : "-";
-                parts.Add($"{feet[k].name} flat pressing down {Mean(downFlat, downWeight)}, rising {Mean(riseFlat, riseWeight)}");
+                parts.Add($"{feet[k].name} flat pressing down {Mean(downFlat, downWeight)}, rising {Mean(riseFlat, riseWeight)}, {way}");
             }
             string together = "-";
             if (feet.Count == 2)

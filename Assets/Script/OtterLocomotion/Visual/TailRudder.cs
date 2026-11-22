@@ -14,7 +14,10 @@ namespace OtterLocomotion
     /// (HindLegColliders): a leg pressed on it turns it aside about its joints, the turn easing in and back out, so a
     /// leg sweeping past nudges it rather than knocking it about. The springs hang the tail as if the legs were not
     /// there; the turn aside is laid over them. In the dolphin wave the joints lift it onto the track the body swims
-    /// along (DolphinTrack), so it follows the hips through the water as the rest of the body does.
+    /// along (DolphinTrack), so it follows the hips through the water as the rest of the body does. Standing up in the
+    /// water (Periscope) it hangs down under the hips, a little back behind the treading legs, and sculls instead,
+    /// sweeping out to the side away from the turn with each treading stroke (HindTread); the joints bend it across its
+    /// own length rather than about the vertical.
     /// </summary>
     [DefaultExecutionOrder(375)]
     [DisallowMultipleComponent]
@@ -60,6 +63,15 @@ namespace OtterLocomotion
         [Tooltip("Found on this object when empty; without it the tail only trails the wave.")]
         public DolphinTrack track;
 
+        [Header("Standing up")]
+        [Tooltip("Found on this object when empty; without it the tail rudders standing up as lying.")]
+        public Periscope periscope;
+        [Tooltip("At a full turn, how far out to the side away from the turn the tail sculls with each treading stroke, over the whole tail (deg).")]
+        public float scull = 50f;
+        [Tooltip("How far the tail hangs back from straight down (deg), so it sculls behind the treading legs rather than through them.")]
+        public float trail = 40f;
+        private LimbStrokeAnimator limbs;
+
         private List<Transform> bones = new List<Transform>();
         // the body's dorsal side in the space of the bone the tail hangs from
         private Vector3 upLocal;
@@ -76,12 +88,12 @@ namespace OtterLocomotion
         // in a row down its middle and, as it is flat, a row out at either side
         private float[] length, radius, spread;
         private int[] balls;
-        private Vector3 dorsal;
+        private Vector3 dorsal, bendAxis = Vector3.up;
         private float turn;
         private bool settled;
         private const int BallsPerBone = 4;
 
-        /// <summary>The tail's bend from the hips' line at the tip (deg, + = to the otter's right in the world, seen from above).</summary>
+        /// <summary>The tail's bend from the hips' line at the tip (deg, + = to the otter's right in the world, seen from above, or from behind standing up).</summary>
         public float TipBend { get; private set; }
         /// <summary>The tip's lift above the hips' line (deg, + = toward the back).</summary>
         public float TipLift { get; private set; }
@@ -98,6 +110,8 @@ namespace OtterLocomotion
             if (brain == null) brain = GetComponent<OtterLocomotionBrain>();
             if (legs == null) legs = GetComponent<HindLegColliders>();
             if (track == null) track = GetComponent<DolphinTrack>();
+            if (periscope == null) periscope = GetComponent<Periscope>();
+            limbs = GetComponent<LimbStrokeAnimator>();
         }
 
         // after SpineDecouplerWithShadows has rebuilt the spine in Awake
@@ -171,8 +185,11 @@ namespace OtterLocomotion
 
             float turnGoal = brain != null ? Mathf.Clamp(brain.Demand.yawRateTarget / Mathf.Max(1f, fullTurnRate), -1f, 1f) : 0f;
             turn = Mathf.Lerp(turn, turnGoal, 1f - Mathf.Exp(-dt / Mathf.Max(1e-3f, rudderTime)));
-            // turning about world up by a negative angle swings what trails behind to the right
-            Shape(-(rudder * turn + kickSway * HindBend.Now(brain, fullMoment)) / n, track != null && track.isActiveAndEnabled && track.Weight > 1e-3f);
+            // + swings the tail to the right, the joints turning the other way round their bend axis (Shape)
+            float upright = periscope != null && periscope.isActiveAndEnabled ? periscope.Weight : 0f;
+            float stroke = limbs != null ? 0.5f + 0.5f * Mathf.Sin(2f * Mathf.PI * limbs.TreadBeat) : 1f;
+            float bend = Mathf.Lerp(rudder * turn + kickSway * HindBend.Now(brain, fullMoment), -scull * turn * stroke, upright);
+            Shape(-bend / n, track != null && track.isActiveAndEnabled && track.Weight > 1e-3f, upright);
 
             if (!settled || (goal[n] - point[n]).sqrMagnitude > 1f)
             {
@@ -217,9 +234,9 @@ namespace OtterLocomotion
                     bone.rotation = Quaternion.FromToRotation(from, to) * bone.rotation;
             }
 
-            Vector3 line = Vector3.ProjectOnPlane(straightTip - goal[0], Vector3.up);
-            Vector3 tail = Vector3.ProjectOnPlane(shown[n] - shown[0], Vector3.up);
-            TipBend = line.sqrMagnitude > 1e-8f && tail.sqrMagnitude > 1e-8f ? -Vector3.SignedAngle(line, tail, Vector3.up) : 0f;
+            Vector3 line = Vector3.ProjectOnPlane(straightTip - goal[0], bendAxis);
+            Vector3 tail = Vector3.ProjectOnPlane(shown[n] - shown[0], bendAxis);
+            TipBend = line.sqrMagnitude > 1e-8f && tail.sqrMagnitude > 1e-8f ? -Vector3.SignedAngle(line, tail, bendAxis) : 0f;
             Vector3 hipsLine = straightTip - goal[0];
             Vector3 side = Vector3.Cross(dorsal, hipsLine);
             TipLift = side.sqrMagnitude > 1e-10f
@@ -325,20 +342,26 @@ namespace OtterLocomotion
             }
         }
 
-        // The bones at rest on the hips, each joint bent by the given angle about world up and, riding the dolphin
-        // wave's track, lifted onto it; the points they make.
-        private void Shape(float bendPerJoint, bool riding = false)
+        // The bones at rest on the hips, as far as the otter stands up trailed back behind the legs, each joint bent by
+        // the given angle about world up, or as far as the otter stands up across the tail's own length (a negative
+        // angle swings the tail to the right either way), and, riding the dolphin wave's track, lifted onto it; the
+        // points they make.
+        private void Shape(float bendPerJoint, bool riding = false, float upright = 0f)
         {
             int n = bones.Count, k = knot.Length;
             for (int j = 0; j < n; j++) bones[j].localRotation = rest[j];
             straightTip = bones[n - 1].TransformPoint(tipLocal);
             // turning about this by a positive angle lifts the tip
             Vector3 side = Vector3.Cross(straightTip - bones[0].position, bones[0].parent.TransformDirection(upLocal));
+            if (upright > 0f)
+                for (int i = 0; i < k; i++)
+                    bones[knot[i]].rotation = Quaternion.AngleAxis(upright * trail / k, side) * bones[knot[i]].rotation;
+            bendAxis = upright > 0f ? Vector3.Slerp(Vector3.up, Vector3.Cross(side, End(k) - bones[0].position).normalized, upright) : Vector3.up;
             if (bendPerJoint != 0f)
                 for (int i = 0; i < k; i++)
                 {
                     Transform bone = bones[knot[i]];
-                    bone.rotation = Quaternion.AngleAxis(bendPerJoint, Vector3.up) * bone.rotation;
+                    bone.rotation = Quaternion.AngleAxis(bendPerJoint, bendAxis) * bone.rotation;
                 }
             if (riding)
             {
