@@ -8,8 +8,7 @@ namespace OtterLocomotion
     /// Makes the spine's roll follow the brain: its flip the posture, so the limb the allocation picks is the one on that
     /// side in the picture, and its tilt the bank into the turn. The tilt turns the spine about its own length on top of
     /// the flip, so the side toward the turn sinks on the belly and on the back alike; it is strongest at the chest and
-    /// carried on down to the hips, and the limbs, set on the chest and hip bones, roll with them. Overrides the flip
-    /// and tilt set elsewhere (SpineFlipTestController's F, Q and E keys).
+    /// carried on down to the hips, and the limbs, set on the chest and hip bones, roll with them.
     /// </summary>
     [DefaultExecutionOrder(160)]
     [DisallowMultipleComponent]

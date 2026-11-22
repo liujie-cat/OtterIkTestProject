@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using OtterIK.Neo.Experiment;
 using UnityEngine;
@@ -12,8 +11,7 @@ namespace OtterLocomotion
     /// lasting until the next one, so the body undulates in time with the feet. On the back the packets fade out: lying
     /// on its back the otter paddles with its feet and keeps its trunk straight, and as a packet bends the spine one way
     /// only, pushes in quick succession would hold it bent into a bow. While LimbStrokeAnimator holds the
-    /// hind legs out as a fluke the body swims along the dolphin wave instead (DolphinTrack) and the packets stop. The
-    /// pulses KickEventBridge sends on the older movement controller's kick timing are held off meanwhile.
+    /// hind legs out as a fluke the body swims along the dolphin wave instead (DolphinTrack) and the packets stop.
     /// </summary>
     [DefaultExecutionOrder(310)]
     [DisallowMultipleComponent]
@@ -39,7 +37,6 @@ namespace OtterLocomotion
         private ExpSpineKickWavePacketProvider packet;
         private OtterLocomotionBrain brain;
         private bool started;
-        private readonly List<Behaviour> suspended = new List<Behaviour>();
 
         /// <summary>A wave packet has been sent down the spine.</summary>
         public event Action Pulsed;
@@ -72,13 +69,6 @@ namespace OtterLocomotion
             if (brain != null) brain.Rhythm.PowerStarted += OnPush;
         }
 
-        private void Update()
-        {
-            if (!started) return;
-            bool live = animator != null && animator.isActiveAndEnabled;
-            HoldPulses(live && (animator.Fluke >= pulsesOff || (pulseKicks && packet != null)));
-        }
-
         // A hind push starts: a packet down the spine that lasts until the next push, of either foot when they take turns
         private void OnPush(LimbId limb, LimbStroke st)
         {
@@ -91,26 +81,6 @@ namespace OtterLocomotion
             Pulsed?.Invoke();
         }
 
-        private void HoldPulses(bool hold)
-        {
-            if (!hold)
-            {
-                foreach (var b in suspended.Where(b => b != null)) b.enabled = true;
-                suspended.Clear();
-                return;
-            }
-            if (suspended.Count > 0) return;
-            foreach (var b in FindObjectsByType<KickEventBridge>(FindObjectsSortMode.None).Where(b => b.enabled))
-            {
-                b.enabled = false;
-                suspended.Add(b);
-            }
-        }
-
-        private void OnDisable()
-        {
-            Listen(false);
-            HoldPulses(false);
-        }
+        private void OnDisable() => Listen(false);
     }
 }

@@ -65,7 +65,7 @@ namespace OtterLocomotion.EditorTools
             detailStyle ??= new GUIStyle(EditorStyles.label) { wordWrap = true };
 
             EditorGUILayout.HelpBox(
-                "一键把测试场景调整到当前代码期望的状态：海獭骨骼替换猫、IK 目标点回到静止姿态、运动大脑挂在身体上并连好引用。" +
+                "一键把测试场景调整到当前代码期望的状态：运动组件挂在海獭身上、连好引用、用代码默认值，海水就位，海獭浮在吃水位置。" +
                 "每一步先检查，只改不对的地方，随时可以点。整个刷新是一次 Undo。",
                 MessageType.Info);
 

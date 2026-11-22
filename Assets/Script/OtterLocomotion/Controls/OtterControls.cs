@@ -12,12 +12,11 @@ namespace OtterLocomotion
     /// it brakes to a stop and lets it go. The mouse is the stick: picked up, the pointer outside the ring round the
     /// otter is its guide point, which the head looks at and the body turns after; a click kicks toward it, picked up
     /// or not. Turns the body toward the heading at the brain's yaw rate target and brakes it while the back key is
-    /// held. Takes over from MovementControllerRB: that stays off, its ring UI hidden, and its getters report these
-    /// controls to the older head, spine and camera scripts.
+    /// held.
     /// </summary>
     [DefaultExecutionOrder(200)]
     [DisallowMultipleComponent]
-    public class OtterControls : MonoBehaviour, MovementControllerRB.ISteeringSource
+    public class OtterControls : MonoBehaviour
     {
         /// <summary>Stands in for the mouse and keys (scripted playback, tests): the mouse button, the go and back keys, and the pointer's screen position in pixels.</summary>
         public interface IInput
@@ -36,7 +35,6 @@ namespace OtterLocomotion
         public Camera inputCamera;
         public OtterLocomotionBrain brain;
         public StrokePropulsion strokes;
-        public MovementControllerRB legacy;
         [Tooltip("The ring round the otter, from the middle of its back (body lengths): picked up, the pointer guides it from outside it; a click inside it kicks along the heading.")]
         public float ringRadiusBL = 0.6f;
         public Gear initialGear = Gear.Park;
@@ -91,6 +89,8 @@ namespace OtterLocomotion
         public float RingRadius => ringRadiusBL * BodyLength;
         /// <summary>The head, at the pointer's level: where the guide is seen from.</summary>
         public Vector3 HeadPoint => (head != null ? Flat(head.position) : Flat(transform.position + transform.forward * (0.4f * BodyLength))) + Vector3.up * PointerY;
+        public float BodyLength =>
+            brain != null && brain.BodyLength > 0f ? brain.BodyLength : brain != null ? brain.fallbackBodyLength : 0.4f;
 
         private readonly ControlGestures input = new ControlGestures();
         private readonly GearMachine machine = new GearMachine();
@@ -101,13 +101,9 @@ namespace OtterLocomotion
         private Transform head, chest, hip;
         private float backHeight;
 
-        private float BodyLength =>
-            brain != null && brain.BodyLength > 0f ? brain.BodyLength : brain != null ? brain.fallbackBodyLength : 0.4f;
-
         private void Awake()
         {
             body = GetComponent<Rigidbody>();
-            if (legacy == null) legacy = GetComponent<MovementControllerRB>();
             if (body != null)
             {
                 // held at its height until Buoyancy floats it; no pitching or rolling of the physics body
@@ -135,18 +131,6 @@ namespace OtterLocomotion
             input.Reset();
             machine.Reset(Body(), initialGear);
             PointerPoint = body.position + transform.forward;
-            if (legacy != null)
-            {
-                legacy.SteeringSource = this;
-                legacy.enabled = false;
-                // only the ring: its object also carries the head IK guide and what moves it
-                if (legacy.RingUI != null) legacy.RingUI.enabled = false;
-            }
-        }
-
-        private void OnDisable()
-        {
-            if (legacy != null && ReferenceEquals(legacy.SteeringSource, this)) legacy.SteeringSource = null;
         }
 
         private void Update()
@@ -223,19 +207,5 @@ namespace OtterLocomotion
         private bool OverOtter(Vector3 point) => Flat(point - GrabPoint).magnitude <= RingRadius;
 
         private static Vector3 Flat(Vector3 v) => new Vector3(v.x, 0f, v.z);
-
-        bool MovementControllerRB.ISteeringSource.Dragging => machine.Selected;
-        MovementControllerRB.MoveZone MovementControllerRB.ISteeringSource.Zone => machine.Gear switch
-        {
-            Gear.Park => MovementControllerRB.MoveZone.Aim,
-            Gear.Sprint => MovementControllerRB.MoveZone.Sprint,
-            _ => MovementControllerRB.MoveZone.Swim,
-        };
-        Vector3 MovementControllerRB.ISteeringSource.Heading => machine.Heading;
-        Vector3 MovementControllerRB.ISteeringSource.AimPoint => machine.AimPoint;
-        float MovementControllerRB.ISteeringSource.AimBlend => machine.AimBlend;
-        float MovementControllerRB.ISteeringSource.TargetSpeed => machine.SpeedBL * BodyLength;
-        float MovementControllerRB.ISteeringSource.SwimSpeed => gears.cruiseSpeedBL * BodyLength;
-        float MovementControllerRB.ISteeringSource.SprintSpeed => gears.sprintSpeedBL * BodyLength;
     }
 }

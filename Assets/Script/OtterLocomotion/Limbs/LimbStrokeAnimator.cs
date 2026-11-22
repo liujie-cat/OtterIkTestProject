@@ -402,8 +402,7 @@ namespace OtterLocomotion
     /// off the chest / hip bone, so they follow the spine's bend and roll. After the IK solve the hind flippers are turned at
     /// the ankle and toes (FlipperPose) to paddle, square through the push and trailing in the flow through the draw;
     /// the forepaws are turned square through their sweep and edge-on through the recovery, and on the back laid flat on the chest.
-    /// Runs after the spine and before the IK solve. While enabled it switches off the older limb drivers that write
-    /// the same targets (HindPaddleDriverRB, IKStrokeController), and switches them back on when disabled.
+    /// Runs after the spine and before the IK solve.
     /// </summary>
     [DefaultExecutionOrder(300)]
     [DisallowMultipleComponent]
@@ -511,7 +510,6 @@ namespace OtterLocomotion
         /// <summary>The chest and belly the forepaws lie on when on the back: its corners in the chest's space.</summary>
         private Vector3[] chestArea;
         private Transform chestBone;
-        private readonly List<Behaviour> suspended = new List<Behaviour>();
         private AfterLimbIK afterIK;
         private Water water;
         private bool started;
@@ -600,7 +598,6 @@ namespace OtterLocomotion
             Capture();
             water = FindFirstObjectByType<Water>();
             started = true;
-            SuspendOldDrivers();
             FreeKnees(true);
             afterIK = gameObject.AddComponent<AfterLimbIK>();
             afterIK.hideFlags = HideFlags.HideInInspector | HideFlags.DontSave;
@@ -611,13 +608,11 @@ namespace OtterLocomotion
         private void OnEnable()
         {
             if (!started) return;
-            SuspendOldDrivers();
             FreeKnees(true);
         }
 
         private void OnDisable()
         {
-            ResumeOldDrivers();
             RestoreFlippers();
             FreeKnees(false);
             foreach (var l in limbs)
@@ -868,28 +863,6 @@ namespace OtterLocomotion
             Quaternion square = Quaternion.LookRotation(along, sweep) * fromPaw;
             Quaternion edgeOn = Quaternion.LookRotation(sweep, inward) * fromPaw;
             return Quaternion.RotateTowards(l.paw.rotation, Quaternion.Slerp(edgeOn, square, l.square), forePaddle.wristRange);
-        }
-
-        private void SuspendOldDrivers()
-        {
-            var targets = new HashSet<Transform>(limbs.Where(l => l.valid).Select(l => l.target));
-            IEnumerable<Behaviour> old =
-                FindObjectsByType<HindPaddleDriverRB>(FindObjectsSortMode.None)
-                    .Where(d => targets.Contains(d.leftLeg.ikTarget) || targets.Contains(d.rightLeg.ikTarget))
-                    .Cast<Behaviour>()
-                    .Concat(FindObjectsByType<IKStrokeController>(FindObjectsSortMode.None)
-                        .Where(c => targets.Contains(c.leftLimbIkTarget) || targets.Contains(c.rightLimbIkTarget)));
-            foreach (var b in old.Where(b => b.enabled))
-            {
-                b.enabled = false;
-                suspended.Add(b);
-            }
-        }
-
-        private void ResumeOldDrivers()
-        {
-            foreach (var b in suspended.Where(b => b != null)) b.enabled = true;
-            suspended.Clear();
         }
 
         // The fluke is set before the spine's pass, which takes its beat from here

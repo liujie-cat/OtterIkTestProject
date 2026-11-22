@@ -76,7 +76,7 @@ namespace OtterLocomotion.EditorTools
             var body = OtterTestSceneSetup.FindBody();
             if (body == null)
             {
-                Debug.LogWarning("[LocomotionPlaybackRunner] No otter body (Rigidbody with MovementControllerRB) in the scene.");
+                Debug.LogWarning("[LocomotionPlaybackRunner] No otter body (a Rigidbody carrying the otter's skeleton) in the scene.");
                 Stop();
                 return;
             }

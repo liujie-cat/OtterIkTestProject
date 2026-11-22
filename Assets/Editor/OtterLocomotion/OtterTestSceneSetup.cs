@@ -4,8 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
-using OtterIK.EditorTools;
-using OtterIK.Neo.Experiment;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -16,14 +14,13 @@ using Object = UnityEngine.Object;
 namespace OtterLocomotion.EditorTools
 {
     /// <summary>
-    /// Brings the test scene to what the current code expects: the sea otter rig in place of the cat, IK targets on
-    /// the rest pose, the locomotion components on the swimming body with their references and code-default
-    /// settings, a translucent box of sea water with the otter floating in it at its draft, and the old ring controls and neck controller off. Every step checks first and changes only what is off, so it can be run
-    /// at any time. One Undo step.
+    /// Brings the test scene to what the current code expects: the locomotion components on the swimming body with
+    /// their references and code-default settings, and a translucent box of sea water with the otter floating in it at
+    /// its draft. Every step checks first and changes only what is off, so it can be run at any time. One Undo step.
     /// </summary>
     static class OtterTestSceneSetup
     {
-        internal const string ScenePath = "Assets/Scenes/TestLimbIK/TestAdvancedSpineSystem.unity";
+        internal const string ScenePath = "Assets/Scenes/OtterDemo.unity";
         const string LogFile = "OtterTestScene_Refresh.txt";
 
         /// <summary>Components the new locomotion needs on the body, in the order they are added (the controls first: the brain finds them as it wakes).</summary>
@@ -44,6 +41,7 @@ namespace OtterLocomotion.EditorTools
             (typeof(SpineKickSway), "腰部摆动"),
             (typeof(DolphinTrack), "海豚轨迹"),
             (typeof(NeckLook), "脖子看向"),
+            (typeof(AimGuide), "脊柱瞄准点"),
             (typeof(WaterReference), "水中参照"),
         };
 
@@ -75,22 +73,10 @@ namespace OtterLocomotion.EditorTools
         [MenuItem("Tools/Otter Locomotion/Report Test Scene", true)]
         static bool NotPlaying() => !EditorApplication.isPlayingOrWillChangePlaymode;
 
-        /// <summary>The swimming body: the active object with the old controller, which the new controls switch off.</summary>
-        internal static MovementControllerRB FindBody() =>
-            Object.FindObjectsByType<MovementControllerRB>(FindObjectsInactive.Exclude, FindObjectsSortMode.None).FirstOrDefault(m => m.gameObject.activeInHierarchy);
-
-        static DualRingUIControllerRB RingUI(MovementControllerRB body) =>
-            body.RingUI != null ? body.RingUI : Object.FindObjectsByType<DualRingUIControllerRB>(FindObjectsInactive.Include, FindObjectsSortMode.None).FirstOrDefault();
-
-        /// <summary>What of the old ring controls is still on: the controller, its ring UI.</summary>
-        static List<string> OldControlsOn(MovementControllerRB body)
-        {
-            var on = new List<string>();
-            if (body.enabled) on.Add("旧控制器 MovementControllerRB");
-            var ring = RingUI(body);
-            if (ring != null && ring.enabled) on.Add($"环形 UI '{ring.name}'");
-            return on;
-        }
+        /// <summary>The swimming body: the active rigidbody that carries the otter's skeleton.</summary>
+        internal static Rigidbody FindBody() =>
+            Object.FindObjectsByType<Rigidbody>(FindObjectsInactive.Exclude, FindObjectsSortMode.None)
+                .FirstOrDefault(r => OtterRig.FindActiveBone(r.transform, OtterRig.Hip) != null);
 
         const string SeaName = "Sea";
         const string SeaMaterialPath = "Assets/ArtResource/Sea/SeaWater.mat";
@@ -163,16 +149,12 @@ namespace OtterLocomotion.EditorTools
         const float DraftTolerance = 0.001f;
 
         /// <summary>The body's height floating still on the sea, its skin as posed now; null without the sea, its buoyancy or a skin.</summary>
-        static float? FloatingHeight(MovementControllerRB body)
+        static float? FloatingHeight(Rigidbody body)
         {
             var sea = FindSea();
             if (sea == null || !sea.TryGetComponent<Water>(out var water) || !body.TryGetComponent<Buoyancy>(out var buoyancy)) return null;
             return Buoyancy.FloatingHeight(body.transform, water.SurfaceY, buoyancy.density);
         }
-
-        /// <summary>The old neck controllers on the body still on; NeckLook poses the neck in their place.</summary>
-        static List<ExpShadowNeckController> OldNecksOn(MovementControllerRB body) =>
-            body.GetComponentsInChildren<ExpShadowNeckController>().Where(n => n.enabled).ToList();
 
         static bool IsTestSceneOpen => SceneManager.GetActiveScene().path == ScenePath;
 
@@ -187,32 +169,9 @@ namespace OtterLocomotion.EditorTools
             }
             checks.Add(new Check("场景", Level.Ok, scene.name));
 
-            var otter = SeaOtterRigTransplant.FindOtterInstance();
-            var cat = SeaOtterRigTransplant.FindCatInstance();
-            if (otter != null && cat == null) checks.Add(new Check("海獭骨骼", Level.Ok, otter.name));
-            else if (otter == null && cat != null) checks.Add(new Check("海獭骨骼", Level.Fix, $"还是猫模型 '{cat.name}'，刷新时移植到海獭"));
-            else if (otter != null) checks.Add(new Check("海獭骨骼", Level.Blocked, $"猫 '{cat.name}' 和海獭 '{otter.name}' 同时激活，请先停用一个"));
-            else checks.Add(new Check("海獭骨骼", Level.Blocked, "场景里没有激活的猫或海獭模型"));
-
-            if (otter != null)
-            {
-                var off = SeaOtterRigTransplant.ChainsOffRest(otter);
-                checks.Add(off.Count == 0
-                    ? new Check("IK 静止姿态", Level.Ok, "所有目标点在末端关节上")
-                    : new Check("IK 静止姿态", Level.Fix, "偏离: " + string.Join(", ", off)));
-            }
-
             var body = FindBody();
             if (body != null)
             {
-                var on = OldControlsOn(body);
-                checks.Add(on.Count == 0
-                    ? new Check("旧操作", Level.Ok, "环形控制器和环形 UI 已停用（文件保留）")
-                    : new Check("旧操作", Level.Fix, "还开着: " + string.Join(", ", on) + "，刷新时停用"));
-                var necks = OldNecksOn(body);
-                checks.Add(necks.Count == 0
-                    ? new Check("旧脖子", Level.Ok, "ExpShadowNeckController 已停用（文件保留），脖子由 NeckLook 摆")
-                    : new Check("旧脖子", Level.Fix, $"'{necks[0].name}' 上的 ExpShadowNeckController 还开着，刷新时停用"));
                 int lost = GameObjectUtility.GetMonoBehavioursWithMissingScriptCount(body.gameObject);
                 checks.Add(lost == 0
                     ? new Check("丢失脚本", Level.Ok, $"'{body.name}' 上没有")
@@ -231,12 +190,12 @@ namespace OtterLocomotion.EditorTools
             }
             foreach (var (type, title) in Managed)
             {
-                if (body == null) { checks.Add(new Check(title, Level.Blocked, "没有带 MovementControllerRB 的激活物体")); continue; }
+                if (body == null) { checks.Add(new Check(title, Level.Blocked, "没有带海獭骨骼的激活刚体")); continue; }
                 var component = body.GetComponent(type);
                 if (component == null) { checks.Add(new Check(title, Level.Fix, $"'{body.name}' 上还没有，刷新时添加")); continue; }
                 if (component is Behaviour b && !b.enabled)
                 {
-                    checks.Add(new Check(title, Level.Ok, $"在 '{body.name}' 上，已关闭（对比旧系统时用；刷新不会打开它）"));
+                    checks.Add(new Check(title, Level.Ok, $"在 '{body.name}' 上，已关闭（刷新不会打开它）"));
                     continue;
                 }
                 var missing = References(component, body, apply: false);
@@ -274,56 +233,10 @@ namespace OtterLocomotion.EditorTools
             int group = Undo.GetCurrentGroup();
             Undo.SetCurrentGroupName("Refresh otter test scene");
 
-            var otter = SeaOtterRigTransplant.FindOtterInstance();
-            var cat = SeaOtterRigTransplant.FindCatInstance();
-            if (otter == null && cat != null)
-            {
-                var model = SeaOtterRigTransplant.LoadOtterModel();
-                if (model == null) log.AppendLine("!! 找不到海獭模型资源，跳过移植");
-                else
-                {
-                    Changed("== 移植猫骨骼到海獭");
-                    log.AppendLine(SeaOtterRigTransplant.Transplant(cat, model, alignSpine: true, fitTargets: true));
-                    otter = SeaOtterRigTransplant.FindOtterInstance();
-                }
-            }
-            else if (otter != null && cat != null) log.AppendLine($"!! 猫 '{cat.name}' 和海獭 '{otter.name}' 同时激活，没有改动骨骼");
-            else if (otter != null) log.AppendLine($"海獭骨骼: {otter.name}，无需移植");
-            else log.AppendLine("!! 场景里没有激活的猫或海獭模型");
-
-            if (otter != null)
-            {
-                if (SeaOtterRigTransplant.ChainsOffRest(otter).Count > 0)
-                {
-                    Changed("== IK 归位");
-                    log.AppendLine(SeaOtterRigTransplant.Refit(otter));
-                }
-                else log.AppendLine("IK 目标点都在静止姿态，无需归位");
-            }
-
             var body = FindBody();
-            if (body == null) log.AppendLine("!! 没有带 MovementControllerRB 的激活物体，跳过运动组件");
+            if (body == null) log.AppendLine("!! 没有带海獭骨骼的激活刚体，跳过运动组件");
             else
             {
-                if (body.enabled)
-                {
-                    Undo.RecordObject(body, "Retire ring controls");
-                    body.enabled = false;
-                    Changed("旧操作: 停用 MovementControllerRB");
-                }
-                var ring = RingUI(body);
-                if (ring != null && ring.enabled)
-                {
-                    Undo.RecordObject(ring, "Retire ring controls");
-                    ring.enabled = false;
-                    Changed($"旧操作: 停用环形 UI '{ring.name}'");
-                }
-                foreach (var neck in OldNecksOn(body))
-                {
-                    Undo.RecordObject(neck, "Retire the old neck");
-                    neck.enabled = false;
-                    Changed($"旧脖子: 停用 '{neck.name}' 上的 ExpShadowNeckController");
-                }
                 int lost = GameObjectUtility.GetMonoBehavioursWithMissingScriptCount(body.gameObject);
                 if (lost > 0)
                 {
@@ -331,14 +244,16 @@ namespace OtterLocomotion.EditorTools
                     GameObjectUtility.RemoveMonoBehavioursWithMissingScript(body.gameObject);
                     Changed($"丢失脚本: 移除 '{body.name}' 上 {lost} 个脚本已删掉的组件");
                 }
+                // all on first: a reference can be to one added after it
+                foreach (var (type, title) in Managed)
+                {
+                    if (body.GetComponent(type) != null) continue;
+                    Undo.AddComponent(body.gameObject, type);
+                    Changed($"{title}: 添加到 '{body.name}'");
+                }
                 foreach (var (type, title) in Managed)
                 {
                     var component = body.GetComponent(type);
-                    if (component == null)
-                    {
-                        component = Undo.AddComponent(body.gameObject, type);
-                        Changed($"{title}: 添加到 '{body.name}'");
-                    }
                     var wired = References(component, body, apply: true);
                     if (wired.Count > 0) Changed($"{title}: 连接引用 " + string.Join(", ", wired));
                     if (resetSettings)
@@ -364,11 +279,6 @@ namespace OtterLocomotion.EditorTools
                     Undo.RecordObject(body.transform, "Float the otter at its draft");
                     body.transform.position = new Vector3(at.x, afloat.Value, at.z);
                     Changed($"海獭高度: 从 {at.y:F3} m 放到吃水位置 {afloat:F3} m");
-                    if (otter != null && SeaOtterRigTransplant.ChainsOffRest(otter).Count > 0)
-                    {
-                        Changed("== IK 归位（身体高度变了）");
-                        log.AppendLine(SeaOtterRigTransplant.Refit(otter));
-                    }
                 }
                 else log.AppendLine("海獭高度: 已在吃水位置");
             }
@@ -391,7 +301,7 @@ namespace OtterLocomotion.EditorTools
         /// Empty component references that can be filled: from the body, its children, or the only active one in the
         /// scene. Returns the field names; with <paramref name="apply"/> also fills them.
         /// </summary>
-        static List<string> References(Component component, MovementControllerRB body, bool apply)
+        static List<string> References(Component component, Component body, bool apply)
         {
             var names = new List<string>();
             var so = new SerializedObject(component);
