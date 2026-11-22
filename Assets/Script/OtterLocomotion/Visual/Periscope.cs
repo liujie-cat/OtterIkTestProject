@@ -7,8 +7,8 @@ namespace OtterLocomotion
     /// <summary>
     /// Picked up and parked at the surface (GearMachine.Upright), the otter stands up in the water to look about
     /// (periscoping): the spine pitches up nose first until it stands nearly upright, its belly toward where it faces,
-    /// and the hind feet's treading holds the chest up out of the water against the water's lift (Buoyancy), the head
-    /// and chest out over the water. It turns there after the pointer and drifts on only a little, the water dragging
+    /// and the hind feet's treading (HindTread) holds the chest up out of the water against the water's lift
+    /// (Buoyancy), the head and chest out over the water. It turns there after the pointer and drifts on only a little, the water dragging
     /// hard on the trunk stood broadside to its way. An additive provider on the spine harmonizer, every joint
     /// pitched alike about the body's side so the spine stands straight, the chain's smoothing giving way meanwhile
     /// (DolphinTrack); the harmonizer hangs the spine from the chest, so the chest stays where it is and the hips swing
@@ -44,6 +44,8 @@ namespace OtterLocomotion
         public float Raised => pitch * Weight;
         /// <summary>Standing up or stood, rather than lying back down or lying.</summary>
         public bool Up { get; private set; }
+        /// <summary>The treading's push up on the body last physics step, holding the chest at standHeight (N).</summary>
+        public float Lift { get; private set; }
 
         private float progress;
         private bool ready, added;
@@ -108,6 +110,7 @@ namespace OtterLocomotion
         // track takes the body over from it (DolphinTrack)
         private void FixedUpdate()
         {
+            Lift = 0f;
             if (Weight <= 1e-3f || body == null) return;
             Vector3 drift = Vector3.ProjectOnPlane(body.velocity, Vector3.up);
             body.AddForce(-Weight * uprightDrag * drift.magnitude * drift, ForceMode.Force);
@@ -117,7 +120,8 @@ namespace OtterLocomotion
             float k = 2f * Mathf.PI * holdFrequency;
             float accel = k * k * (goal - body.position.y) - 2f * holdDamping * k * body.velocity.y;
             float hold = Mathf.Max(0f, body.mass * (accel - Physics.gravity.y) - buoyancy.Push);
-            body.AddForce(Vector3.up * (w * hold), ForceMode.Force);
+            Lift = w * hold;
+            body.AddForce(Vector3.up * Lift, ForceMode.Force);
         }
 
         // the shadows' root space has the spine along +Z and the body's side along +X, as the harmonizer rolls about +Z;

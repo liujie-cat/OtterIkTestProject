@@ -14,8 +14,8 @@ namespace OtterLocomotion
     /// pushes; out in the air it takes nothing. The push along the body's heading is kept, and the push up and down,
     /// scaled by heave, so the body heaves on the strokes as Buoyancy floats it; in the dolphin wave the push along is
     /// more, and there and under water the one up and down goes, the body held to the track it swims along
-    /// (DolphinTrack). OtterControls turns
-    /// the body, and the physics body does not pitch or roll.
+    /// (DolphinTrack). Standing up in the water the treading's push is Periscope's, holding the chest up, and the
+    /// webs' own give way to it. OtterControls turns the body, and the physics body does not pitch or roll.
     /// </summary>
     [DefaultExecutionOrder(380)]
     [DisallowMultipleComponent]
@@ -174,6 +174,7 @@ namespace OtterLocomotion
             Vector3 hang = chest != null ? chest.position : pivot;
             float wave = animator != null && animator.isActiveAndEnabled ? animator.Fluke : 0f;
             float lifting = heave * (1f - (track != null && track.isActiveAndEnabled ? track.Weight : wave));
+            float standing = periscope != null && periscope.isActiveAndEnabled ? periscope.Weight : 0f;
             Vector3 total = Vector3.zero;
             foreach (var w in webs)
             {
@@ -195,7 +196,7 @@ namespace OtterLocomotion
                 Vector3 f = -(waterPush * Mathf.Abs(face) + slicePush * along) * w.area * areaScale * spread * w.wet * face * n;
                 w.push = Vector3.Dot(f, Way(w, heading));
                 w.lift = f.y;
-                total += heading * w.push + Vector3.up * (lifting * w.lift);
+                total += (1f - standing) * (heading * w.push + Vector3.up * (lifting * w.lift));
             }
             if (wave > 0f)
                 total += heading * (wavePush * wave * animator.FlukeDrive * (1f + waveSurge * Mathf.Cos(2f * Mathf.PI * (animator.FlukePhase - wavePushAt))));

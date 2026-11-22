@@ -1218,6 +1218,7 @@ namespace OtterLocomotion.Testing
                           $"above the surface: {heights} cm | snout {F(last.snoutPitch, "+0;-0;0")} deg from level | moved {F(moved * 100f)} cm, at most {F(seq.Max(Speed), "F2")} m/s");
             var up = seq.Where(s => s.upright >= 0.99f).ToList();
             if (up.Count < 30) return;
+            if (feet.Count > 0) sb.AppendLine($"  tread: {TreadMetrics(up)}");
             float pitch = up.Min(s => s.chestPitch), chest = up.Min(s => s.backHeight[3]), head = up.Min(s => s.backHeight[1]);
             float snout = up.Max(s => Mathf.Abs(s.snoutPitch)), speed = up.Max(Speed);
             sb.AppendLine("  targets: " + string.Join(" | ", new[]
@@ -1228,6 +1229,44 @@ namespace OtterLocomotion.Testing
                 Check($"snout level within {uprightSnoutMax:F0} deg ({F(snout, "F0")})", snout <= uprightSnoutMax),
                 Check($"speed <= {uprightSpeedMax:F2} m/s ({F(speed, "F2")})", speed <= uprightSpeedMax),
             }));
+        }
+
+        // Treading water upright, per hind web weighted by how fast it goes up or down: how flat it lies pressing down
+        // (should be near 1) and rising (edge-on, near 0), from the tilt of its face; and how the two webs' rises and
+        // falls go together (-1 = strictly in turn).
+        private string TreadMetrics(List<Sample> up)
+        {
+            var ci = CultureInfo.InvariantCulture;
+            var parts = new List<string>();
+            for (int k = 0; k < feet.Count; k++)
+            {
+                float downWeight = 0f, downFlat = 0f, riseWeight = 0f, riseFlat = 0f;
+                foreach (var s in up)
+                {
+                    float vy = s.footWorldUp[k], flat = Mathf.Abs(s.footNormalUp[k]);
+                    if (vy < -footStillSpeed)
+                    {
+                        downWeight -= vy;
+                        downFlat -= vy * flat;
+                    }
+                    else if (vy > footStillSpeed)
+                    {
+                        riseWeight += vy;
+                        riseFlat += vy * flat;
+                    }
+                }
+                string Mean(float sum, float weight) => weight > 1e-3f ? (sum / weight).ToString("F2", ci) : "-";
+                parts.Add($"{feet[k].name} flat pressing down {Mean(downFlat, downWeight)}, rising {Mean(riseFlat, riseWeight)}");
+            }
+            string together = "-";
+            if (feet.Count == 2)
+            {
+                float ma = up.Average(s => s.footWorldUp[0]), mb = up.Average(s => s.footWorldUp[1]);
+                float cov = up.Sum(s => (s.footWorldUp[0] - ma) * (s.footWorldUp[1] - mb));
+                float va = up.Sum(s => (s.footWorldUp[0] - ma) * (s.footWorldUp[0] - ma)), vb = up.Sum(s => (s.footWorldUp[1] - mb) * (s.footWorldUp[1] - mb));
+                if (va > 1e-6f && vb > 1e-6f) together = (cov / Mathf.Sqrt(va * vb)).ToString("+0.00;-0.00", ci);
+            }
+            return $"{string.Join(" | ", parts)} | L-R rise and fall together {together}";
         }
 
         // What the demand layer asked for over the segment, next to what the body actually did.
