@@ -241,8 +241,9 @@ namespace OtterLocomotion
 
     /// <summary>
     /// Standing up in the water (Periscope) the hind feet tread water, pedalling half a cycle apart so one or the other
-    /// always presses down. Each ankle runs an upright ellipse below the hip joint and a little ahead of it: the push
-    /// comes down its front side, down and a little back, the web spread with its sole square to the push; the
+    /// always presses down, the body rising a little with each push (Periscope.bob). Each ankle runs an upright
+    /// ellipse below the hip joint and a little ahead of it: the push comes down its front side, down and a little
+    /// back, the web spread with its sole square to the push; the
     /// recovery goes up its back side, the ankle relaxed, so the web trails down edge-on and slices up through the
     /// water (FlipperPose, hinged about the push). The ankle turns the web over at the top and the bottom, where the
     /// foot barely moves up or down. The more lift the stand asks of the treading (Periscope.Lift), the deeper and
@@ -601,8 +602,9 @@ namespace OtterLocomotion
 
         /// <summary>How far the hind legs have gone over from kicking to the fluke (0..1).</summary>
         public float Fluke { get; private set; }
-        /// <summary>The treading's beat (cycles from the left foot's top, HindTread).</summary>
+        /// <summary>The treading's beat (cycles from the left foot's top, HindTread) and its pace (cycles/s).</summary>
         public float TreadBeat => treadPhase;
+        public float TreadRate => Mathf.Lerp(tread.lightRate, tread.fullRate, treadLift);
         /// <summary>The fluke's beat (cycles; the hind rhythm's phase) and strength (the hind drive, 0..1).</summary>
         public float FlukePhase { get; private set; }
         public float FlukeDrive { get; private set; }
@@ -984,7 +986,7 @@ namespace OtterLocomotion
             float travel = Mathf.Clamp01(demand.speedTarget / Mathf.Max(1e-3f, hindTurn.travelSpeedBL * brain.Parameters.bodyLength));
             float lift = periscope != null ? Mathf.Clamp01(periscope.Lift / Mathf.Max(1e-3f, tread.fullLift)) : 0f;
             treadLift = Mathf.Lerp(treadLift, lift, grow);
-            treadPhase = Mathf.Repeat(treadPhase + Mathf.Lerp(tread.lightRate, tread.fullRate, treadLift) * Time.deltaTime, 1f);
+            treadPhase = Mathf.Repeat(treadPhase + TreadRate * Time.deltaTime, 1f);
             Roll();
             for (int i = 0; i < OtterRig.LimbCount; i++)
             {

@@ -8,8 +8,9 @@ namespace OtterLocomotion
     /// Picked up and parked at the surface (GearMachine.Upright), the otter stands up in the water to look about
     /// (periscoping): the spine pitches up nose first until it stands nearly upright, its belly toward where it faces,
     /// and the hind feet's treading (HindTread) holds the chest up out of the water against the water's lift
-    /// (Buoyancy), the head and chest out over the water. It turns there after the pointer and drifts on only a little, the water dragging
-    /// hard on the trunk stood broadside to its way. An additive provider on the spine harmonizer, every joint
+    /// (Buoyancy), the head and chest out over the water, rising a little with each push. It turns there after the
+    /// pointer and drifts on only a little, the water dragging hard on the trunk stood broadside to its way. An
+    /// additive provider on the spine harmonizer, every joint
     /// pitched alike about the body's side so the spine stands straight, the chain's smoothing giving way meanwhile
     /// (DolphinTrack); the harmonizer hangs the spine from the chest, so the chest stays where it is and the hips swing
     /// down under it. The head looks out level (NeckLook) and the forepaws tuck in on the chest (LimbStrokeAnimator).
@@ -33,6 +34,8 @@ namespace OtterLocomotion
         [Tooltip("How stiffly the treading holds it there: the frequency (Hz) and damping (share of critical) it settles onto it with.")]
         public float holdFrequency = 1.5f;
         public float holdDamping = 1f;
+        [Tooltip("How far the chest rises and falls with the treading's strokes (m, half the swing): lowest mid-push, where the push is strongest, lifted from there to highest as the feet turn over.")]
+        public float bob = 0.008f;
         [Tooltip("The water's drag on the trunk stood broadside to its way, on top of the body's own (WaterDrag), per (m/s)² (N): half the water's density times a cylinder's drag coefficient of about 1 times the trunk's side under water, about 0.035 m².")]
         public float uprightDrag = 18f;
 
@@ -44,7 +47,7 @@ namespace OtterLocomotion
         public float Raised => pitch * Weight;
         /// <summary>Standing up or stood, rather than lying back down or lying.</summary>
         public bool Up { get; private set; }
-        /// <summary>The treading's push up on the body last physics step, holding the chest at standHeight (N).</summary>
+        /// <summary>The treading's push up on the body last physics step, holding the chest at standHeight, without its rise and fall with the strokes (N).</summary>
         public float Lift { get; private set; }
 
         private float progress;
@@ -54,6 +57,7 @@ namespace OtterLocomotion
         private DolphinTrack track;
         private Water water;
         private Transform chest;
+        private LimbStrokeAnimator limbs;
 
         private void Awake()
         {
@@ -78,6 +82,7 @@ namespace OtterLocomotion
             track = GetComponent<DolphinTrack>();
             water = FindFirstObjectByType<Water>();
             chest = OtterRig.FindActiveBone(transform, OtterRig.Chest);
+            limbs = GetComponent<LimbStrokeAnimator>();
             if (!harmonizer.providers.Contains(this))
             {
                 harmonizer.providers.Add(this);
@@ -117,11 +122,20 @@ namespace OtterLocomotion
             float w = Weight * (1f - (track != null && track.isActiveAndEnabled ? track.Weight : 0f));
             if (w <= 1e-3f || buoyancy == null || !buoyancy.isActiveAndEnabled || water == null || chest == null) return;
             float goal = water.SurfaceY + standHeight - (chest.position.y - body.position.y);
+            // two pushes a beat, the feet half a beat apart; held to the rise and fall rather than against it
+            float rise = 0f, riseSpeed = 0f, riseAccel = 0f;
+            if (limbs != null && limbs.isActiveAndEnabled && limbs.tread.enabled)
+            {
+                float a = 4f * Mathf.PI * limbs.TreadBeat, omega = 4f * Mathf.PI * limbs.TreadRate;
+                rise = bob * Mathf.Cos(a);
+                riseSpeed = -bob * omega * Mathf.Sin(a);
+                riseAccel = -bob * omega * omega * Mathf.Cos(a);
+            }
             float k = 2f * Mathf.PI * holdFrequency;
-            float accel = k * k * (goal - body.position.y) - 2f * holdDamping * k * body.velocity.y;
+            float accel = k * k * (goal + rise - body.position.y) - 2f * holdDamping * k * (body.velocity.y - riseSpeed);
             float hold = Mathf.Max(0f, body.mass * (accel - Physics.gravity.y) - buoyancy.Push);
             Lift = w * hold;
-            body.AddForce(Vector3.up * Lift, ForceMode.Force);
+            body.AddForce(Vector3.up * (w * Mathf.Max(0f, hold + body.mass * riseAccel)), ForceMode.Force);
         }
 
         // the shadows' root space has the spine along +Z and the body's side along +X, as the harmonizer rolls about +Z;
