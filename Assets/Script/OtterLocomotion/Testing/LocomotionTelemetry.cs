@@ -1231,20 +1231,26 @@ namespace OtterLocomotion.Testing
             }));
         }
 
-        // Treading water upright, per hind web weighted by how fast it goes up or down: how flat it lies pressing down
-        // (should be near 1) and rising (edge-on, near 0), from the tilt of its face; which way the ankle goes through
-        // the pushes, in the hip's axes (stood up, toward the tail is down and away from the belly is back); and how the
-        // two webs' rises and falls go together (-1 = strictly in turn).
+        // Treading water upright, per hind web: how many pushes a second; weighted by how fast it goes up or down, how
+        // flat it lies pressing down (should be near 1) and rising (edge-on, near 0), from the tilt of its face; which
+        // way the ankle goes through the pushes, in the hip's axes (stood up, toward the tail is down and away from the
+        // belly is back); how the two webs' rises and falls go together (-1 = strictly in turn); and how far the chest
+        // rises and falls about its mean (half the 5th..95th percentile spread of its height above the surface).
         private string TreadMetrics(List<Sample> up)
         {
             var ci = CultureInfo.InvariantCulture;
             var parts = new List<string>();
+            float time = up.Skip(1).Sum(s => s.dt);
             for (int k = 0; k < feet.Count; k++)
             {
                 float downWeight = 0f, downFlat = 0f, riseWeight = 0f, riseFlat = 0f;
                 Vector3 pushed = Vector3.zero;
+                int pushes = 0;
                 for (int i = 1; i < up.Count; i++)
+                {
                     if (up[i].flipperPose[k].y > 0.5f && up[i - 1].flipperPose[k].y > 0.5f) pushed += up[i].footPath[k] - up[i - 1].footPath[k];
+                    if (up[i].flipperPose[k].y > 0.5f && up[i - 1].flipperPose[k].y <= 0.5f) pushes++;
+                }
                 pushed = pushed.normalized;
                 string way = $"push down/back/out {(-pushed.x).ToString("F2", ci)}/{(-pushed.z).ToString("F2", ci)}/{pushed.y.ToString("F2", ci)}";
                 foreach (var s in up)
@@ -1262,7 +1268,7 @@ namespace OtterLocomotion.Testing
                     }
                 }
                 string Mean(float sum, float weight) => weight > 1e-3f ? (sum / weight).ToString("F2", ci) : "-";
-                parts.Add($"{feet[k].name} flat pressing down {Mean(downFlat, downWeight)}, rising {Mean(riseFlat, riseWeight)}, {way}");
+                parts.Add($"{feet[k].name} {(time > 0f ? pushes / time : 0f).ToString("F1", ci)} pushes/s, flat pressing down {Mean(downFlat, downWeight)}, rising {Mean(riseFlat, riseWeight)}, {way}");
             }
             string together = "-";
             if (feet.Count == 2)
@@ -1272,7 +1278,9 @@ namespace OtterLocomotion.Testing
                 float va = up.Sum(s => (s.footWorldUp[0] - ma) * (s.footWorldUp[0] - ma)), vb = up.Sum(s => (s.footWorldUp[1] - mb) * (s.footWorldUp[1] - mb));
                 if (va > 1e-6f && vb > 1e-6f) together = (cov / Mathf.Sqrt(va * vb)).ToString("+0.00;-0.00", ci);
             }
-            return $"{string.Join(" | ", parts)} | L-R rise and fall together {together}";
+            var chest = up.Select(s => s.backHeight[3]).OrderBy(x => x).ToList();
+            float bob = 0.5f * (chest[Mathf.RoundToInt(0.95f * (chest.Count - 1))] - chest[Mathf.RoundToInt(0.05f * (chest.Count - 1))]);
+            return $"{string.Join(" | ", parts)} | L-R rise and fall together {together} | chest bob ±{bob.ToString("F2", ci)} cm";
         }
 
         // What the demand layer asked for over the segment, next to what the body actually did.

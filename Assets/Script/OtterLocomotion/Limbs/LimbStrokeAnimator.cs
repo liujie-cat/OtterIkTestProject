@@ -261,7 +261,7 @@ namespace OtterLocomotion
         public float ahead = 0.15f;
         public float outward = 0.2f;
         [Tooltip("Half its length along the push and half its width across it, at full size.")]
-        public float depth = 0.3f;
+        public float depth = 0.36f;
         public float width = 0.08f;
         [Tooltip("How far the push leans back from straight down (deg).")]
         public float lean = 15f;
@@ -276,8 +276,8 @@ namespace OtterLocomotion
         [Tooltip("Stroke size with no lift asked, as a share of the full one.")]
         [Range(0.1f, 1f)] public float lightAmplitude = 0.5f;
         [Tooltip("Strokes per second with no lift asked and at full lift.")]
-        public float lightRate = 1.4f;
-        public float fullRate = 2.2f;
+        public float lightRate = 0.6f;
+        public float fullRate = 0.9f;
         [Header("Turning, at a full turn (HindTurn.fullTurnRate)")]
         [Tooltip("How far each foot's push tilts from down toward its sweep (deg).")]
         public float sweep = 35f;
