@@ -149,6 +149,7 @@ namespace OtterLocomotion
         {
             if (body == null) return;
             Vector2 screen;
+            bool goDown = false, backDown = false, diveDown = false;
             if (InputOverride != null)
             {
                 GoHeld = InputOverride.Go;
@@ -161,6 +162,9 @@ namespace OtterLocomotion
                 GoHeld = Input.GetKey(goKey);
                 BackHeld = Input.GetKey(backKey);
                 DiveHeld = Input.GetKey(diveKey);
+                goDown = Input.GetKeyDown(goKey);
+                backDown = Input.GetKeyDown(backKey);
+                diveDown = Input.GetKeyDown(diveKey);
                 screen = Input.mousePosition;
             }
             if (TryPointerPoint(screen, out var point)) PointerPoint = point;
@@ -168,7 +172,7 @@ namespace OtterLocomotion
 
             gestureList.Clear();
             events.Clear();
-            input.Step(gestures, Time.time, GoHeld, BackHeld, DiveHeld, gestureList);
+            input.Step(gestures, Time.time, GoHeld, BackHeld, DiveHeld, gestureList, goDown, backDown, diveDown);
             machine.Step(gears, gestureList, Time.time, PointerPoint, PointerOverOtter, Body(), events);
             StepDive();
             foreach (var g in gestureList) Gestured?.Invoke(g);

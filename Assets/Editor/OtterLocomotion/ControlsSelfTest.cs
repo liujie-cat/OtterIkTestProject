@@ -26,6 +26,9 @@ namespace OtterLocomotion.EditorTools
             readonly List<Gesture> gestures = new List<Gesture>();
             public float time, speedBL;
             public bool airborne, underwater, divingOrSurfacing;
+            /// <summary>The keyboard reports each key going down, as OtterControls reads it; off, only the polled state comes through.</summary>
+            public bool keyEvents = true;
+            bool wasGo, wasBack, wasDive;
             public Vector3 point = new Vector3(0f, 0f, 1f);
             /// <summary>Times it rolled between back and belly, and whether it stood up, since it started.</summary>
             public int Rolls;
@@ -50,7 +53,10 @@ namespace OtterLocomotion.EditorTools
                 {
                     gestures.Clear();
                     Vector3 at = onOtter ? Vector3.zero : point;
-                    input.Step(gs, time, go, back, dive, gestures);
+                    input.Step(gs, time, go, back, dive, gestures, keyEvents && go && !wasGo, keyEvents && back && !wasBack, keyEvents && dive && !wasDive);
+                    wasGo = go;
+                    wasBack = back;
+                    wasDive = dive;
                     gears.Step(settings, gestures, time, at, onOtter, Body, events);
                     if (gears.Posture != lay) Rolls++;
                     lay = gears.Posture;
@@ -125,6 +131,12 @@ namespace OtterLocomotion.EditorTools
 
             s = new Sim().Go().Go().Go().Wait(0.5f);
             Check("快速按三下 W：选中、慢游、巡航，中间一直仰着，最后只翻一次成俯身", s.gears.Gear == Gear.Cruise && s.gears.Posture == Posture.Prone && !s.StoodUp && s.Rolls == 1, s);
+
+            s = new Sim().Run(0.08f, go: true).Run(0.04f).Run(0.08f, go: true).LetGo().Wait(0.5f);
+            Check("手快连按两下 W（中间只松开 40 毫秒）：选中加慢游，全程仰着，不站", s.gears.Gear == Gear.Slow && s.Supine && !s.StoodUp && s.Rolls == 0, s);
+
+            s = new Sim().Run(0.08f, go: true).Run(0.04f).Run(0.08f, go: true).Run(0.04f).Run(0.08f, go: true).LetGo().Wait(0.5f);
+            Check("手快连按三下 W（中间只松开 40 毫秒）：选中、慢游、巡航，只翻一次成俯身", s.gears.Gear == Gear.Cruise && s.gears.Posture == Posture.Prone && !s.StoodUp && s.Rolls == 1, s);
 
             s = new Sim().Go().Guide(0.5f, Head + Vector3.right);
             Check("绿圈站立：光标引导转向，不蹬腿，仍站着", s.Kicks == 0 && s.gears.Upright && Vector3.Angle(s.gears.Heading, Vector3.right) < 1f, s);
@@ -215,8 +227,8 @@ namespace OtterLocomotion.EditorTools
             s.Back();
             Check("S 点按：每下降一档，退出巡航翻回仰姿；停驻再点解除选中", down && parked && !s.gears.Selected && s.gears.Gear == Gear.Park && s.Supine, s);
 
-            s = new Sim(Gear.Cruise).Run(0.05f, back: true).Run(Frame).Run(0.05f, back: true).LetGo();
-            Check("按着 S 闪断一帧：仍算一下，只降一档到仰泳", s.gears.Gear == Gear.Slow && s.gears.Selected && s.events.Count == 1, s);
+            s = new Sim(Gear.Cruise) { keyEvents = false }.Run(0.05f, back: true).Run(Frame).Run(0.05f, back: true).LetGo();
+            Check("按着 S 闪断一帧（只是轮询掉了一帧，键盘没报再按下）：仍算一下，只降一档到仰泳", s.gears.Gear == Gear.Slow && s.gears.Selected && s.events.Count == 1, s);
 
             s = new Sim(Gear.Cruise).Run(0.5f, back: true);
             bool braking = s.gears.Braking && s.gears.Gear == Gear.Park && !s.gears.Selected && s.gears.SpeedBL == 0f;
