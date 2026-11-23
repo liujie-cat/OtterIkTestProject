@@ -98,7 +98,8 @@ namespace OtterLocomotion
     /// still fast and for at least jumpGrace, and a press in the wave jumps (held on, it sprints on). Each press of the
     /// back key shifts down, and parked lets it go; held, it brakes to parked and lets it go, so let go it is always
     /// parked on its back. Picked up, the pointer is its guide point: the head looks at it and the body turns after the
-    /// head, headLead behind; a click of the mouse does nothing to it, in any gear or let go. The dive key sends it
+    /// head, headLead behind; on the otter, inside the ring, it gives no guide, and the otter turns on to the heading
+    /// it last gave and keeps it, looking on along it. A click of the mouse does nothing to it, in any gear or let go. The dive key sends it
     /// under (a duck dive); held, under water or on the way, it swims deeper, and let go it keeps its depth; a tap of
     /// it under water sends it back up. Under water, and until it is back at the surface, it swims on its belly,
     /// cruising and sprinting as on the surface, and does not jump. There it has no slow gear: sent under swimming
@@ -117,11 +118,13 @@ namespace OtterLocomotion
         public bool Braking { get; private set; }
         /// <summary>Picked up by the go key, guided by the pointer until the back key lets it go.</summary>
         public bool Selected { get; private set; }
+        /// <summary>The pointer guides it this step: picked up, the pointer off the otter, outside the ring.</summary>
+        public bool Guided { get; private set; }
         /// <summary>Where the head looks to go (world, unit, on the water): from the head toward the guide point.</summary>
         public Vector3 Heading { get; private set; } = Vector3.forward;
         /// <summary>Where the body is headed: the head's heading of headLead ago; waiting to stand up, where it faces.</summary>
         public Vector3 BodyHeading { get; private set; } = Vector3.forward;
-        /// <summary>Where the head and spine aim, and how much (1 while selected, fading after it is let go).</summary>
+        /// <summary>Where the head and spine aim: the guide point, or with the pointer on the otter along the heading, as far from the head as the guide point last was; and how much (1 while selected, fading after it is let go).</summary>
         public Vector3 AimPoint { get; private set; }
         public float AimBlend { get; private set; }
         /// <summary>Speed asked for (body lengths/s).</summary>
@@ -149,7 +152,7 @@ namespace OtterLocomotion
         };
 
         private Gear goGear;
-        private float sprintSince, releasedAt, aimUntil;
+        private float sprintSince, releasedAt, aimUntil, aimReach;
         // under water by the body's way through the depth; and the dive key's press under water, a tap until it is held
         private bool under, diveTap;
         // picked up and parked at the surface since then, standing up once standDelay has gone by; lying meanwhile as it
@@ -168,11 +171,13 @@ namespace OtterLocomotion
             Dolphin = WideTurn = Accelerating = Braking = false;
             Diving = Descending = under = diveTap = standing = false;
             Selected = initial > Gear.Park;
+            Guided = false;
             parkedSince = float.PositiveInfinity;
             lastPosture = lay = PostureOf(initial);
             Heading = BodyHeading = Flat(body.forward, Vector3.forward);
             looked.Clear();
-            AimPoint = body.head + Heading;
+            aimReach = 1f;
+            AimPoint = body.head + Heading * aimReach;
             AimBlend = 0f;
             SpeedBL = 0f;
             aimUntil = float.NegativeInfinity;
@@ -262,11 +267,18 @@ namespace OtterLocomotion
                     Shift(Gear.Cruise, "slowed out of the wave", time, events);
             }
 
-            if (Selected && !pointerOnOtter)
+            Guided = Selected && !pointerOnOtter;
+            if (Guided)
             {
-                Heading = Flat(pointer - b.head, Heading);
+                Vector3 guide = pointer - b.head;
+                guide.y = 0f;
+                aimReach = guide.magnitude;
+                Heading = Flat(guide, Heading);
                 AimPoint = pointer;
             }
+            // the pointer on the otter is no input: the head and spine look on along the heading it last gave, which
+            // goes with the body, rather than at the point by the ring it left, which the body would swing round
+            else if (Selected) AimPoint = b.head + Heading * aimReach;
             if (Selected) aimUntil = time;
             AimBlend = Selected ? 1f : s.aimFade > 0f ? Mathf.Clamp01(1f - (time - aimUntil) / s.aimFade) : 0f;
 

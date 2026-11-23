@@ -40,6 +40,8 @@ namespace OtterLocomotion
         public StrokePropulsion strokes;
         [Tooltip("The ring round the otter, from the middle of its back (body lengths): picked up, the pointer guides it from outside it, and inside it points nowhere.")]
         public float ringRadiusBL = 0.6f;
+        [Tooltip("Once inside the ring, how far past it the pointer has to go to guide again, as a share of its radius: the ring goes with the body as it turns, drifts and stands up, which would flick a pointer resting at its edge in and out.")]
+        public float ringMargin = 0.15f;
         public Gear initialGear = Gear.Park;
         public GestureSettings gestures = new GestureSettings();
         public GearSettings gears = new GearSettings();
@@ -61,7 +63,7 @@ namespace OtterLocomotion
         /// <summary>Kicks, jumps, gear shifts, picking up and letting go, as they happen.</summary>
         public event Action<ControlEvent> Control;
         public event Action<Gesture> Gestured;
-        /// <summary>The pointer at PointerY, and whether it is on the otter (inside the ring), this frame.</summary>
+        /// <summary>The pointer at PointerY, and whether it is on the otter (inside the ring, or not yet ringMargin past it since), this frame.</summary>
         public Vector3 PointerPoint { get; private set; }
         public bool PointerOverOtter { get; private set; }
         public bool GoHeld { get; private set; }
@@ -238,7 +240,7 @@ namespace OtterLocomotion
             return true;
         }
 
-        private bool OverOtter(Vector3 point) => Flat(point - GrabPoint).magnitude <= RingRadius;
+        private bool OverOtter(Vector3 point) => Flat(point - GrabPoint).magnitude <= RingRadius * (PointerOverOtter ? 1f + ringMargin : 1f);
 
         private static Vector3 Flat(Vector3 v) => new Vector3(v.x, 0f, v.z);
     }

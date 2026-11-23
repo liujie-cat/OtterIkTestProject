@@ -29,7 +29,7 @@ namespace OtterLocomotion.EditorTools
             /// <summary>The keyboard reports each key going down, as OtterControls reads it; off, only the polled state comes through.</summary>
             public bool keyEvents = true;
             bool wasGo, wasBack, wasDive;
-            public Vector3 point = new Vector3(0f, 0f, 1f);
+            public Vector3 point = new Vector3(0f, 0f, 1f), head = Head;
             /// <summary>Times it rolled between back and belly, and whether it stood up, since it started.</summary>
             public int Rolls;
             public bool StoodUp;
@@ -43,7 +43,7 @@ namespace OtterLocomotion.EditorTools
 
             GearBody Body => new GearBody
             {
-                position = Vector3.zero, head = Head, forward = Vector3.forward, speedBL = speedBL, airborne = airborne,
+                position = Vector3.zero, head = head, forward = Vector3.forward, speedBL = speedBL, airborne = airborne,
                 underwater = underwater, divingOrSurfacing = divingOrSurfacing,
             };
 
@@ -254,6 +254,13 @@ namespace OtterLocomotion.EditorTools
 
             s = new Sim(Gear.Slow).Run(0.3f, onOtter: true);
             Check("选中后光标在海獭上（光圈内）：不引导，朝向不变", Vector3.Angle(s.gears.Heading, Vector3.forward) < 1f && s.events.Count == 0, s);
+
+            s = new Sim(Gear.Slow).Guide(0.3f, Head + Vector3.left);
+            s.head = Head + new Vector3(0.3f, 0f, 0.2f);
+            s.Run(0.3f, onOtter: true);
+            Check("光标移进光圈：视为无输入，不画箭头，朝向停在最后一个箭头方向；头和脊柱沿它看，瞄准点跟着海獭走，不钉在圈边",
+                s.gears.Selected && !s.gears.Guided && Vector3.Angle(s.gears.Heading, Vector3.left) < 1f && Vector3.Angle(s.gears.BodyHeading, Vector3.left) < 1f &&
+                (s.gears.AimPoint - (s.head + Vector3.left)).magnitude < 1e-4f, s);
 
             s = InWave().LetGo();
             s.airborne = true;

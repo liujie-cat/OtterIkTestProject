@@ -5,7 +5,8 @@ namespace OtterLocomotion
     /// <summary>
     /// What the controls show, at the pointer's level and drawn over everything as a cursor is: the ring round the otter,
     /// coloured by the state of the controls and swelling a moment at each kick, jump, shift, pick-up and let-go;
-    /// picked up, an arrow in the ring's colour from it to the guide point, along the line the head looks down.
+    /// picked up and guided from outside the ring, an arrow in the ring's colour from it to the guide point, along the
+    /// line the head looks down.
     /// </summary>
     [DefaultExecutionOrder(210)]
     [DisallowMultipleComponent]
@@ -119,7 +120,7 @@ namespace OtterLocomotion
                 ring.SetPosition(i, centre + new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a)) * radius);
             }
 
-            if (!gears.Selected) return;
+            if (!gears.Guided) return;
             Vector3 from = controls.HeadPoint, to = gears.AimPoint;
             to.y = from.y;
             if ((to - from).sqrMagnitude < 1e-6f) return;
